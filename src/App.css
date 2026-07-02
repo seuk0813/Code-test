@@ -124,4 +124,18 @@
 
 .staff-container {
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.staff-stack {
+  position: relative;
+  display: inline-block;
+}
+
+.staff-ghost-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
 }

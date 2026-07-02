@@ -20,6 +20,29 @@ export interface NoteEvent {
   isRest: boolean;
 }
 
+/** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */
+export type ChordQuality =
+  | 'maj'
+  | 'min'
+  | '7'
+  | 'maj7'
+  | 'min7'
+  | 'dim'
+  | 'aug'
+  | 'sus2'
+  | 'sus4'
+  | 'm7b5'
+  | 'dim7';
+
+export interface ChordSymbol {
+  id: string;
+  root: Pitch['letter'];
+  accidental: Accidental;
+  quality: ChordQuality;
+  /** Horizontal position within the measure, 0 (start) .. 1 (end). Freely draggable. */
+  offset: number;
+}
+
 export interface StaffMeasure {
   notes: NoteEvent[];
 }
@@ -28,6 +51,8 @@ export interface Measure {
   id: string;
   treble: StaffMeasure;
   bass: StaffMeasure;
+  /** Chord symbols shown above the measure, max 4. */
+  chords: ChordSymbol[];
 }
 
 export interface TimeSignature {
@@ -42,6 +67,8 @@ export interface Score {
   timeSignature: TimeSignature;
   keySignature: string;
   measures: Measure[];
+  /** Measure indices after which a manual line break (new system) starts. */
+  lineBreaks: number[];
 }
 
 export interface NoteLocation {
