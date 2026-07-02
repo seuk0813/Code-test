@@ -35,6 +35,11 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onAddMeasure: () => void;
+  tieActive: boolean;
+  slurActive: boolean;
+  canConnect: boolean;
+  onToggleTie: () => void;
+  onToggleSlur: () => void;
   isPlaying: boolean;
   onPlay: () => void;
   onStop: () => void;
@@ -59,6 +64,11 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onAddMeasure,
+  tieActive,
+  slurActive,
+  canConnect,
+  onToggleTie,
+  onToggleSlur,
   isPlaying,
   onPlay,
   onStop,
@@ -170,6 +180,12 @@ export function Toolbar({
         ))}
         <button onClick={onDeleteSelected} disabled={!hasSelection}>
           선택 삭제
+        </button>
+        <button className={tieActive ? 'active' : ''} onClick={onToggleTie} disabled={!canConnect} title="같은 음을 다음 음표와 타이로 연결">
+          타이
+        </button>
+        <button className={slurActive ? 'active' : ''} onClick={onToggleSlur} disabled={!canConnect} title="다음 음표와 슬러로 연결">
+          슬러
         </button>
         <button onClick={onAddMeasure}>마디 추가</button>
       </div>

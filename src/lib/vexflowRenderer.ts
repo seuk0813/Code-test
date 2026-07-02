@@ -1,12 +1,14 @@
 import {
   Accidental as VexAccidental,
   Beam,
+  Curve,
   Dot,
   Formatter,
   Renderer,
   Stave,
   StaveConnector,
   StaveNote,
+  StaveTie,
   Voice,
 } from 'vexflow';
 import type { ChordSymbol, Clef, NoteEvent, NoteLocation, Score } from '../types/score';
@@ -92,6 +94,13 @@ const REST_KEY: Record<Clef, string> = {
   bass: 'd/3',
 };
 
+function pitchesMatch(a: NoteEvent, b: NoteEvent): boolean {
+  if (a.pitches.length !== b.pitches.length) return false;
+  const aKeys = a.pitches.map(pitchToVexKey).sort();
+  const bKeys = b.pitches.map(pitchToVexKey).sort();
+  return aKeys.every((k, i) => k === bKeys[i]);
+}
+
 function buildStaveNotes(
   clef: Clef,
   measureIndex: number,
@@ -169,6 +178,11 @@ export function renderScore(
   const lineBreakHitboxes: LineBreakHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
+
+  // Flat, in-order chain of every rendered note per staff (spanning measures
+  // and rows), used after the layout pass to connect ties/slurs between
+  // consecutive notes — including across a barline or a line break.
+  const noteChain: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
 
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * ROW_HEIGHT;
@@ -252,6 +266,7 @@ export function renderScore(
               noteIndex,
               centerX: sn.getAbsoluteX(),
             });
+            noteChain[clef].push({ event: notes[noteIndex], staveNote: sn });
           });
         }
 
@@ -300,6 +315,28 @@ export function renderScore(
 
       x += measureWidth;
     });
+  });
+
+  (['treble', 'bass'] as const).forEach((clef) => {
+    const chain = noteChain[clef];
+    for (let i = 0; i < chain.length - 1; i++) {
+      const cur = chain[i];
+      const next = chain[i + 1];
+      if (cur.event.isRest || next.event.isRest) continue;
+      if (cur.event.tieToNext && pitchesMatch(cur.event, next.event)) {
+        try {
+          new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
+        } catch {
+          // Skip ties VexFlow can't render (e.g. mismatched key counts).
+        }
+      } else if (cur.event.slurToNext) {
+        try {
+          new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+        } catch {
+          // Skip slurs VexFlow can't render.
+        }
+      }
+    }
   });
 
   const svg = container.querySelector('svg');
@@ -392,6 +429,15 @@ export function resolveClick(result: RenderResult, x: number, y: number): ClickR
 
 export function lineAt(staff: StaffHitbox, y: number): number {
   return (staff.refY0 - y) / staff.spacing;
+}
+
+/** Where a new note should be spliced into the staff's note list for a given click X. */
+export function findInsertIndex(result: RenderResult, measureIndex: number, clef: Clef, x: number): number {
+  const notes = result.noteHitboxes
+    .filter((n) => n.measureIndex === measureIndex && n.clef === clef)
+    .sort((a, b) => a.noteIndex - b.noteIndex);
+  const next = notes.find((n) => x < n.centerX);
+  return next ? next.noteIndex : notes.length;
 }
 
 export function findChordAt(result: RenderResult, x: number, y: number): ChordHitbox | null {

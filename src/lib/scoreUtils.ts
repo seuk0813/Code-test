@@ -85,6 +85,8 @@ export function createNote(
     duration,
     dotted,
     isRest,
+    tieToNext: false,
+    slurToNext: false,
   };
 }
 
@@ -96,16 +98,24 @@ export function pitchToVexKey(pitch: Pitch): string {
 
 const LETTERS: Pitch['letter'][] = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 
-/** Reference note sitting exactly on stave line 0 (the bottom line) for each clef. */
+/**
+ * Reference note sitting exactly on VexFlow's stave line 0 for each clef.
+ * This is NOT the bottom staff line — VexFlow's own line numbering (as
+ * returned by StaveNote.getKeyProps()) anchors line 0 two diatonic steps
+ * below the bottom line: middle C for treble, E2 for bass. Verified against
+ * the actual library (`new StaveNote({...}).getKeyProps()[0].line`) rather
+ * than assumed, since getting this wrong silently shifts every clicked pitch
+ * by a fixed number of steps.
+ */
 const CLEF_LINE0_REFERENCE: Record<Clef, { letter: Pitch['letter']; octave: number }> = {
-  treble: { letter: 'E', octave: 4 },
-  bass: { letter: 'G', octave: 2 },
+  treble: { letter: 'C', octave: 4 },
+  bass: { letter: 'E', octave: 2 },
 };
 
 /**
- * Convert a fractional VexFlow stave "line" position (0 = bottom line, 0.5 per
- * diatonic step) into a natural pitch. Used to map a mouse click's Y position
- * to a pitch on the staff.
+ * Convert a fractional VexFlow stave "line" position (see CLEF_LINE0_REFERENCE,
+ * 0.5 per diatonic step) into a natural pitch. Used to map a mouse click's Y
+ * position to a pitch on the staff.
  */
 export function lineToPitch(clef: Clef, line: number): { letter: Pitch['letter']; octave: number } {
   const ref = CLEF_LINE0_REFERENCE[clef];
@@ -330,6 +340,7 @@ export function addNoteToScore(
   measureIndex: number,
   clef: Clef,
   note: NoteEvent,
+  insertIndex?: number,
 ): AddNoteResult {
   const measure = score.measures[measureIndex];
   const staffMeasure = measure[clef];
@@ -338,11 +349,33 @@ export function addNoteToScore(
   if (currentBeats + noteBeats(note) > capacity + 1e-6) {
     return { score, noteIndex: -1, overflow: true };
   }
-  const noteIndex = staffMeasure.notes.length;
-  const nextScore = updateMeasure(score, measureIndex, clef, (sm) => ({
-    notes: [...sm.notes, note],
-  }));
+  const noteIndex =
+    insertIndex === undefined ? staffMeasure.notes.length : Math.max(0, Math.min(insertIndex, staffMeasure.notes.length));
+  const nextScore = updateMeasure(score, measureIndex, clef, (sm) => {
+    const notes = [...sm.notes];
+    notes.splice(noteIndex, 0, note);
+    return { notes };
+  });
   return { score: nextScore, noteIndex, overflow: false };
+}
+
+/** Adds or removes a pitch from an existing (non-rest) note, building a chord. Keeps at least one pitch. */
+export function togglePitchInNote(
+  score: Score,
+  location: NoteLocation,
+  letter: Pitch['letter'],
+  accidental: Accidental,
+  octave: number,
+): Score {
+  return updateNoteInScore(score, location, (note) => {
+    if (note.isRest) return note;
+    const existingIndex = note.pitches.findIndex((p) => p.letter === letter && p.octave === octave);
+    if (existingIndex >= 0) {
+      if (note.pitches.length <= 1) return note;
+      return { ...note, pitches: note.pitches.filter((_, i) => i !== existingIndex) };
+    }
+    return { ...note, pitches: [...note.pitches, { letter, accidental, octave }] };
+  });
 }
 
 export function removeNoteFromScore(score: Score, location: NoteLocation): Score {
@@ -359,6 +392,20 @@ export function updateNoteInScore(
   return updateMeasure(score, location.measureIndex, location.clef, (sm) => ({
     notes: sm.notes.map((n, i) => (i === location.noteIndex ? updater(n) : n)),
   }));
+}
+
+export function toggleTieToNext(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => {
+    const tieToNext = !note.tieToNext;
+    return { ...note, tieToNext, slurToNext: tieToNext ? false : note.slurToNext };
+  });
+}
+
+export function toggleSlurToNext(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => {
+    const slurToNext = !note.slurToNext;
+    return { ...note, slurToNext, tieToNext: slurToNext ? false : note.tieToNext };
+  });
 }
 
 /**

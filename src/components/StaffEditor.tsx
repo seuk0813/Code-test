@@ -3,6 +3,7 @@ import type { Accidental, Clef, NoteLocation, Score } from '../types/score';
 import {
   findChordAt,
   findChordBandAt,
+  findInsertIndex,
   findLineBreakAt,
   findStaffAt,
   lineAt,
@@ -11,7 +12,7 @@ import {
   type DraggingNote,
   type RenderResult,
 } from '../lib/vexflowRenderer';
-import { chordLabel, lineToPitch, measureCapacityBeats, noteBeats, stemPointsUp, staffMeasureBeats } from '../lib/scoreUtils';
+import { chordLabel, lineToPitch, stemPointsUp } from '../lib/scoreUtils';
 import { clearGhost, ledgerLinePositions, renderGhost } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
@@ -22,9 +23,10 @@ interface StaffEditorProps {
   selected: NoteLocation | null;
   editTool: EditTool;
   onSelectNote: (location: NoteLocation) => void;
-  onAddNote: (measureIndex: number, clef: Clef, letter: string, octave: number) => void;
+  onAddNote: (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number) => void;
   onDeleteNote: (location: NoteLocation) => void;
   onMoveNote: (location: NoteLocation, letter: string, octave: number) => void;
+  onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
@@ -60,6 +62,7 @@ export function StaffEditor({
   onAddNote,
   onDeleteNote,
   onMoveNote,
+  onTogglePitch,
   onFocusMeasure,
   onAddLineBreak,
   onMoveChord,
@@ -246,18 +249,9 @@ export function StaffEditor({
         return;
       }
       const ghostY = staff.refY0 - snappedLine * staff.spacing;
-      // X is snapped to the rhythmic slot the note will actually land in
-      // (not the raw cursor position), so the preview matches where the
-      // note appears once placed instead of drifting with the mouse.
-      const staffMeasure = score.measures[click.measureIndex][click.clef];
-      const capacity = measureCapacityBeats(score.timeSignature);
-      const currentBeats = staffMeasureBeats(staffMeasure);
-      const newBeats = noteBeats({ duration: editTool.duration, dotted: editTool.dotted });
-      const fraction = capacity > 0 ? Math.min(1, (currentBeats + newBeats / 2) / capacity) : 0;
-      const ghostX = staff.contentX0 + fraction * staff.contentWidth;
       renderGhost(overlayRef.current, {
         kind: 'note',
-        x: ghostX,
+        x: point.x,
         y: ghostY,
         duration: editTool.duration,
         isRest: editTool.isRest,
@@ -312,12 +306,30 @@ export function StaffEditor({
       return;
     }
     if (click.type === 'select') {
-      onSelectNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex });
+      const location = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
+      const alreadySelected =
+        selected &&
+        selected.measureIndex === location.measureIndex &&
+        selected.clef === location.clef &&
+        selected.noteIndex === location.noteIndex;
+      if (alreadySelected) {
+        // Clicking the already-selected note again at a different pitch adds
+        // (or removes) that pitch, building/editing a chord in place.
+        const staff = findStaffAt(result, point.x, point.y);
+        if (staff) {
+          const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
+          const { letter, octave } = lineToPitch(click.clef, snappedLine);
+          onTogglePitch(location, letter, octave);
+        }
+      } else {
+        onSelectNote(location);
+      }
       onFocusMeasure(click.measureIndex);
     } else {
       const snappedLine = Math.round(click.line * 2) / 2;
       const { letter, octave } = lineToPitch(click.clef, snappedLine);
-      onAddNote(click.measureIndex, click.clef, letter, octave);
+      const insertIndex = findInsertIndex(result, click.measureIndex, click.clef, point.x);
+      onAddNote(click.measureIndex, click.clef, letter, octave, insertIndex);
       onFocusMeasure(click.measureIndex);
     }
   };

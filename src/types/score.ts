@@ -18,6 +18,9 @@ export interface NoteEvent {
   duration: DurationValue;
   dotted: boolean;
   isRest: boolean;
+  /** Curved line to the next note in this staff (same pitch = tie, different = slur). */
+  tieToNext: boolean;
+  slurToNext: boolean;
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */

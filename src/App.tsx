@@ -15,6 +15,9 @@ import {
   parseChordText,
   removeChordFromScore,
   removeNoteFromScore,
+  togglePitchInNote,
+  toggleSlurToNext,
+  toggleTieToNext,
   updateNoteInScore,
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
@@ -83,10 +86,10 @@ function App() {
   );
 
   const handleAddNote = useCallback(
-    (measureIndex: number, clef: Clef, letter: string, octave: number) => {
+    (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number) => {
       const pitch: Pitch = { letter: letter as Pitch['letter'], accidental: editTool.accidental, octave };
       const note = createNote([pitch], editTool.duration, editTool.dotted, editTool.isRest);
-      const result = addNoteToScore(score, measureIndex, clef, note);
+      const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
         window.alert('마디가 가득 찼습니다. "마디 추가" 버튼으로 새 마디를 만들어주세요.');
         return;
@@ -105,6 +108,13 @@ function App() {
       })),
     );
   }, []);
+
+  const handleTogglePitch = useCallback(
+    (location: NoteLocation, letter: string, octave: number) => {
+      setScore((prev) => togglePitchInNote(prev, location, letter as Pitch['letter'], editTool.accidental, octave));
+    },
+    [editTool.accidental],
+  );
 
   const handleFocusMeasure = useCallback((measureIndex: number) => {
     setFocusedMeasureIndex(measureIndex);
@@ -157,6 +167,16 @@ function App() {
   const handleAddMeasure = useCallback(() => {
     setScore((prev) => addMeasure(prev));
   }, []);
+
+  const handleToggleTie = useCallback(() => {
+    if (!selected) return;
+    setScore((prev) => toggleTieToNext(prev, selected));
+  }, [selected]);
+
+  const handleToggleSlur = useCallback(() => {
+    if (!selected) return;
+    setScore((prev) => toggleSlurToNext(prev, selected));
+  }, [selected]);
 
   const handleChordToolChange = useCallback((patch: Partial<ChordTool>) => {
     setChordTool((prev) => ({ ...prev, ...patch }));
@@ -231,6 +251,8 @@ function App() {
       ? score.measures[focusedMeasureIndex].chords.length
       : 0;
 
+  const selectedNote = selected ? score.measures[selected.measureIndex][selected.clef].notes[selected.noteIndex] : null;
+
   return (
     <div className="app">
       <h1 className="app-title">피아노 악보 편집기</h1>
@@ -242,6 +264,11 @@ function App() {
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
         onAddMeasure={handleAddMeasure}
+        tieActive={selectedNote?.tieToNext ?? false}
+        slurActive={selectedNote?.slurToNext ?? false}
+        canConnect={!!selected && !selectedNote?.isRest}
+        onToggleTie={handleToggleTie}
+        onToggleSlur={handleToggleSlur}
         isPlaying={isPlaying}
         onPlay={handlePlay}
         onStop={handleStop}
@@ -268,6 +295,7 @@ function App() {
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
         onMoveNote={handleMoveNote}
+        onTogglePitch={handleTogglePitch}
         onFocusMeasure={handleFocusMeasure}
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
