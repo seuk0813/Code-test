@@ -11,7 +11,7 @@ import {
   type DraggingNote,
   type RenderResult,
 } from '../lib/vexflowRenderer';
-import { chordLabel, lineToPitch, stemPointsUp } from '../lib/scoreUtils';
+import { chordLabel, lineToPitch, measureCapacityBeats, noteBeats, stemPointsUp, staffMeasureBeats } from '../lib/scoreUtils';
 import { clearGhost, ledgerLinePositions, renderGhost } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
@@ -29,6 +29,7 @@ interface StaffEditorProps {
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
   onDeleteChord: (measureIndex: number, chordId: string) => void;
+  onDeselectNote: () => void;
 }
 
 type DragState =
@@ -63,6 +64,7 @@ export function StaffEditor({
   onAddLineBreak,
   onMoveChord,
   onDeleteChord,
+  onDeselectNote,
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
@@ -244,9 +246,18 @@ export function StaffEditor({
         return;
       }
       const ghostY = staff.refY0 - snappedLine * staff.spacing;
+      // X is snapped to the rhythmic slot the note will actually land in
+      // (not the raw cursor position), so the preview matches where the
+      // note appears once placed instead of drifting with the mouse.
+      const staffMeasure = score.measures[click.measureIndex][click.clef];
+      const capacity = measureCapacityBeats(score.timeSignature);
+      const currentBeats = staffMeasureBeats(staffMeasure);
+      const newBeats = noteBeats({ duration: editTool.duration, dotted: editTool.dotted });
+      const fraction = capacity > 0 ? Math.min(1, (currentBeats + newBeats / 2) / capacity) : 0;
+      const ghostX = staff.contentX0 + fraction * staff.contentWidth;
       renderGhost(overlayRef.current, {
         kind: 'note',
-        x: point.x,
+        x: ghostX,
         y: ghostY,
         duration: editTool.duration,
         isRest: editTool.isRest,
@@ -296,7 +307,10 @@ export function StaffEditor({
     }
 
     const click = resolveClick(result, point.x, point.y);
-    if (!click) return;
+    if (!click) {
+      onDeselectNote();
+      return;
+    }
     if (click.type === 'select') {
       onSelectNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex });
       onFocusMeasure(click.measureIndex);

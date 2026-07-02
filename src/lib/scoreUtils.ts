@@ -162,8 +162,6 @@ export function vexDurationString(note: Pick<NoteEvent, 'duration' | 'dotted' | 
 
 // --- Chord symbols -----------------------------------------------------------
 
-export const MAX_CHORDS_PER_MEASURE = 4;
-
 export const CHORD_QUALITY_LABELS: Record<ChordQuality, string> = {
   maj: '메이저',
   min: '마이너',
@@ -203,11 +201,41 @@ export function chordLabel(chord: Pick<ChordSymbol, 'root' | 'accidental' | 'qua
   return `${chord.root}${ACCIDENTAL_SYMBOL[chord.accidental]}${CHORD_QUALITY_SUFFIX[chord.quality]}`;
 }
 
-const DEFAULT_CHORD_SLOTS = [0.125, 0.375, 0.625, 0.875];
+/** Parsed left-to-right, case-sensitive so "M7" (major 7th) and "m7" (minor 7th) resolve differently. */
+const QUALITY_PATTERNS: [RegExp, ChordQuality][] = [
+  [/^(maj7|M7|major7|Δ7?)$/, 'maj7'],
+  [/^(m7|min7|-7)$/, 'min7'],
+  [/^(m7b5|m7-5|ø7?)$/, 'm7b5'],
+  [/^(dim7|o7|°7)$/, 'dim7'],
+  [/^(dim|o|°)$/, 'dim'],
+  [/^(aug|\+)$/, 'aug'],
+  [/^(sus2)$/, 'sus2'],
+  [/^(sus4|sus)$/, 'sus4'],
+  [/^(7|dom7)$/, '7'],
+  [/^(m|min|-)$/, 'min'],
+  [/^(maj|M|major)?$/, 'maj'],
+];
 
-export interface AddChordResult {
-  score: Score;
-  overflow: boolean;
+/** Parses free-text chord input like "Cm7" or "F#dim" into root/accidental/quality. */
+export function parseChordText(
+  text: string,
+): { root: Pitch['letter']; accidental: Accidental; quality: ChordQuality } | null {
+  const trimmed = text.trim();
+  const match = /^([A-Ga-g])([#b]?)(.*)$/.exec(trimmed);
+  if (!match) return null;
+  const root = match[1].toUpperCase() as Pitch['letter'];
+  const accidental = (match[2] as Accidental) || '';
+  const suffix = match[3].trim();
+  for (const [pattern, quality] of QUALITY_PATTERNS) {
+    if (pattern.test(suffix)) {
+      return { root, accidental, quality };
+    }
+  }
+  return null;
+}
+
+function nextChordOffset(existingCount: number): number {
+  return 0.1 + ((existingCount * 0.22) % 0.8);
 }
 
 export function addChordToScore(
@@ -216,20 +244,17 @@ export function addChordToScore(
   root: Pitch['letter'],
   accidental: Accidental,
   quality: ChordQuality,
-): AddChordResult {
+): Score {
   const chords = score.measures[measureIndex].chords;
-  if (chords.length >= MAX_CHORDS_PER_MEASURE) {
-    return { score, overflow: true };
-  }
   const chord: ChordSymbol = {
     id: nextId('c'),
     root,
     accidental,
     quality,
-    offset: DEFAULT_CHORD_SLOTS[chords.length],
+    offset: nextChordOffset(chords.length),
   };
   const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, chords: [...m.chords, chord] } : m));
-  return { score: { ...score, measures }, overflow: false };
+  return { ...score, measures };
 }
 
 export function moveChordInScore(score: Score, measureIndex: number, chordId: string, offset: number): Score {

@@ -68,7 +68,7 @@ export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
       x: spec.x,
       y: spec.y,
       'text-anchor': 'middle',
-      'font-size': 13,
+      'font-size': 15,
       'font-weight': 700,
       fill: spec.color,
       opacity: spec.opacity,
@@ -112,6 +112,16 @@ export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
     group.appendChild(
       el('line', { x1: stemX, y1: y, x2: stemX, y2: stemY2, stroke: color, 'stroke-width': 1.4, opacity }),
     );
+
+    const flagCount = spec.duration === '8' ? 1 : spec.duration === '16' ? 2 : 0;
+    const dir = spec.stemUp ? 1 : -1;
+    for (let i = 0; i < flagCount; i++) {
+      const baseY = stemY2 + i * dir * 7;
+      const d = `M ${stemX} ${baseY} Q ${stemX + 8} ${baseY + dir * 5} ${stemX + 2} ${baseY + dir * 13}`;
+      group.appendChild(
+        el('path', { d, stroke: color, 'stroke-width': 1.6, fill: 'none', 'stroke-linecap': 'round', opacity }),
+      );
+    }
   }
 
   if (spec.accidental) {

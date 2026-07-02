@@ -1,6 +1,6 @@
-import type { ChangeEvent } from 'react';
-import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DURATION_LABELS, MAX_CHORDS_PER_MEASURE } from '../lib/scoreUtils';
+import type { ChangeEvent, KeyboardEvent } from 'react';
+import type { Accidental, DurationValue, Score } from '../types/score';
+import { DURATION_LABELS } from '../lib/scoreUtils';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
 const ACCIDENTALS: { value: Accidental; label: string }[] = [
@@ -15,20 +15,6 @@ const TIME_SIGNATURES: [number, number][] = [
   [3, 4],
   [2, 4],
 ];
-const CHORD_ROOTS: Pitch['letter'][] = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
-const CHORD_QUALITIES: ChordQuality[] = [
-  'maj',
-  'min',
-  '7',
-  'maj7',
-  'min7',
-  'dim',
-  'aug',
-  'sus2',
-  'sus4',
-  'm7b5',
-  'dim7',
-];
 
 export interface EditTool {
   duration: DurationValue;
@@ -38,9 +24,7 @@ export interface EditTool {
 }
 
 export interface ChordTool {
-  root: Pitch['letter'];
-  accidental: Accidental;
-  quality: ChordQuality;
+  text: string;
 }
 
 interface ToolbarProps {
@@ -64,6 +48,8 @@ interface ToolbarProps {
   focusedMeasureChordCount: number;
   onAddChord: () => void;
 }
+
+const CHORD_PLACEHOLDER = '예: C, Am, G7, Fmaj7, Bm7b5';
 
 export function Toolbar({
   score,
@@ -190,45 +176,23 @@ export function Toolbar({
 
       <div className="toolbar-row">
         <span className="group-label">코드 기호</span>
-        <label>
-          근음
-          <select value={chordTool.root} onChange={(e) => onChordToolChange({ root: e.target.value as Pitch['letter'] })}>
-            {CHORD_ROOTS.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </label>
-        {ACCIDENTALS.filter((a) => a.value !== 'n').map((a) => (
-          <button
-            key={a.value || 'none'}
-            className={chordTool.accidental === a.value ? 'active' : ''}
-            onClick={() => onChordToolChange({ accidental: a.value })}
-          >
-            {a.label}
-          </button>
-        ))}
-        <label>
-          종류
-          <select
-            value={chordTool.quality}
-            onChange={(e) => onChordToolChange({ quality: e.target.value as ChordQuality })}
-          >
-            {CHORD_QUALITIES.map((q) => (
-              <option key={q} value={q}>
-                {CHORD_QUALITY_LABELS[q]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button onClick={onAddChord} disabled={focusedMeasureIndex === null || focusedMeasureChordCount >= MAX_CHORDS_PER_MEASURE}>
+        <input
+          className="chord-input"
+          value={chordTool.text}
+          placeholder={CHORD_PLACEHOLDER}
+          onChange={(e) => onChordToolChange({ text: e.target.value })}
+          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+            if (e.key === 'Enter') onAddChord();
+          }}
+          disabled={focusedMeasureIndex === null}
+        />
+        <button onClick={onAddChord} disabled={focusedMeasureIndex === null || !chordTool.text.trim()}>
           코드 추가
         </button>
         <span className="group-label">
           {focusedMeasureIndex === null
             ? '악보에서 마디를 클릭해 선택하세요'
-            : `${focusedMeasureIndex + 1}번 마디 (${focusedMeasureChordCount}/${MAX_CHORDS_PER_MEASURE}) — 추가 후 드래그로 위치 조정, 우클릭으로 삭제`}
+            : `${focusedMeasureIndex + 1}번 마디 (${focusedMeasureChordCount}개) — 추가 후 드래그로 위치 조정, 우클릭으로 삭제`}
         </span>
       </div>
 

@@ -12,6 +12,7 @@ import {
   createEmptyScore,
   createNote,
   moveChordInScore,
+  parseChordText,
   removeChordFromScore,
   removeNoteFromScore,
   updateNoteInScore,
@@ -22,7 +23,7 @@ import { downloadBlob, downloadScoreJson, loadAutosave, readScoreFile, saveAutos
 import { playScore, type PlaybackHandle } from './lib/playback';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
-const DEFAULT_CHORD_TOOL: ChordTool = { root: 'C', accidental: '', quality: 'maj' };
+const DEFAULT_CHORD_TOOL: ChordTool = { text: '' };
 
 function App() {
   const [score, setScore] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
@@ -109,6 +110,10 @@ function App() {
     setFocusedMeasureIndex(measureIndex);
   }, []);
 
+  const handleDeselectNote = useCallback(() => {
+    setSelected(null);
+  }, []);
+
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
     setScore((prev) => addLineBreak(prev, afterMeasureIndex));
   }, []);
@@ -159,13 +164,14 @@ function App() {
 
   const handleAddChord = useCallback(() => {
     if (focusedMeasureIndex === null) return;
-    const result = addChordToScore(score, focusedMeasureIndex, chordTool.root, chordTool.accidental, chordTool.quality);
-    if (result.overflow) {
-      window.alert('한 마디에는 코드 기호를 최대 4개까지 추가할 수 있습니다.');
+    const parsed = parseChordText(chordTool.text);
+    if (!parsed) {
+      window.alert('코드를 알아볼 수 없습니다. 예: C, Am, G7, Fmaj7, Bm7b5');
       return;
     }
-    setScore(result.score);
-  }, [score, focusedMeasureIndex, chordTool]);
+    setScore((prev) => addChordToScore(prev, focusedMeasureIndex, parsed.root, parsed.accidental, parsed.quality));
+    setChordTool({ text: '' });
+  }, [focusedMeasureIndex, chordTool]);
 
   const handleMoveChord = useCallback((measureIndex: number, chordId: string, offset: number) => {
     setScore((prev) => moveChordInScore(prev, measureIndex, chordId, offset));
@@ -266,6 +272,7 @@ function App() {
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
         onDeleteChord={handleDeleteChord}
+        onDeselectNote={handleDeselectNote}
       />
     </div>
   );

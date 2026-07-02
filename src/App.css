@@ -88,6 +88,17 @@
   min-width: 140px;
 }
 
+.chord-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 180px;
+}
+
+.chord-input:disabled {
+  opacity: 0.5;
+}
+
 .file-input-label {
   position: relative;
   overflow: hidden;

@@ -21,7 +21,7 @@ import {
 const FIRST_MEASURE_WIDTH = 300;
 const MEASURE_WIDTH = 220;
 const ROW_HEIGHT = 320;
-const CHORD_BAND_Y = 20;
+const CHORD_BAND_Y = 78;
 const TREBLE_Y = 60;
 const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
@@ -45,6 +45,9 @@ export interface StaffHitbox {
   y1: number;
   refY0: number;
   spacing: number;
+  /** Usable note area (excludes clef/key/time signature glyphs), for grid-snapped previews. */
+  contentX0: number;
+  contentWidth: number;
 }
 
 export interface ChordHitbox {
@@ -225,16 +228,22 @@ export function renderScore(
         if (staveNotes.length > 0) {
           const voice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
           voice.addTickables(staveNotes);
-          new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 100 : 20));
-          voice.draw(context, stave);
 
+          // Beams must be built before the notes are drawn: creating a Beam
+          // marks its notes so they skip drawing their own individual flag.
+          // Doing this after voice.draw() left both the flag and the beam
+          // rendered on top of each other.
+          let beams: Beam[] = [];
           try {
             const beamable = staveNotes.filter((n) => !n.isRest());
-            const beams = Beam.generateBeams(beamable);
-            beams.forEach((b) => b.setContext(context).draw());
+            beams = Beam.generateBeams(beamable);
           } catch {
             // Beaming is a visual nicety; ignore failures on unusual note groupings.
           }
+
+          new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 100 : 20));
+          voice.draw(context, stave);
+          beams.forEach((b) => b.setContext(context).draw());
 
           staveNotes.forEach((sn, noteIndex) => {
             noteHitboxes.push({
@@ -248,6 +257,7 @@ export function renderScore(
 
         const refY0 = stave.getYForNote(0);
         const spacing = refY0 - stave.getYForNote(1);
+        const contentStartOffset = isRowStart ? 100 : 20;
         staffHitboxes.push({
           measureIndex,
           clef,
@@ -257,6 +267,8 @@ export function renderScore(
           y1,
           refY0,
           spacing,
+          contentX0: x + contentStartOffset,
+          contentWidth: measureWidth - contentStartOffset,
         });
       });
 
@@ -310,7 +322,7 @@ function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordH
     text.setAttribute('x', String(hb.x));
     text.setAttribute('y', String(hb.y));
     text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('font-size', '13');
+    text.setAttribute('font-size', '15');
     text.setAttribute('font-weight', '700');
     text.setAttribute('fill', '#2f3a8f');
     text.textContent = chordLabel(chord);
