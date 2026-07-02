@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Accidental, Clef, NoteLocation, Score } from '../types/score';
+import type { Accidental, Clef, DurationValue, NoteLocation, Score } from '../types/score';
 import {
   findChordAt,
   findChordBandAt,
@@ -12,21 +12,31 @@ import {
   type DraggingNote,
   type RenderResult,
 } from '../lib/vexflowRenderer';
-import { chordLabel, lineToPitch, stemPointsUp } from '../lib/scoreUtils';
+import { chordLabel, cycleDurationLonger, lineToPitch, pitchToLine, stemPointsUp } from '../lib/scoreUtils';
 import { clearGhost, ledgerLinePositions, renderGhost } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
 const DRAG_THRESHOLD_PX = 4;
+const HOLD_CYCLE_MS = 1000;
+const TOUCH_PREVIEW_RADIUS = 22;
 
 interface StaffEditorProps {
   score: Score;
   selected: NoteLocation | null;
   editTool: EditTool;
   onSelectNote: (location: NoteLocation) => void;
-  onAddNote: (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number) => void;
+  onAddNote: (
+    measureIndex: number,
+    clef: Clef,
+    letter: string,
+    octave: number,
+    insertIndex: number,
+    durationOverride?: DurationValue,
+  ) => void;
   onDeleteNote: (location: NoteLocation) => void;
   onMoveNote: (location: NoteLocation, letter: string, octave: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
+  onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
@@ -54,6 +64,32 @@ type DragState =
     }
   | null;
 
+/** A tap-to-preview placement waiting for a confirming second tap (touch only). */
+interface PendingPreview {
+  action: 'add' | 'chord';
+  measureIndex: number;
+  clef: Clef;
+  noteIndex?: number; // for 'chord': which existing note gets the new pitch
+  x: number;
+  y: number;
+  line: number;
+  duration: DurationValue;
+}
+
+type TouchGesture =
+  | { kind: 'newPreview'; cycled: boolean }
+  | { kind: 'confirmPreview'; cycled: boolean }
+  | {
+      kind: 'note';
+      location: NoteLocation;
+      startX: number;
+      startY: number;
+      mode: 'undetermined' | 'drag' | 'durationCycle';
+      wasAlreadySelected: boolean;
+      cycleDuration: DurationValue;
+    }
+  | null;
+
 export function StaffEditor({
   score,
   selected,
@@ -63,6 +99,7 @@ export function StaffEditor({
   onDeleteNote,
   onMoveNote,
   onTogglePitch,
+  onChangeDuration,
   onFocusMeasure,
   onAddLineBreak,
   onMoveChord,
@@ -75,6 +112,10 @@ export function StaffEditor({
   const dragRef = useRef<DragState>(null);
   const suppressClickRef = useRef(false);
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
+
+  const pendingPreviewRef = useRef<PendingPreview | null>(null);
+  const touchGestureRef = useRef<TouchGesture>(null);
+  const holdIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -93,6 +134,8 @@ export function StaffEditor({
     const rect = svg.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
+
+  // --- Mouse (desktop) interactions -------------------------------------------
 
   const endDrag = () => {
     document.removeEventListener('mousemove', handleDocumentMouseMove);
@@ -351,6 +394,329 @@ export function StaffEditor({
       onDeleteNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex });
     }
   };
+
+  // --- Touch (mobile) interactions ---------------------------------------------
+  //
+  // Touch has no hover, so placement is a two-step "tap to preview, tap again to
+  // confirm" flow. Holding (instead of a quick second tap) cycles the preview's
+  // note duration once per second; lifting the finger then places it immediately
+  // at whatever duration it landed on. The same hold-to-cycle applies to an
+  // existing note (changing its duration in place); moving the finger before the
+  // hold triggers switches to the existing drag-to-reposition-pitch gesture.
+
+  const clearHoldInterval = () => {
+    if (holdIntervalRef.current !== null) {
+      window.clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+  };
+
+  const renderPendingPreviewGhost = () => {
+    const preview = pendingPreviewRef.current;
+    if (!preview) {
+      clearGhost(overlayRef.current);
+      return;
+    }
+    const result = renderResultRef.current;
+    const staff = result?.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
+    if (!staff) return;
+    const ledgerLineYs = ledgerLinePositions(preview.line).map((l) => staff.refY0 - l * staff.spacing);
+    if (preview.action === 'add') {
+      renderGhost(overlayRef.current, {
+        kind: 'note',
+        x: preview.x,
+        y: preview.y,
+        duration: preview.duration,
+        isRest: editTool.isRest,
+        stemUp: stemPointsUp(preview.line),
+        accidental: editTool.accidental,
+        ledgerLineYs,
+        opacity: 0.5,
+        color: '#7a5cff',
+      });
+    } else {
+      const hostNote =
+        preview.noteIndex !== undefined ? score.measures[preview.measureIndex][preview.clef].notes[preview.noteIndex] : null;
+      renderGhost(overlayRef.current, {
+        kind: 'note',
+        x: preview.x,
+        y: preview.y,
+        duration: hostNote?.duration ?? 'q',
+        isRest: false,
+        stemUp: stemPointsUp(preview.line),
+        accidental: editTool.accidental,
+        ledgerLineYs,
+        opacity: 0.6,
+        color: '#2f9e44',
+      });
+    }
+  };
+
+  const commitPendingPreview = () => {
+    const preview = pendingPreviewRef.current;
+    const result = renderResultRef.current;
+    if (!preview || !result) return;
+    if (preview.action === 'add') {
+      const { letter, octave } = lineToPitch(preview.clef, preview.line);
+      const insertIndex = findInsertIndex(result, preview.measureIndex, preview.clef, preview.x);
+      onAddNote(preview.measureIndex, preview.clef, letter, octave, insertIndex, preview.duration);
+    } else if (preview.noteIndex !== undefined) {
+      const { letter, octave } = lineToPitch(preview.clef, preview.line);
+      onTogglePitch({ measureIndex: preview.measureIndex, clef: preview.clef, noteIndex: preview.noteIndex }, letter, octave);
+    }
+    onFocusMeasure(preview.measureIndex);
+    pendingPreviewRef.current = null;
+    clearGhost(overlayRef.current);
+  };
+
+  const startAddHoldCycle = () => {
+    holdIntervalRef.current = window.setInterval(() => {
+      const preview = pendingPreviewRef.current;
+      if (!preview || preview.action !== 'add') return;
+      preview.duration = cycleDurationLonger(preview.duration);
+      if (touchGestureRef.current) (touchGestureRef.current as { cycled: boolean }).cycled = true;
+      renderPendingPreviewGhost();
+    }, HOLD_CYCLE_MS);
+  };
+
+  const handleTouchStart = (event: TouchEvent) => {
+    if (event.touches.length > 1) return;
+    const result = renderResultRef.current;
+    const touch = event.touches[0];
+    const point = touch && eventPoint(touch);
+    if (!result || !point) return;
+
+    const lineBreak = findLineBreakAt(result, point.x, point.y);
+    if (lineBreak) {
+      event.preventDefault();
+      pendingPreviewRef.current = null;
+      clearGhost(overlayRef.current);
+      onAddLineBreak(lineBreak.afterMeasureIndex);
+      return;
+    }
+
+    const chordHit = findChordAt(result, point.x, point.y);
+    if (chordHit) {
+      event.preventDefault();
+      onFocusMeasure(chordHit.measureIndex);
+      return;
+    }
+
+    const band = findChordBandAt(result, point.x, point.y);
+    if (band) {
+      event.preventDefault();
+      onFocusMeasure(band.measureIndex);
+      return;
+    }
+
+    event.preventDefault();
+
+    // Second touch confirming an existing pending preview?
+    const preview = pendingPreviewRef.current;
+    if (preview) {
+      const near = Math.abs(point.x - preview.x) < TOUCH_PREVIEW_RADIUS && Math.abs(point.y - preview.y) < TOUCH_PREVIEW_RADIUS;
+      if (near) {
+        touchGestureRef.current = { kind: 'confirmPreview', cycled: false };
+        if (preview.action === 'add') startAddHoldCycle();
+        return;
+      }
+      // Touched elsewhere: drop the stale preview and fall through to re-evaluate.
+      pendingPreviewRef.current = null;
+      clearGhost(overlayRef.current);
+    }
+
+    const click = resolveClick(result, point.x, point.y);
+    if (click?.type === 'select') {
+      const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
+      const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      const wasAlreadySelected = Boolean(
+        selected &&
+          selected.measureIndex === location.measureIndex &&
+          selected.clef === location.clef &&
+          selected.noteIndex === location.noteIndex,
+      );
+      touchGestureRef.current = {
+        kind: 'note',
+        location,
+        startX: point.x,
+        startY: point.y,
+        mode: 'undetermined',
+        wasAlreadySelected,
+        cycleDuration: note.duration,
+      };
+      if (!note.isRest) {
+        holdIntervalRef.current = window.setInterval(() => {
+          const gesture = touchGestureRef.current;
+          const res = renderResultRef.current;
+          if (!gesture || gesture.kind !== 'note' || gesture.mode === 'drag' || !res) return;
+          gesture.mode = 'durationCycle';
+          gesture.cycleDuration = cycleDurationLonger(gesture.cycleDuration);
+          const staff = res.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+          const noteHitbox = res.noteHitboxes.find(
+            (n) =>
+              n.measureIndex === gesture.location.measureIndex &&
+              n.clef === gesture.location.clef &&
+              n.noteIndex === gesture.location.noteIndex,
+          );
+          if (!staff || note.pitches.length === 0) return;
+          const line = pitchToLine(gesture.location.clef, note.pitches[0].letter, note.pitches[0].octave);
+          renderGhost(overlayRef.current, {
+            kind: 'note',
+            x: noteHitbox?.centerX ?? point.x,
+            y: staff.refY0 - line * staff.spacing,
+            duration: gesture.cycleDuration,
+            isRest: false,
+            stemUp: stemPointsUp(line),
+            accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
+            ledgerLineYs: ledgerLinePositions(line).map((l) => staff.refY0 - l * staff.spacing),
+            opacity: 0.65,
+            color: '#d6432b',
+          });
+        }, HOLD_CYCLE_MS);
+      }
+      return;
+    }
+
+    if (click?.type === 'add') {
+      const snappedLine = Math.round(click.line * 2) / 2;
+      const staff = findStaffAt(result, point.x, point.y);
+      if (!staff) return;
+      pendingPreviewRef.current = {
+        action: 'add',
+        measureIndex: click.measureIndex,
+        clef: click.clef,
+        x: point.x,
+        y: staff.refY0 - snappedLine * staff.spacing,
+        line: snappedLine,
+        duration: editTool.duration,
+      };
+      renderPendingPreviewGhost();
+      touchGestureRef.current = { kind: 'newPreview', cycled: false };
+      startAddHoldCycle();
+      return;
+    }
+
+    // Truly empty area: deselect, matching desktop click behavior.
+    onDeselectNote();
+  };
+
+  const handleTouchMove = (event: TouchEvent) => {
+    const gesture = touchGestureRef.current;
+    if (!gesture || gesture.kind !== 'note' || gesture.mode === 'durationCycle') return;
+    const touch = event.touches[0];
+    const point = touch && eventPoint(touch);
+    const result = renderResultRef.current;
+    if (!point || !result) return;
+
+    const dx = point.x - gesture.startX;
+    const dy = point.y - gesture.startY;
+    if (gesture.mode === 'undetermined') {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      clearHoldInterval();
+      gesture.mode = 'drag';
+      setDraggingNote({ measureIndex: gesture.location.measureIndex, clef: gesture.location.clef, noteIndex: gesture.location.noteIndex });
+    }
+
+    event.preventDefault();
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+    const noteHitbox = result.noteHitboxes.find(
+      (n) =>
+        n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
+    );
+    if (!staff) return;
+    const rawLine = lineAt(staff, point.y);
+    const snappedLine = Math.round(rawLine * 2) / 2;
+    const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
+    renderGhost(overlayRef.current, {
+      kind: 'note',
+      x: noteHitbox?.centerX ?? point.x,
+      y: staff.refY0 - snappedLine * staff.spacing,
+      duration: note.duration,
+      isRest: false,
+      stemUp: stemPointsUp(snappedLine),
+      accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
+      ledgerLineYs: ledgerLinePositions(snappedLine).map((l) => staff.refY0 - l * staff.spacing),
+      opacity: 0.65,
+      color: '#d6432b',
+    });
+  };
+
+  const handleTouchEnd = (event: TouchEvent) => {
+    clearHoldInterval();
+    const gesture = touchGestureRef.current;
+    if (!gesture) return;
+    event.preventDefault();
+    touchGestureRef.current = null;
+
+    const result = renderResultRef.current;
+    const touch = event.changedTouches[0];
+    const point = touch && eventPoint(touch);
+
+    if (gesture.kind === 'note') {
+      if (gesture.mode === 'drag') {
+        if (point && result) {
+          const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+          if (staff) {
+            const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
+            const { letter, octave } = lineToPitch(gesture.location.clef, snappedLine);
+            onMoveNote(gesture.location, letter, octave);
+          }
+        }
+        setDraggingNote(null);
+        clearGhost(overlayRef.current);
+      } else if (gesture.mode === 'durationCycle') {
+        onChangeDuration(gesture.location, gesture.cycleDuration);
+        clearGhost(overlayRef.current);
+      } else if (gesture.wasAlreadySelected) {
+        if (point && result) {
+          const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+          if (staff) {
+            const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
+            pendingPreviewRef.current = {
+              action: 'chord',
+              measureIndex: gesture.location.measureIndex,
+              clef: gesture.location.clef,
+              noteIndex: gesture.location.noteIndex,
+              x: point.x,
+              y: staff.refY0 - snappedLine * staff.spacing,
+              line: snappedLine,
+              duration: 'q',
+            };
+            renderPendingPreviewGhost();
+          }
+        }
+        onFocusMeasure(gesture.location.measureIndex);
+      } else {
+        onSelectNote(gesture.location);
+        onFocusMeasure(gesture.location.measureIndex);
+      }
+      return;
+    }
+
+    if (gesture.kind === 'newPreview') {
+      if (gesture.cycled) commitPendingPreview();
+      return;
+    }
+
+    if (gesture.kind === 'confirmPreview') {
+      commitPendingPreview();
+    }
+  };
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: false });
+    el.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchcancel', handleTouchEnd);
+    };
+  });
 
   return (
     <div className="staff-scroll">

@@ -40,6 +40,15 @@ export function noteBeats(note: Pick<NoteEvent, 'duration' | 'dotted'>): number 
   return note.dotted ? base * 1.5 : base;
 }
 
+/** Shortest to longest. Long-press (toolbar or staff) steps toward the end of this list. */
+export const DURATION_ORDER: DurationValue[] = ['16', '8', 'q', 'h', 'w'];
+
+/** Next longer duration, or the same value if already a whole note. */
+export function cycleDurationLonger(duration: DurationValue): DurationValue {
+  const idx = DURATION_ORDER.indexOf(duration);
+  return DURATION_ORDER[Math.min(idx + 1, DURATION_ORDER.length - 1)];
+}
+
 export function measureCapacityBeats(timeSignature: TimeSignature): number {
   return timeSignature.numerator * (4 / timeSignature.denominator);
 }

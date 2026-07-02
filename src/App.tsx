@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { StaffEditor } from './components/StaffEditor';
 import { Toolbar, type ChordTool, type EditTool } from './components/Toolbar';
-import type { Clef, NoteLocation, Pitch, Score } from './types/score';
+import type { Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScore,
   addLineBreak,
@@ -86,9 +86,9 @@ function App() {
   );
 
   const handleAddNote = useCallback(
-    (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number) => {
+    (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number, durationOverride?: DurationValue) => {
       const pitch: Pitch = { letter: letter as Pitch['letter'], accidental: editTool.accidental, octave };
-      const note = createNote([pitch], editTool.duration, editTool.dotted, editTool.isRest);
+      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
         window.alert('마디가 가득 찼습니다. "마디 추가" 버튼으로 새 마디를 만들어주세요.');
@@ -107,6 +107,10 @@ function App() {
         pitches: [{ letter: letter as Pitch['letter'], accidental: note.pitches[0]?.accidental ?? '', octave }],
       })),
     );
+  }, []);
+
+  const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
+    setScore((prev) => updateNoteInScore(prev, location, (note) => ({ ...note, duration })));
   }, []);
 
   const handleTogglePitch = useCallback(
@@ -303,6 +307,7 @@ function App() {
         onDeleteNote={deleteNoteAndSelectAdjacent}
         onMoveNote={handleMoveNote}
         onTogglePitch={handleTogglePitch}
+        onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
