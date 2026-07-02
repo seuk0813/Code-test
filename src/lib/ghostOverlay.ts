@@ -44,15 +44,20 @@ function el<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string,
   return node;
 }
 
-/** Number of stave lines a note beyond the 5-line staff needs a ledger line through. */
+/**
+ * Number of stave lines a note beyond the 5-line staff needs a ledger line
+ * through. The staff spans line 1 (bottom) to line 5 (top) in this app's
+ * "line" convention (see CLEF_LINE0_REFERENCE in scoreUtils.ts) — verified
+ * against real VexFlow-rendered ledger lines for both clefs.
+ */
 export function ledgerLinePositions(line: number): number[] {
-  if (line <= -1) {
-    const count = Math.floor(-line);
-    return Array.from({ length: count }, (_, i) => -1 - i);
+  if (line <= 0) {
+    const count = Math.floor(1 - line);
+    return Array.from({ length: count }, (_, i) => -i);
   }
-  if (line >= 5) {
-    const count = Math.floor(line - 4);
-    return Array.from({ length: count }, (_, i) => 5 + i);
+  if (line >= 6) {
+    const count = Math.floor(line - 5);
+    return Array.from({ length: count }, (_, i) => 6 + i);
   }
   return [];
 }

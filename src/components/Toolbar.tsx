@@ -1,8 +1,10 @@
+import { useRef } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import type { Accidental, DurationValue, Score } from '../types/score';
 import { DURATION_LABELS } from '../lib/scoreUtils';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
+const LONG_PRESS_STEP_MS = 1000;
 const ACCIDENTALS: { value: Accidental; label: string }[] = [
   { value: '', label: '없음' },
   { value: '#', label: '♯' },
@@ -88,15 +90,41 @@ export function Toolbar({
     event.target.value = '';
   };
 
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressAdvancedRef = useRef(false);
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearInterval(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const startLongPress = (duration: DurationValue) => {
+    longPressAdvancedRef.current = false;
+    let idx = DURATIONS.indexOf(duration);
+    longPressTimerRef.current = window.setInterval(() => {
+      if (idx <= 0) {
+        clearLongPress();
+        return;
+      }
+      idx -= 1;
+      longPressAdvancedRef.current = true;
+      onEditToolChange({ duration: DURATIONS[idx] });
+    }, LONG_PRESS_STEP_MS);
+  };
+
+  const handleDurationClick = (duration: DurationValue) => {
+    if (longPressAdvancedRef.current) {
+      longPressAdvancedRef.current = false;
+      return;
+    }
+    onEditToolChange({ duration });
+  };
+
   return (
     <div className="toolbar">
       <div className="toolbar-row">
-        <input
-          className="title-input"
-          value={score.title}
-          onChange={(e) => onScoreMetaChange({ title: e.target.value })}
-          placeholder="악보 제목"
-        />
         <input
           className="composer-input"
           value={score.composer}
@@ -151,8 +179,13 @@ export function Toolbar({
           <button
             key={d}
             className={editTool.duration === d ? 'active' : ''}
-            onClick={() => onEditToolChange({ duration: d })}
-            title={DURATION_LABELS[d]}
+            onClick={() => handleDurationClick(d)}
+            onMouseDown={() => startLongPress(d)}
+            onMouseUp={clearLongPress}
+            onMouseLeave={clearLongPress}
+            onTouchStart={() => startLongPress(d)}
+            onTouchEnd={clearLongPress}
+            title={`${DURATION_LABELS[d]} (길게 누르면 더 긴 음표로 전환)`}
           >
             {DURATION_LABELS[d]}
           </button>
@@ -220,9 +253,11 @@ export function Toolbar({
         )}
         <button onClick={onExportMusicXml}>MusicXML 내보내기</button>
         <button onClick={onExportMidi}>MIDI 내보내기</button>
-        <button onClick={onSaveJson}>JSON 저장</button>
-        <label className="file-input-label">
-          JSON 불러오기
+        <button className="save-file-button" onClick={onSaveJson} title="현재 악보를 파일(.json)로 저장합니다">
+          💾 파일 저장
+        </button>
+        <label className="file-input-label save-file-button" title="저장했던 악보 파일(.json)을 불러옵니다">
+          📂 파일 불러오기
           <input type="file" accept="application/json" onChange={handleLoadFile} />
         </label>
       </div>

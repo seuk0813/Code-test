@@ -256,6 +256,13 @@ function App() {
   return (
     <div className="app">
       <h1 className="app-title">피아노 악보 편집기</h1>
+      <input
+        className="score-title-input"
+        value={score.title}
+        onChange={(e) => handleScoreMetaChange({ title: e.target.value })}
+        placeholder="악보 제목을 입력하세요"
+        aria-label="악보 제목"
+      />
       <Toolbar
         score={score}
         onScoreMetaChange={handleScoreMetaChange}

@@ -11,6 +11,29 @@
   margin: 8px 0 0;
 }
 
+.score-title-input {
+  font-size: 22px;
+  font-weight: 600;
+  padding: 8px 4px;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  width: 100%;
+  max-width: 480px;
+}
+
+.score-title-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+.save-file-button {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  font-weight: 600;
+}
+
 .toolbar {
   display: flex;
   flex-direction: column;
