@@ -1,0 +1,127 @@
+.app {
+  text-align: left;
+  padding: 16px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-title {
+  font-size: 28px;
+  margin: 8px 0 0;
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.toolbar-row input[type='number'] {
+  width: 64px;
+}
+
+.toolbar button {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.toolbar button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.toolbar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.group-label {
+  font-size: 13px;
+  color: var(--text);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.title-input {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 200px;
+}
+
+.composer-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 140px;
+}
+
+.file-input-label {
+  position: relative;
+  overflow: hidden;
+  font-size: 14px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.file-input-label input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.status-line {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.staff-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.staff-container svg {
+  display: block;
+}
+
+.staff-container {
+  cursor: pointer;
+}
