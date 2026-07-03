@@ -196,7 +196,7 @@ export function renderScore(
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
   );
   const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20);
-  const hasHeading = Boolean(score.title?.trim() || score.composer?.trim());
+  const hasHeading = Boolean(score.title?.trim());
   const titleBand = hasHeading ? TITLE_BAND : 0;
   const height = rows.length * ROW_HEIGHT + titleBand;
 
@@ -447,29 +447,16 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function drawHeading(svg: SVGSVGElement, score: Score, width: number): void {
   const title = score.title?.trim();
-  const composer = score.composer?.trim();
-  if (title) {
-    const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', String(width / 2));
-    text.setAttribute('y', '28');
-    text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('font-size', '22');
-    text.setAttribute('font-weight', '700');
-    text.setAttribute('fill', '#1a1a1a');
-    text.textContent = title;
-    svg.appendChild(text);
-  }
-  if (composer) {
-    const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', String(width - 12));
-    text.setAttribute('y', '46');
-    text.setAttribute('text-anchor', 'end');
-    text.setAttribute('font-size', '14');
-    text.setAttribute('font-style', 'italic');
-    text.setAttribute('fill', '#444');
-    text.textContent = composer;
-    svg.appendChild(text);
-  }
+  if (!title) return;
+  const text = document.createElementNS(SVG_NS, 'text');
+  text.setAttribute('x', String(width / 2));
+  text.setAttribute('y', '28');
+  text.setAttribute('text-anchor', 'middle');
+  text.setAttribute('font-size', '22');
+  text.setAttribute('font-weight', '700');
+  text.setAttribute('fill', '#1a1a1a');
+  text.textContent = title;
+  svg.appendChild(text);
 }
 
 function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[]): void {

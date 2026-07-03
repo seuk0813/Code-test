@@ -27,9 +27,7 @@ import { exportMusicXml } from './lib/exportMusicXml';
 import { exportMidi } from './lib/exportMidi';
 import { downloadBlob, downloadScoreJson, loadAutosave, printScorePdf, readScoreFile, saveAutosave } from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
-import { computeRows } from './lib/scoreUtils';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
-import { MEASURES_PER_ROW } from './lib/vexflowRenderer';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
 const DEFAULT_CHORD_TOOL: ChordTool = { text: '' };
@@ -189,21 +187,14 @@ function App() {
     setScore((prev) => addMeasure(prev));
   }, []);
 
-  const handleDeleteMeasure = useCallback(() => {
-    if (focusedMeasureIndex === null) return;
-    const target = focusedMeasureIndex;
+  /** Always removes the last measure — the FAB's "－" is a fixed end-of-score action, not tied to selection. */
+  const handleDeleteLastMeasure = useCallback(() => {
+    if (score.measures.length <= 1) return;
+    const target = score.measures.length - 1;
     setScore((prev) => removeMeasure(prev, target));
-    setSelected((prev) => {
-      if (!prev) return prev;
-      if (prev.measureIndex === target) return null;
-      return prev.measureIndex > target ? { ...prev, measureIndex: prev.measureIndex - 1 } : prev;
-    });
-    setFocusedMeasureIndex((prev) => {
-      if (prev === null) return null;
-      if (prev === target) return null;
-      return prev > target ? prev - 1 : prev;
-    });
-  }, [focusedMeasureIndex]);
+    setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
+    setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
+  }, [score.measures.length]);
 
   const handleToggleConnect = useCallback(() => {
     if (!selected) return;
@@ -307,7 +298,6 @@ function App() {
       : 0;
 
   const selectedNote = selected ? score.measures[selected.measureIndex][selected.clef].notes[selected.noteIndex] : null;
-  const rowCount = computeRows(score.measures.length, score.lineBreaks, MEASURES_PER_ROW).length;
 
   return (
     <div className="app">
@@ -326,9 +316,6 @@ function App() {
         onEditToolChange={handleEditToolChange}
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
-        onAddMeasure={handleAddMeasure}
-        onDeleteMeasure={handleDeleteMeasure}
-        canDeleteMeasure={focusedMeasureIndex !== null && score.measures.length > 1}
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}
@@ -372,16 +359,29 @@ function App() {
         onDeselectNote={handleDeselectNote}
         playbackClock={playbackClock}
       />
-      {rowCount > 3 && (
+      <div className="composer-row">
+        <input
+          className="composer-input"
+          value={score.composer}
+          onChange={(e) => handleScoreMetaChange({ composer: e.target.value })}
+          placeholder="작곡가"
+          aria-label="작곡가"
+        />
+      </div>
+      <div className="measure-fabs">
         <button
-          className="add-measure-fab"
-          onClick={handleAddMeasure}
-          title="마디 추가"
-          aria-label="마디 추가"
+          className="measure-fab measure-fab-remove"
+          onClick={handleDeleteLastMeasure}
+          disabled={score.measures.length <= 1}
+          title="마지막 마디 삭제"
+          aria-label="마지막 마디 삭제"
         >
+          −
+        </button>
+        <button className="measure-fab" onClick={handleAddMeasure} title="마디 추가" aria-label="마디 추가">
           +
         </button>
-      )}
+      </div>
       {saveOpen && (
         <SaveDialog defaultName={score.title} onCancel={() => setSaveOpen(false)} onSave={handleSaveConfirm} />
       )}

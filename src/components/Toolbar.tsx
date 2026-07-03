@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import type { Accidental, DurationValue, Score } from '../types/score';
 import { DURATION_LABELS } from '../lib/scoreUtils';
@@ -94,9 +94,6 @@ interface ToolbarProps {
   onEditToolChange: (patch: Partial<EditTool>) => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
-  onAddMeasure: () => void;
-  onDeleteMeasure: () => void;
-  canDeleteMeasure: boolean;
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
@@ -127,9 +124,6 @@ export function Toolbar({
   onEditToolChange,
   hasSelection,
   onDeleteSelected,
-  onAddMeasure,
-  onDeleteMeasure,
-  canDeleteMeasure,
   connectActive,
   canConnect,
   onToggleConnect,
@@ -190,12 +184,6 @@ export function Toolbar({
   return (
     <div className="toolbar">
       <div className="toolbar-row">
-        <input
-          className="composer-input"
-          value={score.composer}
-          onChange={(e) => onScoreMetaChange({ composer: e.target.value })}
-          placeholder="작곡가"
-        />
         <label>
           박자
           <select
@@ -225,7 +213,7 @@ export function Toolbar({
             ))}
           </select>
         </label>
-        <label>
+        <label className="tempo-field">
           템포
           <input
             type="number"
@@ -296,17 +284,6 @@ export function Toolbar({
         >
           이음줄/붙임줄
         </button>
-        <button className="tool-compact" onClick={onAddMeasure} title="마디 추가">
-          ＋마디
-        </button>
-        <button
-          className="tool-compact"
-          onClick={onDeleteMeasure}
-          disabled={!canDeleteMeasure}
-          title={canDeleteMeasure ? '선택한 마디 삭제' : '악보에서 마디를 클릭해 선택하면 삭제할 수 있습니다'}
-        >
-          －마디
-        </button>
       </div>
 
       <div className="toolbar-row">
@@ -351,12 +328,14 @@ export function Toolbar({
 
       <div className="toolbar-row">
         {isPlaying ? (
-          <button onClick={onStop}>⏹ 정지</button>
+          <button className="play-button" onClick={onStop} aria-label="정지" title="정지">
+            ⏹
+          </button>
         ) : (
-          <button onClick={onPlay}>▶ 재생</button>
+          <button className="play-button" onClick={onPlay} aria-label="재생" title="재생">
+            ▶
+          </button>
         )}
-        <button onClick={onExportMusicXml}>MusicXML 내보내기</button>
-        <button onClick={onExportMidi}>MIDI 내보내기</button>
         <button className="save-file-button" onClick={onSaveJson} title="현재 악보를 파일(.json)로 저장합니다">
           💾 파일 저장
         </button>
@@ -364,7 +343,51 @@ export function Toolbar({
           📂 파일 불러오기
           <input type="file" accept="application/json" onChange={handleLoadFile} />
         </label>
+        <MoreMenu onExportMusicXml={onExportMusicXml} onExportMidi={onExportMidi} />
       </div>
+    </div>
+  );
+}
+
+/** "⋯" popover holding rarely-used actions (MusicXML / MIDI export) out of the main toolbar. */
+function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml: () => void; onExportMidi: () => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  return (
+    <div className="more-menu" ref={rootRef}>
+      <button className="tool-compact" onClick={() => setOpen((v) => !v)} aria-label="더보기" title="더보기">
+        ⋯
+      </button>
+      {open && (
+        <div className="more-menu-popover">
+          <button
+            onClick={() => {
+              onExportMusicXml();
+              setOpen(false);
+            }}
+          >
+            MusicXML 내보내기
+          </button>
+          <button
+            onClick={() => {
+              onExportMidi();
+              setOpen(false);
+            }}
+          >
+            MIDI 내보내기
+          </button>
+        </div>
+      )}
     </div>
   );
 }

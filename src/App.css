@@ -62,6 +62,42 @@
   width: 64px;
 }
 
+.tempo-field {
+  margin-left: auto;
+}
+
+.play-button {
+  font-size: 15px;
+  padding: 6px 10px;
+  line-height: 1;
+}
+
+.more-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.more-menu-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  min-width: 170px;
+}
+
+.more-menu-popover button {
+  text-align: left;
+  white-space: nowrap;
+}
+
 .toolbar button {
   font: inherit;
   font-size: 14px;
@@ -212,26 +248,64 @@
   pointer-events: none;
 }
 
-/* Floating "add measure" button that stays in reach once the score is long. */
-.add-measure-fab {
+/* Composer field, placed at the bottom-right of the score (mirrors the title). */
+.composer-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.composer-row .composer-input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  font-size: 14px;
+  font-style: italic;
+  text-align: right;
+  padding: 4px 2px;
+  width: 220px;
+}
+
+.composer-row .composer-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+/* Floating add/remove-measure buttons — always act on the last measure. */
+.measure-fabs {
   position: fixed;
   right: 24px;
   bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 50;
+}
+
+.measure-fab {
   width: 52px;
   height: 52px;
   border-radius: 50%;
   border: none;
   background: var(--accent, #7a5cff);
   color: #fff;
-  font-size: 30px;
+  font-size: 26px;
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-  z-index: 50;
 }
 
-.add-measure-fab:hover {
+.measure-fab-remove {
+  background: #8a8a8a;
+}
+
+.measure-fab:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+.measure-fab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Save dialog */
@@ -353,7 +427,8 @@
     overflow: visible;
     padding: 0;
   }
-  .add-measure-fab,
+  .measure-fabs,
+  .composer-row,
   .staff-ghost-overlay {
     display: none !important;
   }
