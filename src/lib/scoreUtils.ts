@@ -430,13 +430,32 @@ export function addLyricsToScoreAt(score: Score, measureIndex: number, text: str
   return { ...score, measures };
 }
 
-/** Edits an existing lyric syllable's text in place. Clearing it entirely removes the syllable. */
+/**
+ * Edits an existing lyric syllable's text in place. Clearing it entirely
+ * removes the syllable. Typing more than one character (e.g. replacing "안"
+ * with "안녕하세요") splits the input the same way addLyricsToScoreAt does,
+ * so every character stays its own independently-draggable syllable instead
+ * of being crammed into the one original syllable slot.
+ */
 export function editLyricText(score: Score, measureIndex: number, lyricId: string, text: string): Score {
   const trimmed = text.trim();
   const measures = score.measures.map((m, i) => {
     if (i !== measureIndex) return m;
-    if (!trimmed) return { ...m, lyrics: (m.lyrics ?? []).filter((l) => l.id !== lyricId) };
-    return { ...m, lyrics: (m.lyrics ?? []).map((l) => (l.id === lyricId ? { ...l, text: trimmed } : l)) };
+    const lyrics = m.lyrics ?? [];
+    const existing = lyrics.find((l) => l.id === lyricId);
+    if (!existing) return m;
+    if (!trimmed) return { ...m, lyrics: lyrics.filter((l) => l.id !== lyricId) };
+    const chars = Array.from(trimmed).filter((c) => c.trim().length > 0);
+    if (chars.length <= 1) {
+      return { ...m, lyrics: lyrics.map((l) => (l.id === lyricId ? { ...l, text: trimmed } : l)) };
+    }
+    const step = 0.09;
+    const newSyllables: LyricSyllable[] = chars.map((c, idx) => ({
+      id: nextId('ly'),
+      text: c,
+      offset: Math.min(0.97, Math.max(0.03, existing.offset + idx * step)),
+    }));
+    return { ...m, lyrics: [...lyrics.filter((l) => l.id !== lyricId), ...newSyllables] };
   });
   return { ...score, measures };
 }
@@ -588,15 +607,26 @@ export function toggleConnectToNext(score: Score, location: NoteLocation): Score
  * Connects a note to an arbitrary other note (by id) — set by dragging the
  * connector handle onto a target, for chords or out-of-sequence notes where
  * "the next note" isn't the one you want. Clears the sequential flag so the
- * two mechanisms don't fight over rendering the same note.
+ * two mechanisms don't fight over rendering the same note. `fromIndex`/
+ * `toIndex` optionally pin the tie to a specific pitch on either end of a
+ * chord (see NoteEvent.connectFromIndex/connectToIndex) — omitted means "all
+ * pitches", the previous whole-chord behavior.
  */
-export function connectNoteTo(score: Score, source: NoteLocation, targetId: string): Score {
+export function connectNoteTo(
+  score: Score,
+  source: NoteLocation,
+  targetId: string,
+  fromIndex?: number,
+  toIndex?: number,
+): Score {
   return updateNoteInScore(score, source, (note) => ({
     ...note,
     connectToId: targetId,
     connectToNext: false,
     tieToNext: false,
     slurToNext: false,
+    connectFromIndex: fromIndex,
+    connectToIndex: toIndex,
   }));
 }
 
@@ -608,6 +638,8 @@ export function clearNoteConnection(score: Score, location: NoteLocation): Score
     tieToNext: false,
     slurToNext: false,
     connectToId: undefined,
+    connectFromIndex: undefined,
+    connectToIndex: undefined,
   }));
 }
 

@@ -37,6 +37,19 @@ export interface NoteEvent {
    */
   connectToId?: string;
   /**
+   * Which pitch (index into this note's own `pitches`) the tie visually
+   * starts from, when this note is a chord — set by dragging one of several
+   * per-pitch connect handles. Undefined means "all pitches" (the default
+   * whole-chord tie).
+   */
+  connectFromIndex?: number;
+  /**
+   * Which pitch (index into the TARGET note's `pitches`) the tie visually
+   * ends at, when the target is a chord — set by where (vertically) the
+   * connect-drag was dropped. Undefined means "all pitches".
+   */
+  connectToIndex?: number;
+  /**
    * Free horizontal position within the measure's note area, 0 (start)..1 (end).
    * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
    * measure is filled to the time signature's capacity. Undefined = auto layout.

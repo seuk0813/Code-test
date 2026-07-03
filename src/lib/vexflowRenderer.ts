@@ -45,8 +45,15 @@ const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
 /** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). */
 const TITLE_BAND = 48;
-/** Vertical space reserved at the bottom for the composer credit, right-aligned like the title. */
-const COMPOSER_BAND = 34;
+/**
+ * Extra vertical space reserved right below the title for the composer
+ * credit — a dedicated band of its own, not shared with the chord-symbol
+ * band or the staff's ledger-line click region (which already occupy nearly
+ * all of the row's own top margin), so the composer text can't silently
+ * swallow clicks meant for either (see the chord-band/ledger-line collision
+ * this project already hit once before).
+ */
+const COMPOSER_BAND = 22;
 const OVERFLOW_MARK_RADIUS = 8;
 /** Extra slack added to the overflow marker's hit-test so a small marker is still easy to hover/tap. */
 const OVERFLOW_HIT_SLACK = 8;
@@ -56,11 +63,18 @@ const CONNECT_HANDLE_HIT_SLACK = 8;
 const CONNECT_HANDLE_DX = 15;
 const CONNECT_HANDLE_DY = 16;
 
-/** Font stacks for the printed-score text elements, matching a typical published lead sheet. */
-const TITLE_FONT = "'Noto Serif KR', Batang, serif";
-const CREDIT_FONT = "'Noto Sans KR', 'Malgun Gothic', sans-serif";
+/**
+ * Font stacks for the printed-score text elements. Korean chord-sheet images
+ * like the reference ("일종의 고백") are almost always typeset with the
+ * Naver-published, freely-licensed 나눔명조/나눔고딕 (Nanum Myeongjo / Nanum
+ * Gothic) family rather than Adobe/Google's own multi-CJK "Noto" faces — the
+ * bold title's letterforms and the plain body text both match Nanum's
+ * distinct cuts, not Noto's more uniform strokes.
+ */
+const TITLE_FONT = "'Nanum Myeongjo', Batang, serif";
+const CREDIT_FONT = "'Nanum Gothic', 'Malgun Gothic', sans-serif";
 const CHORD_FONT = "'Times New Roman', Times, serif";
-const LYRIC_FONT = "'Noto Sans KR', 'Malgun Gothic', sans-serif";
+const LYRIC_FONT = "'Nanum Gothic', 'Malgun Gothic', sans-serif";
 const PLACEHOLDER_COLOR = '#b8b8c2';
 
 export interface NoteHitbox {
@@ -68,6 +82,13 @@ export interface NoteHitbox {
   clef: Clef;
   noteIndex: number;
   centerX: number;
+  /**
+   * X of the note's stem (its "tail"), which for an up-stem note sits at the
+   * notehead's right edge and for a down-stem note at its left edge — used
+   * for the playback bar so it lines up with the note itself instead of the
+   * notehead glyph's left edge (what centerX actually measures).
+   */
+  stemX: number;
   /** Y of each notehead (a chord has several), for pitch-aware click hit-testing. */
   ys: number[];
 }
@@ -168,11 +189,17 @@ export interface OverflowHitbox {
   radius: number;
 }
 
-/** Small draggable handle shown on the selected note, for connecting it to an arbitrary other note. */
+/**
+ * Small draggable handle shown on the selected note, for connecting it to an
+ * arbitrary other note. A chord (multiple pitches) gets one handle per
+ * pitch — dragging a specific one picks which pitch the tie starts from
+ * (pitchIndex), instead of always tying the whole chord.
+ */
 export interface ConnectHandle {
   measureIndex: number;
   clef: Clef;
   noteIndex: number;
+  pitchIndex: number;
   x: number;
   y: number;
   radius: number;
@@ -187,7 +214,7 @@ export interface RenderResult {
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
   overflowHitboxes: OverflowHitbox[];
-  connectHandle: ConnectHandle | null;
+  connectHandles: ConnectHandle[];
   titleHitbox: TitleHitbox;
   composerHitbox: ComposerHitbox;
   width: number;
@@ -285,8 +312,14 @@ export function renderScore(
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
   );
   const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20);
-  const titleBand = TITLE_BAND;
-  const height = rows.length * ROW_HEIGHT + titleBand + COMPOSER_BAND;
+  // The composer credit gets its own dedicated band between the title and
+  // the first row, so it never has to share pixels with the chord-symbol
+  // band or the staff's ledger-line click region below it. `titleBand` (used
+  // for row placement) includes that extra space; the title's own clickable
+  // area (titleHitbox below) stays sized to just TITLE_BAND so the two don't
+  // swallow each other's clicks.
+  const titleBand = TITLE_BAND + COMPOSER_BAND;
+  const height = rows.length * ROW_HEIGHT + titleBand;
 
   const renderer = new Renderer(container, Renderer.Backends.SVG);
   renderer.resize(width, height);
@@ -302,6 +335,10 @@ export function renderScore(
   const overflowHitboxes: OverflowHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
+  // Composer credit sits above the 4th measure (or the score's last measure,
+  // if there are fewer than 4), matching typical lead-sheet layout.
+  const composerMeasureIndex = Math.min(3, score.measures.length - 1);
+  let composerAnchor: { x0: number; x1: number } | null = null;
 
   // Flat, in-order chain of every rendered note per staff (spanning measures
   // and rows), used after the layout pass to connect ties/slurs between
@@ -339,6 +376,10 @@ export function renderScore(
       if (isPieceStart) {
         trebleStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
         bassStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+      }
+
+      if (measureIndex === composerMeasureIndex) {
+        composerAnchor = { x0: x, x1: x + measureWidth };
       }
 
       trebleStave.setContext(context).draw();
@@ -424,11 +465,20 @@ export function renderScore(
             const ys = note.isRest
               ? [refY0 - 3 * spacing]
               : note.pitches.map((p) => refY0 - pitchToLine(clef, p.letter, p.octave) * spacing);
+            let stemX = centerXs[noteIndex];
+            if (!note.isRest) {
+              try {
+                stemX = sn.getStemX();
+              } catch {
+                // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
+              }
+            }
             noteHitboxes.push({
               measureIndex,
               clef,
               noteIndex,
               centerX: centerXs[noteIndex],
+              stemX,
               ys,
             });
             noteChain[clef].push({ event: note, staveNote: sn });
@@ -529,15 +579,32 @@ export function renderScore(
   });
 
   // Connections dragged onto an arbitrary target note (not necessarily "the
-  // next note") — see the on-staff connector handle in StaffEditor.
+  // next note") — see the on-staff connector handle in StaffEditor. When the
+  // note is a chord, connectFromIndex/connectToIndex (set by which per-pitch
+  // handle was dragged, and where it was dropped) pin the tie to those two
+  // specific noteheads instead of the whole chord.
   (['treble', 'bass'] as const).forEach((clef) => {
     noteChain[clef].forEach((cur) => {
       const targetId = cur.event.connectToId;
       if (!targetId || cur.event.isRest) return;
       const target = noteById.get(targetId);
       if (!target || target.event.isRest) return;
+      const fromIdx = cur.event.connectFromIndex;
+      const toIdx = cur.event.connectToIndex;
+      const fromPitch = fromIdx !== undefined ? cur.event.pitches[fromIdx] : undefined;
+      const toPitch = toIdx !== undefined ? target.event.pitches[toIdx] : undefined;
+      const specificPitchMatch = fromPitch && toPitch && pitchToVexKey(fromPitch) === pitchToVexKey(toPitch);
       try {
-        if (pitchesMatch(cur.event, target.event)) {
+        if (specificPitchMatch && fromIdx !== undefined && toIdx !== undefined) {
+          new StaveTie({
+            firstNote: cur.staveNote,
+            lastNote: target.staveNote,
+            firstIndexes: [fromIdx],
+            lastIndexes: [toIdx],
+          })
+            .setContext(context)
+            .draw();
+        } else if (pitchesMatch(cur.event, target.event)) {
           new StaveTie({ firstNote: cur.staveNote, lastNote: target.staveNote }).setContext(context).draw();
         } else {
           new Curve(cur.staveNote, target.staveNote, {}).setContext(context).draw();
@@ -548,11 +615,13 @@ export function renderScore(
     });
   });
 
-  // Connector handle on the selected note (hidden during playback, since
+  // Connector handle(s) on the selected note (hidden during playback, since
   // effectiveSelected is null then) — only shown for a note that already has
   // a tie/slur connection (via the toolbar button or a previous drag), so it
-  // doesn't clutter every selected note; dragging it re-targets the connection.
-  let connectHandle: ConnectHandle | null = null;
+  // doesn't clutter every selected note; dragging one re-targets the
+  // connection. A chord gets one handle per pitch (stacked, one per notehead)
+  // so the user can drag from the specific pitch the tie should start from.
+  const connectHandles: ConnectHandle[] = [];
   if (effectiveSelected) {
     const hb = noteHitboxes.find(
       (n) =>
@@ -562,25 +631,29 @@ export function renderScore(
     );
     const note = score.measures[effectiveSelected.measureIndex]?.[effectiveSelected.clef].notes[effectiveSelected.noteIndex];
     if (hb && note && !note.isRest && (noteConnects(note) || note.connectToId)) {
-      connectHandle = {
-        measureIndex: effectiveSelected.measureIndex,
-        clef: effectiveSelected.clef,
-        noteIndex: effectiveSelected.noteIndex,
-        x: hb.centerX + CONNECT_HANDLE_DX,
-        y: Math.min(...hb.ys) - CONNECT_HANDLE_DY,
-        radius: CONNECT_HANDLE_RADIUS,
-      };
+      hb.ys.forEach((y, pitchIndex) => {
+        connectHandles.push({
+          measureIndex: effectiveSelected.measureIndex,
+          clef: effectiveSelected.clef,
+          noteIndex: effectiveSelected.noteIndex,
+          pitchIndex,
+          x: hb.centerX + CONNECT_HANDLE_DX,
+          y: y - CONNECT_HANDLE_DY,
+          radius: CONNECT_HANDLE_RADIUS,
+        });
+      });
     }
   }
 
-  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: titleBand, x: width / 2, y: 28 };
-  const composerY = titleBand + rows.length * ROW_HEIGHT + 22;
+  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 28 };
+  const anchor = composerAnchor ?? { x0: width - 240, x1: width - 4 };
+  const composerY = TITLE_BAND + COMPOSER_BAND - 8;
   const composerHitbox: ComposerHitbox = {
-    x0: Math.max(0, width - 240),
-    x1: width - 4,
-    y0: composerY - 16,
-    y1: composerY + 8,
-    x: width - 10,
+    x0: anchor.x0,
+    x1: anchor.x1,
+    y0: TITLE_BAND,
+    y1: titleBand,
+    x: anchor.x1 - 4,
     y: composerY,
   };
 
@@ -592,7 +665,7 @@ export function renderScore(
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawOverflowMarks(svg, overflowHitboxes);
-    if (connectHandle) drawConnectHandle(svg, connectHandle);
+    connectHandles.forEach((h) => drawConnectHandle(svg, h));
   }
 
   return {
@@ -604,7 +677,7 @@ export function renderScore(
     overflowHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
-    connectHandle,
+    connectHandles,
     titleHitbox,
     composerHitbox,
     width,
@@ -691,7 +764,7 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
 /** Small filled handle on the selected note — drag it onto another note to tie/slur the two. */
 function drawConnectHandle(svg: SVGSVGElement, handle: ConnectHandle): void {
   const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('id', 'connect-handle');
+  g.setAttribute('class', 'connect-handle');
   const title = document.createElementNS(SVG_NS, 'title');
   title.textContent = '드래그해서 다른 음표와 연결';
   g.appendChild(title);
@@ -851,9 +924,23 @@ export function findOverflowMarkAt(result: RenderResult, x: number, y: number): 
 }
 
 export function findConnectHandleAt(result: RenderResult, x: number, y: number): ConnectHandle | null {
-  const h = result.connectHandle;
-  if (!h) return null;
-  return Math.hypot(h.x - x, h.y - y) < h.radius + CONNECT_HANDLE_HIT_SLACK ? h : null;
+  return (
+    result.connectHandles.find((h) => Math.hypot(h.x - x, h.y - y) < h.radius + CONNECT_HANDLE_HIT_SLACK) ?? null
+  );
+}
+
+/** Index of the pitch (within a note's own `pitches`) nearest a Y position — used to pick which chord tone a connect-drag drop should end at. */
+export function nearestPitchIndexAt(hb: NoteHitbox, y: number): number {
+  let best = 0;
+  let bestDist = Infinity;
+  hb.ys.forEach((py, i) => {
+    const d = Math.abs(py - y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  });
+  return best;
 }
 
 /** Hit-test any note (including chord members), used to resolve a connect-drag drop target. */

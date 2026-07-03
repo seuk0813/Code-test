@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor } from './components/StaffEditor';
-import { Toolbar, type EditTool } from './components/Toolbar';
+import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
 import type { Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScoreAt,
@@ -16,9 +16,11 @@ import {
   createNote,
   editChordText,
   editLyricText,
+  lineToPitch,
   moveChordInScore,
   moveLyricInScore,
   noteConnects,
+  pitchToLine,
   removeChordFromScore,
   removeLyricFromScore,
   removeMeasure,
@@ -163,11 +165,22 @@ function App() {
     [score, editTool, setScore],
   );
 
-  const handleMoveNote = useCallback((location: NoteLocation, letter: string, octave: number, x?: number) => {
+  /**
+   * `deltaLine` is how many staff-line units the drag moved (see
+   * StaffEditor's `startLine`/`pitchAt`), applied to EVERY pitch in the note
+   * so a dragged chord tone shifts all its tones together instead of
+   * collapsing the note down to the single dragged pitch (which used to
+   * silently drop the other chord tones).
+   */
+  const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number) => {
     setScore((prev) =>
       updateNoteInScore(prev, location, (note) => ({
         ...note,
-        pitches: [{ letter: letter as Pitch['letter'], accidental: note.pitches[0]?.accidental ?? '', octave }],
+        pitches: note.pitches.map((p) => {
+          const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
+          const { letter, octave } = lineToPitch(location.clef, line);
+          return { ...p, letter: letter as Pitch['letter'], octave };
+        }),
         x: x ?? note.x,
       })),
     );
@@ -250,9 +263,12 @@ function App() {
     setScore((prev) => toggleConnectToNext(prev, selected));
   }, [selected, setScore]);
 
-  const handleConnectNote = useCallback((source: NoteLocation, targetId: string) => {
-    setScore((prev) => connectNoteTo(prev, source, targetId));
-  }, [setScore]);
+  const handleConnectNote = useCallback(
+    (source: NoteLocation, targetId: string, fromPitchIndex?: number, toPitchIndex?: number) => {
+      setScore((prev) => connectNoteTo(prev, source, targetId, fromPitchIndex, toPitchIndex));
+    },
+    [setScore],
+  );
 
   const handleSetTitle = useCallback((title: string) => {
     setScore((prev) => ({ ...prev, title }));
@@ -363,7 +379,6 @@ function App() {
   return (
     <div className="app">
       <div className="app-header">
-        <h1 className="app-title">피아노 악보 편집기</h1>
         <div className="quick-actions">
           {isPlaying ? (
             <button className="play-button" onClick={handleStop} aria-label="정지" title="정지">
@@ -381,6 +396,7 @@ function App() {
             📂 불러오기
             <input type="file" accept="application/json" onChange={handleLoadFile} />
           </label>
+          <MoreMenu onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
         </div>
       </div>
       <Toolbar
@@ -393,8 +409,6 @@ function App() {
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}
-        onExportMusicXml={handleExportMusicXml}
-        onExportMidi={handleExportMidi}
       />
       <div className="status-line">
         {isPlaying

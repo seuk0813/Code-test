@@ -15,6 +15,7 @@ import {
   findStaffAt,
   findTitleAt,
   lineAt,
+  nearestPitchIndexAt,
   renderScore,
   resolveClick,
   xFractionAt,
@@ -74,7 +75,7 @@ interface StaffEditorProps {
     x?: number,
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
-  onMoveNote: (location: NoteLocation, letter: string, octave: number, x?: number) => void;
+  onMoveNote: (location: NoteLocation, deltaLine: number, x?: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
@@ -84,8 +85,8 @@ interface StaffEditorProps {
   onMoveLyric: (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => void;
   onDeleteLyric: (measureIndex: number, lyricId: string) => void;
   onDeselectNote: () => void;
-  /** Dragging the connector handle onto another note connects them with a tie/slur. */
-  onConnectNote: (source: NoteLocation, targetId: string) => void;
+  /** Dragging the connector handle onto another note connects them with a tie/slur, optionally pinned to specific chord pitches on either end. */
+  onConnectNote: (source: NoteLocation, targetId: string, fromPitchIndex?: number, toPitchIndex?: number) => void;
   /** When playing, a clock returning elapsed transport seconds (drives the playhead). */
   playbackClock: { get: () => number } | null;
   /** Inline editing directly on the score: title, composer, and adding/editing chords & lyrics in place. */
@@ -130,6 +131,8 @@ interface SymbolDrag {
 interface ConnectDrag {
   kind: 'connectDrag';
   source: NoteLocation;
+  /** Which pitch of a chord this specific handle belongs to (see ConnectHandle.pitchIndex). */
+  sourcePitchIndex: number;
   x0: number;
   y0: number;
 }
@@ -149,6 +152,8 @@ type MouseGesture =
       location: NoteLocation;
       startX: number;
       startY: number;
+      /** The note's own pitch line at gesture start, for computing a drag's pitch delta (see F14: dragging a chord tone must shift every pitch by the same amount, not replace them). */
+      startLine: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
     }
@@ -188,6 +193,7 @@ type TouchGesture =
       location: NoteLocation;
       startX: number;
       startY: number;
+      startLine: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
     }
@@ -288,7 +294,7 @@ export function StaffEditor({
           const hb = result.noteHitboxes.find(
             (n) => n.measureIndex === measureIndex && n.clef === clef && n.noteIndex === noteIndex,
           );
-          if (hb) segs.push({ startBeat: beat, endBeat: beat + dur, x: hb.centerX, isRest: note.isRest, measureIndex, noteIndex });
+          if (hb) segs.push({ startBeat: beat, endBeat: beat + dur, x: hb.stemX, isRest: note.isRest, measureIndex, noteIndex });
           beat += dur;
         });
       });
@@ -377,7 +383,12 @@ export function StaffEditor({
     }
     const note = score.measures[hit.measureIndex]?.[hit.clef]?.notes[hit.noteIndex];
     if (!note || note.isRest) return null;
-    return { location: { measureIndex: hit.measureIndex, clef: hit.clef, noteIndex: hit.noteIndex } as NoteLocation, id: note.id };
+    return {
+      location: { measureIndex: hit.measureIndex, clef: hit.clef, noteIndex: hit.noteIndex } as NoteLocation,
+      id: note.id,
+      // Which of the target's pitches (top/bottom of a chord) the drop point landed nearest to.
+      pitchIndex: nearestPitchIndexAt(hit, y),
+    };
   };
 
   /**
@@ -728,7 +739,7 @@ export function StaffEditor({
       suppressClickRef.current = true;
       if (point) {
         const target = connectTargetAt(result, gesture.source, point.x, point.y);
-        if (target) onConnectNote(gesture.source, target.id);
+        if (target) onConnectNote(gesture.source, target.id, gesture.sourcePitchIndex, target.pitchIndex);
       }
       return;
     }
@@ -747,9 +758,9 @@ export function StaffEditor({
         ? result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef)
         : undefined;
       if (point && staff) {
-        const { letter, octave } = pitchAt(gesture.location.clef, staff, point.y);
+        const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
         const x = staff.full ? undefined : xFractionAt(staff, point.x);
-        onMoveNote(gesture.location, letter, octave, x);
+        onMoveNote(gesture.location, snappedLine - gesture.startLine, x);
       }
       suppressClickRef.current = true;
       setDraggingNote(null);
@@ -820,6 +831,7 @@ export function StaffEditor({
       mouseGestureRef.current = {
         kind: 'connectDrag',
         source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
+        sourcePitchIndex: connectHandle.pitchIndex,
         x0: connectHandle.x,
         y0: connectHandle.y,
       };
@@ -868,11 +880,13 @@ export function StaffEditor({
     if (click.type === 'select') {
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      const primaryPitch = note.pitches[0];
       const gesture: Extract<MouseGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
         startX: point.x,
         startY: point.y,
+        startLine: primaryPitch ? pitchToLine(location.clef, primaryPitch.letter, primaryPitch.octave) : 0,
         mode: 'undetermined',
         cycleDuration: note.duration,
       };
@@ -1064,6 +1078,7 @@ export function StaffEditor({
       touchGestureRef.current = {
         kind: 'connectDrag',
         source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
+        sourcePitchIndex: connectHandle.pitchIndex,
         x0: connectHandle.x,
         y0: connectHandle.y,
       };
@@ -1120,11 +1135,13 @@ export function StaffEditor({
       event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      const primaryPitch = note.pitches[0];
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
         startX: point.x,
         startY: point.y,
+        startLine: primaryPitch ? pitchToLine(location.clef, primaryPitch.letter, primaryPitch.octave) : 0,
         mode: 'undetermined',
         cycleDuration: note.duration,
       };
@@ -1254,7 +1271,7 @@ export function StaffEditor({
       clearConnectCandidates(overlayRef.current);
       if (point && result) {
         const target = connectTargetAt(result, gesture.source, point.x, point.y);
-        if (target) onConnectNote(gesture.source, target.id);
+        if (target) onConnectNote(gesture.source, target.id, gesture.sourcePitchIndex, target.pitchIndex);
       }
       return;
     }
@@ -1264,8 +1281,8 @@ export function StaffEditor({
         if (point && result) {
           const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
           if (staff) {
-            const { letter, octave } = pitchAt(gesture.location.clef, staff, point.y);
-            onMoveNote(gesture.location, letter, octave, staff.full ? undefined : xFractionAt(staff, point.x));
+            const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
+            onMoveNote(gesture.location, snappedLine - gesture.startLine, staff.full ? undefined : xFractionAt(staff, point.x));
           }
         }
         setDraggingNote(null);

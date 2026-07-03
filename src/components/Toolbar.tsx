@@ -20,7 +20,33 @@ const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: 
   '16': { filled: true, stem: true, flags: 2 },
 };
 
-/** Rest glyph for a duration: filled blocks for whole/half, the quarter-rest squiggle (plus one flag dot per extra subdivision) for the rest. */
+/** The standard quarter-rest squiggle, reused by the quarter-rest glyph and the dotted-rest toggle icon. */
+const QUARTER_REST_PATH =
+  'M6 4 C 9.5 7.5, 9.5 9, 6.5 11 L 12.5 15.5 C 8 13.5, 7 17, 10.5 21';
+
+/**
+ * Eighth/sixteenth rests are NOT the quarter-rest squiggle with extra dots —
+ * they're a distinct shape: a diagonal stem with one filled "flag" blob per
+ * subdivision (two for sixteenth), matching standard notation.
+ */
+function FlaggedRestGlyph({ flagCount }: { flagCount: 1 | 2 }) {
+  return (
+    <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+      <path
+        d="M13.5 7 C 15 9, 13 10.5, 10.5 11.5 C 8.5 12.5, 9.5 14.5, 11 16.5 C 8.5 15, 6.5 17.5, 5.5 21"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="14.3" cy="5.8" r="2.6" fill="currentColor" />
+      {flagCount === 2 && <circle cx="10.8" cy="12" r="2.6" fill="currentColor" />}
+    </svg>
+  );
+}
+
+/** Rest glyph for a duration: filled blocks for whole/half, the standard squiggle for quarter, a flagged diagonal stem for eighth/sixteenth. */
 function RestGlyph({ duration }: { duration: DurationValue }) {
   if (duration === 'w') {
     return (
@@ -36,20 +62,36 @@ function RestGlyph({ duration }: { duration: DurationValue }) {
       </svg>
     );
   }
-  const flagCount = duration === '8' ? 1 : duration === '16' ? 2 : 0;
+  if (duration === '8') return <FlaggedRestGlyph flagCount={1} />;
+  if (duration === '16') return <FlaggedRestGlyph flagCount={2} />;
   return (
     <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
       <path
-        d="M6 4 C 9.5 7.5, 9.5 9, 6.5 11 L 12.5 15.5 C 8 13.5, 7 17, 10.5 21"
+        d={QUARTER_REST_PATH}
         fill="none"
         stroke="currentColor"
         strokeWidth="2.1"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      {Array.from({ length: flagCount }).map((_, i) => (
-        <circle key={i} cx={12 - i * 3} cy={5 + i * 5} r="1.8" fill="currentColor" />
-      ))}
+    </svg>
+  );
+}
+
+/** Dotted-toggle button icon: a dotted quarter note when placing notes, a dotted quarter REST when the rest checkbox is on. */
+function DottedToggleGlyph({ isRest }: { isRest: boolean }) {
+  if (!isRest) return <span className="tool-glyph">♩.</span>;
+  return (
+    <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+      <path
+        d={QUARTER_REST_PATH}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="15.5" cy="18" r="1.6" fill="currentColor" />
     </svg>
   );
 }
@@ -111,8 +153,6 @@ interface ToolbarProps {
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
-  onExportMusicXml: () => void;
-  onExportMidi: () => void;
 }
 
 export function Toolbar({
@@ -125,8 +165,6 @@ export function Toolbar({
   connectActive,
   canConnect,
   onToggleConnect,
-  onExportMusicXml,
-  onExportMidi,
 }: ToolbarProps) {
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
@@ -192,20 +230,17 @@ export function Toolbar({
             ))}
           </select>
         </label>
-        <div className="tempo-more-group">
-          <label className="tempo-field">
-            템포
-            <input
-              type="number"
-              min={20}
-              max={300}
-              value={score.tempo}
-              onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
-            />
-            BPM
-          </label>
-          <MoreMenu onExportMusicXml={onExportMusicXml} onExportMidi={onExportMidi} />
-        </div>
+        <label className="tempo-field">
+          템포
+          <input
+            type="number"
+            min={20}
+            max={300}
+            value={score.tempo}
+            onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
+          />
+          BPM
+        </label>
       </div>
 
       <div className="toolbar-row toolbar-row-compact">
@@ -231,10 +266,10 @@ export function Toolbar({
         <button
           className={`tool-icon-btn ${editTool.dotted ? 'active' : ''}`}
           onClick={() => onEditToolChange({ dotted: !editTool.dotted })}
-          aria-label="점음표"
-          title="점음표"
+          aria-label={editTool.isRest ? '점쉼표' : '점음표'}
+          title={editTool.isRest ? '점쉼표' : '점음표'}
         >
-          <span className="tool-glyph">♩.</span>
+          <DottedToggleGlyph isRest={editTool.isRest} />
         </button>
         <label className="tool-checkbox" title="쉼표">
           <input
@@ -272,7 +307,7 @@ export function Toolbar({
 }
 
 /** "⋯" popover holding rarely-used actions (MusicXML / MIDI export) out of the main toolbar. */
-function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml: () => void; onExportMidi: () => void }) {
+export function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml: () => void; onExportMidi: () => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 

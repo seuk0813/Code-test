@@ -87,6 +87,35 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 /**
+ * VexFlow's note/clef/rest glyphs are drawn as <text> in a custom music font
+ * (Bravura/Academico) registered on the live document via the FontFace API.
+ * An <img> decoding a blob-URL SVG runs in an isolated context that can't see
+ * that registration, so those glyphs silently render as nothing (ordinary
+ * text like the title still shows because it falls back to a system font —
+ * music glyphs have no such fallback). Embedding the same font data VexFlow
+ * itself uses as a self-contained @font-face inside the serialized SVG fixes
+ * it without depending on network access at save time.
+ */
+async function embedMusicFonts(svg: SVGSVGElement): Promise<SVGSVGElement> {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  try {
+    const [{ Bravura }, { Academico }] = await Promise.all([
+      import('./vendor/bravuraFont'),
+      import('./vendor/academicoFont'),
+    ]);
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    style.textContent = `
+      @font-face { font-family: 'Bravura'; src: url(${Bravura}) format('woff2'); }
+      @font-face { font-family: 'Academico'; src: url(${Academico}) format('woff2'); }
+    `;
+    clone.insertBefore(style, clone.firstChild);
+  } catch {
+    // Best-effort — if the font chunk fails to load, fall back to the plain clone.
+  }
+  return clone;
+}
+
+/**
  * Renders the on-screen score SVG to a PDF (via an offscreen canvas raster,
  * so it doesn't depend on the browser having the printed fonts installed)
  * and saves it through the same native "Save As" dialog as JSON — falling
@@ -97,7 +126,8 @@ export async function saveScorePdf(filename?: string): Promise<void> {
   if (!svg) return;
   const width = Number(svg.getAttribute('width')) || svg.clientWidth;
   const height = Number(svg.getAttribute('height')) || svg.clientHeight;
-  const svgString = new XMLSerializer().serializeToString(svg);
+  const embedded = await embedMusicFonts(svg);
+  const svgString = new XMLSerializer().serializeToString(embedded);
   const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
 
   try {

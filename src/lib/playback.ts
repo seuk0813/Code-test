@@ -15,45 +15,6 @@ interface ScheduledEvent {
   synth: Tone.PolySynth;
 }
 
-/**
- * A warm, resonant "grand piano" voice built entirely from synthesis (no
- * sampled audio to download), so it works offline and on restricted
- * networks. Piano-like fast attack / quick initial decay to a lower sustain
- * (string energy dying off) / long release (sympathetic string resonance),
- * a lightly inharmonic AM-triangle oscillator for bell-like overtones, and a
- * shared reverb + chorus + EQ bus for the "grand hall" sweetness.
- */
-function createPianoVoice(effectsBus: Tone.ToneAudioNode, register: 'treble' | 'bass'): Tone.PolySynth {
-  const isBass = register === 'bass';
-  return new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: 'amtriangle', harmonicity: isBass ? 0.75 : 1.25, modulationType: 'sine' },
-    envelope: {
-      attack: isBass ? 0.006 : 0.004,
-      decay: isBass ? 0.65 : 0.45,
-      sustain: isBass ? 0.2 : 0.12,
-      release: isBass ? 1.7 : 1.3,
-    },
-  }).connect(effectsBus);
-}
-
-async function createEffectsBus(): Promise<{ input: Tone.ToneAudioNode; dispose: () => void }> {
-  const eq = new Tone.EQ3({ low: 2, mid: -1, high: -3 });
-  const chorus = new Tone.Chorus({ frequency: 0.6, delayTime: 3.5, depth: 0.4, wet: 0.15 }).start();
-  const reverb = new Tone.Reverb({ decay: 2.4, wet: 0.24 });
-  const compressor = new Tone.Compressor({ threshold: -18, ratio: 3 });
-  await reverb.generate();
-  eq.chain(chorus, reverb, compressor, Tone.getDestination());
-  return {
-    input: eq,
-    dispose: () => {
-      eq.dispose();
-      chorus.dispose();
-      reverb.dispose();
-      compressor.dispose();
-    },
-  };
-}
-
 export async function playScore(
   score: Score,
   onMeasure: (measureIndex: number) => void,
@@ -61,9 +22,10 @@ export async function playScore(
 ): Promise<PlaybackHandle> {
   await Tone.start();
 
-  const bus = await createEffectsBus();
-  const trebleSynth = createPianoVoice(bus.input, 'treble');
-  const bassSynth = createPianoVoice(bus.input, 'bass');
+  const trebleSynth = new Tone.PolySynth(Tone.Synth).toDestination();
+  const bassSynth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'triangle' },
+  }).toDestination();
 
   Tone.getTransport().stop();
   Tone.getTransport().cancel();
@@ -124,7 +86,6 @@ export async function playScore(
     Tone.getTransport().cancel();
     trebleSynth.dispose();
     bassSynth.dispose();
-    bus.dispose();
   };
 
   Tone.getTransport().schedule((time) => {
