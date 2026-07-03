@@ -6,11 +6,69 @@ import { DURATION_LABELS } from '../lib/scoreUtils';
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
 const LONG_PRESS_STEP_MS = 1000;
 const ACCIDENTALS: { value: Accidental; label: string }[] = [
-  { value: '', label: '없음' },
+  { value: '', label: '∅' },
   { value: '#', label: '♯' },
   { value: 'b', label: '♭' },
   { value: 'n', label: '♮' },
 ];
+
+/** Simple inline quarter-rest glyph (SVG so it renders on every device, unlike the SMP 𝄽). */
+function RestIcon() {
+  return (
+    <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+      <path
+        d="M6 4 C 9.5 7.5, 9.5 9, 6.5 11 L 12.5 15.5 C 8 13.5, 7 17, 10.5 21"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Note-shape parameters for each duration, drawn as a small inline SVG icon. */
+const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: number }> = {
+  w: { filled: false, stem: false, flags: 0 },
+  h: { filled: false, stem: true, flags: 0 },
+  q: { filled: true, stem: true, flags: 0 },
+  '8': { filled: true, stem: true, flags: 1 },
+  '16': { filled: true, stem: true, flags: 2 },
+};
+
+/** Compact note glyph used on the duration buttons (renders identically on every device). */
+function DurationIcon({ duration }: { duration: DurationValue }) {
+  const s = NOTE_ICON[duration];
+  const headCx = 6.5;
+  const headCy = 17;
+  const stemX = 10.3;
+  return (
+    <svg width="18" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+      <ellipse
+        cx={headCx}
+        cy={headCy}
+        rx="4.3"
+        ry="3.1"
+        transform={`rotate(-20 ${headCx} ${headCy})`}
+        fill={s.filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      {s.stem && <line x1={stemX} y1={headCy - 2} x2={stemX} y2="3.5" stroke="currentColor" strokeWidth="1.5" />}
+      {Array.from({ length: s.flags }).map((_, i) => (
+        <path
+          key={i}
+          d={`M ${stemX} ${4 + i * 5} q 6 2 4.5 8`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+      ))}
+    </svg>
+  );
+}
 const KEY_SIGNATURES = ['C', 'G', 'D', 'A', 'E', 'F', 'Bb', 'Eb', 'Ab'];
 const TIME_SIGNATURES: [number, number][] = [
   [4, 4],
@@ -173,54 +231,65 @@ export function Toolbar({
         </label>
       </div>
 
-      <div className="toolbar-row">
-        <span className="group-label">{hasSelection ? '선택한 음표 편집' : '입력 도구'}</span>
+      <div className="toolbar-row toolbar-row-compact">
+        <span className="group-label tool-group-label" title={hasSelection ? '선택한 음표를 편집합니다' : '새로 입력할 음표를 설정합니다'}>
+          🎵 {hasSelection ? '음표 편집' : '음표 도구'}
+        </span>
         {DURATIONS.map((d) => (
           <button
             key={d}
-            className={editTool.duration === d ? 'active' : ''}
+            className={`tool-icon-btn ${editTool.duration === d ? 'active' : ''}`}
             onClick={() => handleDurationClick(d)}
             onMouseDown={() => startLongPress(d)}
             onMouseUp={clearLongPress}
             onMouseLeave={clearLongPress}
             onTouchStart={() => startLongPress(d)}
             onTouchEnd={clearLongPress}
+            aria-label={DURATION_LABELS[d]}
             title={`${DURATION_LABELS[d]} (길게 누르면 더 긴 음표로 전환)`}
           >
-            {DURATION_LABELS[d]}
+            <DurationIcon duration={d} />
           </button>
         ))}
         <button
-          className={editTool.dotted ? 'active' : ''}
+          className={`tool-icon-btn ${editTool.dotted ? 'active' : ''}`}
           onClick={() => onEditToolChange({ dotted: !editTool.dotted })}
+          aria-label="점음표"
+          title="점음표"
         >
-          점음표
+          <span className="tool-glyph">♩.</span>
         </button>
         <button
-          className={editTool.isRest ? 'active' : ''}
+          className={`tool-icon-btn ${editTool.isRest ? 'active' : ''}`}
           onClick={() => onEditToolChange({ isRest: !editTool.isRest })}
+          aria-label="쉼표"
+          title="쉼표"
         >
-          쉼표
+          <RestIcon />
         </button>
         {ACCIDENTALS.map((a) => (
           <button
             key={a.value || 'none'}
-            className={editTool.accidental === a.value ? 'active' : ''}
+            className={`tool-icon-btn ${editTool.accidental === a.value ? 'active' : ''}`}
             onClick={() => onEditToolChange({ accidental: a.value })}
+            aria-label={a.value === '' ? '임시표 없음' : a.value === '#' ? '샤프' : a.value === 'b' ? '플랫' : '내추럴'}
+            title={a.value === '' ? '임시표 없음' : a.value === '#' ? '샤프' : a.value === 'b' ? '플랫' : '내추럴'}
           >
-            {a.label}
+            <span className="tool-glyph">{a.label}</span>
           </button>
         ))}
-        <button onClick={onDeleteSelected} disabled={!hasSelection}>
-          선택 삭제
+        <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
+          🗑 삭제
         </button>
-        <button className={tieActive ? 'active' : ''} onClick={onToggleTie} disabled={!canConnect} title="같은 음을 다음 음표와 타이로 연결">
+        <button className={`tool-compact ${tieActive ? 'active' : ''}`} onClick={onToggleTie} disabled={!canConnect} title="같은 음을 다음 음표와 타이로 연결">
           타이
         </button>
-        <button className={slurActive ? 'active' : ''} onClick={onToggleSlur} disabled={!canConnect} title="다음 음표와 슬러로 연결">
+        <button className={`tool-compact ${slurActive ? 'active' : ''}`} onClick={onToggleSlur} disabled={!canConnect} title="다음 음표와 슬러로 연결">
           슬러
         </button>
-        <button onClick={onAddMeasure}>마디 추가</button>
+        <button className="tool-compact" onClick={onAddMeasure} title="마디 추가">
+          ＋마디
+        </button>
       </div>
 
       <div className="toolbar-row">

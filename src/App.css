@@ -95,6 +95,42 @@
   white-space: nowrap;
 }
 
+.toolbar-row-compact {
+  gap: 5px;
+}
+
+.tool-group-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.toolbar .tool-icon-btn {
+  padding: 3px 8px;
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-h);
+}
+
+.toolbar .tool-icon-btn.active {
+  color: #fff;
+}
+
+.tool-icon-btn svg {
+  display: block;
+}
+
+.tool-glyph {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.toolbar .tool-compact {
+  padding: 4px 9px;
+  font-size: 13px;
+}
+
 .title-input {
   font-size: 16px;
   font-weight: 600;

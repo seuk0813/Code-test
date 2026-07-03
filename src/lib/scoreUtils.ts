@@ -57,6 +57,15 @@ export function staffMeasureBeats(staffMeasure: StaffMeasure): number {
   return staffMeasure.notes.reduce((sum, n) => sum + noteBeats(n), 0);
 }
 
+/**
+ * Whether a staff-measure is filled to the time signature's capacity. Full
+ * measures are auto-formatted (notes' free X positions are ignored) so the
+ * score tidies itself once a measure is complete.
+ */
+export function isStaffMeasureFull(staffMeasure: StaffMeasure, timeSignature: TimeSignature): boolean {
+  return staffMeasureBeats(staffMeasure) >= measureCapacityBeats(timeSignature) - 1e-6;
+}
+
 function emptyStaffMeasure(): StaffMeasure {
   return { notes: [] };
 }
@@ -87,6 +96,7 @@ export function createNote(
   duration: DurationValue,
   dotted: boolean,
   isRest: boolean,
+  x?: number,
 ): NoteEvent {
   return {
     id: nextId('n'),
@@ -96,6 +106,7 @@ export function createNote(
     isRest,
     tieToNext: false,
     slurToNext: false,
+    x,
   };
 }
 

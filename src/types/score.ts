@@ -21,6 +21,12 @@ export interface NoteEvent {
   /** Curved line to the next note in this staff (same pitch = tie, different = slur). */
   tieToNext: boolean;
   slurToNext: boolean;
+  /**
+   * Free horizontal position within the measure's note area, 0 (start)..1 (end).
+   * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
+   * measure is filled to the time signature's capacity. Undefined = auto layout.
+   */
+  x?: number;
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */

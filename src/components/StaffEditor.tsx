@@ -9,8 +9,10 @@ import {
   lineAt,
   renderScore,
   resolveClick,
+  xFractionAt,
   type DraggingNote,
   type RenderResult,
+  type StaffHitbox,
 } from '../lib/vexflowRenderer';
 import { chordLabel, cycleDurationLonger, lineToPitch, pitchToLine, stemPointsUp } from '../lib/scoreUtils';
 import { clearGhost, ledgerLinePositions, renderGhost } from '../lib/ghostOverlay';
@@ -19,6 +21,12 @@ import type { EditTool } from './Toolbar';
 const DRAG_THRESHOLD_PX = 4;
 const HOLD_CYCLE_MS = 1000;
 const TOUCH_PREVIEW_RADIUS = 22;
+/** A new note placed within this many px of an existing note's X stacks onto it as a chord tone. */
+const CHORD_MERGE_X = 16;
+
+const NEW_NOTE_COLOR = '#7a5cff';
+const CHORD_COLOR = '#2f9e44';
+const DRAG_COLOR = '#d6432b';
 
 interface StaffEditorProps {
   score: Score;
@@ -32,9 +40,10 @@ interface StaffEditorProps {
     octave: number,
     insertIndex: number,
     durationOverride?: DurationValue,
+    x?: number,
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
-  onMoveNote: (location: NoteLocation, letter: string, octave: number) => void;
+  onMoveNote: (location: NoteLocation, letter: string, octave: number, x?: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
@@ -44,18 +53,26 @@ interface StaffEditorProps {
   onDeselectNote: () => void;
 }
 
-type DragState =
+/** Mouse press gesture in progress on the staff. */
+type MouseGesture =
   | {
-      type: 'note';
+      kind: 'add';
       measureIndex: number;
       clef: Clef;
-      noteIndex: number;
-      startX: number;
-      startY: number;
-      moved: boolean;
+      line: number;
+      x: number; // pixel X of the press (fixed placement point)
+      duration: DurationValue;
     }
   | {
-      type: 'chord';
+      kind: 'note';
+      location: NoteLocation;
+      startX: number;
+      startY: number;
+      mode: 'undetermined' | 'drag' | 'durationCycle';
+      cycleDuration: DurationValue;
+    }
+  | {
+      kind: 'chordSymbol';
       measureIndex: number;
       chordId: string;
       startX: number;
@@ -64,28 +81,27 @@ type DragState =
     }
   | null;
 
-/** A tap-to-preview placement waiting for a confirming second tap (touch only). */
+/** A touch tap-to-preview placement waiting for a confirming second tap. */
 interface PendingPreview {
-  action: 'add' | 'chord';
   measureIndex: number;
   clef: Clef;
-  noteIndex?: number; // for 'chord': which existing note gets the new pitch
-  x: number;
-  y: number;
+  x: number; // pixel
+  y: number; // pixel
   line: number;
   duration: DurationValue;
+  /** Index of an existing note this placement would stack onto (chord), else null. */
+  chordTarget: number | null;
 }
 
 type TouchGesture =
   | { kind: 'newPreview'; cycled: boolean }
-  | { kind: 'confirmPreview'; cycled: boolean }
+  | { kind: 'confirmPreview' }
   | {
       kind: 'note';
       location: NoteLocation;
       startX: number;
       startY: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
-      wasAlreadySelected: boolean;
       cycleDuration: DurationValue;
     }
   | null;
@@ -109,13 +125,15 @@ export function StaffEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
   const renderResultRef = useRef<RenderResult | null>(null);
-  const dragRef = useRef<DragState>(null);
   const suppressClickRef = useRef(false);
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
 
+  const mouseGestureRef = useRef<MouseGesture>(null);
+  const mouseHoldRef = useRef<number | null>(null);
+
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const touchGestureRef = useRef<TouchGesture>(null);
-  const holdIntervalRef = useRef<number | null>(null);
+  const touchHoldRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -135,61 +153,116 @@ export function StaffEditor({
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
 
-  // --- Mouse (desktop) interactions -------------------------------------------
+  // --- Shared placement helpers -----------------------------------------------
 
-  const endDrag = () => {
-    document.removeEventListener('mousemove', handleDocumentMouseMove);
+  const pitchAt = (clef: Clef, staff: StaffHitbox, y: number) => {
+    const snappedLine = Math.round(lineAt(staff, y) * 2) / 2;
+    const { letter, octave } = lineToPitch(clef, snappedLine);
+    return { snappedLine, letter, octave };
   };
 
-  const handleDocumentMouseMove = (event: MouseEvent) => {
-    const drag = dragRef.current;
+  /** Index of an existing non-rest note whose X is within merge distance, else null. */
+  const chordMergeTargetAt = (measureIndex: number, clef: Clef, x: number, exclude?: number): number | null => {
     const result = renderResultRef.current;
-    if (!drag || !result) return;
+    if (!result) return null;
+    const hit = result.noteHitboxes.find(
+      (n) =>
+        n.measureIndex === measureIndex &&
+        n.clef === clef &&
+        (exclude === undefined || n.noteIndex !== exclude) &&
+        Math.abs(n.centerX - x) < CHORD_MERGE_X,
+    );
+    if (!hit) return null;
+    const note = score.measures[measureIndex][clef].notes[hit.noteIndex];
+    return note && !note.isRest ? hit.noteIndex : null;
+  };
+
+  const renderAddGhost = (staff: StaffHitbox, x: number, line: number, duration: DurationValue, isChord: boolean) => {
+    renderGhost(overlayRef.current, {
+      kind: 'note',
+      x,
+      y: staff.refY0 - line * staff.spacing,
+      duration,
+      isRest: editTool.isRest && !isChord,
+      stemUp: stemPointsUp(line),
+      accidental: editTool.accidental,
+      ledgerLineYs: ledgerLinePositions(line).map((l) => staff.refY0 - l * staff.spacing),
+      opacity: isChord ? 0.6 : 0.45,
+      color: isChord ? CHORD_COLOR : NEW_NOTE_COLOR,
+    });
+  };
+
+  const renderDragGhost = (
+    staff: StaffHitbox,
+    x: number,
+    line: number,
+    duration: DurationValue,
+    accidental: Accidental,
+  ) => {
+    renderGhost(overlayRef.current, {
+      kind: 'note',
+      x,
+      y: staff.refY0 - line * staff.spacing,
+      duration,
+      isRest: false,
+      stemUp: stemPointsUp(line),
+      accidental,
+      ledgerLineYs: ledgerLinePositions(line).map((l) => staff.refY0 - l * staff.spacing),
+      opacity: 0.65,
+      color: DRAG_COLOR,
+    });
+  };
+
+  /** Place a note at the given staff position — stacking onto a near note as a chord, or a new note. */
+  const commitAdd = (measureIndex: number, clef: Clef, staff: StaffHitbox, snappedLine: number, x: number, duration: DurationValue) => {
+    const result = renderResultRef.current;
+    if (!result) return;
+    const { letter, octave } = lineToPitch(clef, snappedLine);
+    const chordTarget = chordMergeTargetAt(measureIndex, clef, x);
+    if (chordTarget !== null) {
+      onTogglePitch({ measureIndex, clef, noteIndex: chordTarget }, letter, octave);
+    } else {
+      const insertIndex = findInsertIndex(result, measureIndex, clef, x);
+      onAddNote(measureIndex, clef, letter, octave, insertIndex, duration, xFractionAt(staff, x));
+    }
+    onFocusMeasure(measureIndex);
+  };
+
+  const clearMouseHold = () => {
+    if (mouseHoldRef.current !== null) {
+      window.clearInterval(mouseHoldRef.current);
+      mouseHoldRef.current = null;
+    }
+  };
+
+  const clearTouchHold = () => {
+    if (touchHoldRef.current !== null) {
+      window.clearInterval(touchHoldRef.current);
+      touchHoldRef.current = null;
+    }
+  };
+
+  // --- Mouse (desktop) interactions -------------------------------------------
+
+  const handleDocumentMouseMove = (event: MouseEvent) => {
+    const gesture = mouseGestureRef.current;
+    const result = renderResultRef.current;
+    if (!gesture || !result) return;
     const point = eventPoint(event);
     if (!point) return;
 
-    if (drag.type === 'note') {
-      const dx = point.x - drag.startX;
-      const dy = point.y - drag.startY;
-      if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
-      if (!drag.moved) {
-        drag.moved = true;
-        setDraggingNote({ measureIndex: drag.measureIndex, clef: drag.clef, noteIndex: drag.noteIndex });
-      }
-      const staff = result.staffHitboxes.find((s) => s.measureIndex === drag.measureIndex && s.clef === drag.clef);
-      const noteHitbox = result.noteHitboxes.find(
-        (n) => n.measureIndex === drag.measureIndex && n.clef === drag.clef && n.noteIndex === drag.noteIndex,
-      );
-      if (!staff) return;
-      const rawLine = lineAt(staff, point.y);
-      const snappedLine = Math.round(rawLine * 2) / 2;
-      const note = score.measures[drag.measureIndex][drag.clef].notes[drag.noteIndex];
-      const ghostX = noteHitbox?.centerX ?? point.x;
-      const ghostY = staff.refY0 - snappedLine * staff.spacing;
-      renderGhost(overlayRef.current, {
-        kind: 'note',
-        x: ghostX,
-        y: ghostY,
-        duration: note.duration,
-        isRest: false,
-        stemUp: stemPointsUp(snappedLine),
-        accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
-        ledgerLineYs: ledgerLinePositions(snappedLine).map((l) => staff.refY0 - l * staff.spacing),
-        opacity: 0.65,
-        color: '#d6432b',
-      });
-    } else if (drag.type === 'chord') {
-      const dx = point.x - drag.startX;
-      if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
-      drag.moved = true;
-      const band = result.chordBandHitboxes.find((b) => b.measureIndex === drag.measureIndex);
+    if (gesture.kind === 'chordSymbol') {
+      const dx = point.x - gesture.startX;
+      if (!gesture.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+      gesture.moved = true;
+      const band = result.chordBandHitboxes.find((b) => b.measureIndex === gesture.measureIndex);
       const chordHitbox = result.chordHitboxes.find(
-        (c) => c.measureIndex === drag.measureIndex && c.chordId === drag.chordId,
+        (c) => c.measureIndex === gesture.measureIndex && c.chordId === gesture.chordId,
       );
       if (!band) return;
       const offset = Math.min(0.95, Math.max(0.05, (point.x - band.measureX) / band.measureWidth));
-      drag.pendingOffset = offset;
-      const chord = score.measures[drag.measureIndex].chords.find((c) => c.id === drag.chordId);
+      gesture.pendingOffset = offset;
+      const chord = score.measures[gesture.measureIndex].chords.find((c) => c.id === gesture.chordId);
       if (!chord) return;
       renderGhost(overlayRef.current, {
         kind: 'chord',
@@ -199,7 +272,102 @@ export function StaffEditor({
         opacity: 0.7,
         color: '#2f3a8f',
       });
+      return;
     }
+
+    if (gesture.kind === 'note') {
+      if (gesture.mode === 'durationCycle') return;
+      const dx = point.x - gesture.startX;
+      const dy = point.y - gesture.startY;
+      if (gesture.mode === 'undetermined') {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+        clearMouseHold();
+        gesture.mode = 'drag';
+        setDraggingNote({ ...gesture.location });
+      }
+      const staff = result.staffHitboxes.find(
+        (s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef,
+      );
+      if (!staff) return;
+      const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
+      const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
+      // Full measures auto-align, so free X is only meaningful when not full.
+      const ghostX = staff.full ? result.noteHitboxes.find(
+        (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
+      )?.centerX ?? point.x : point.x;
+      renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[0]?.accidental ?? '') as Accidental);
+    }
+  };
+
+  const handleDocumentMouseUp = (event: MouseEvent) => {
+    clearMouseHold();
+    const gesture = mouseGestureRef.current;
+    const result = renderResultRef.current;
+    mouseGestureRef.current = null;
+    document.removeEventListener('mousemove', handleDocumentMouseMove);
+    document.removeEventListener('mouseup', handleDocumentMouseUp);
+    if (!gesture || !result) return;
+    const point = eventPoint(event);
+
+    if (gesture.kind === 'chordSymbol') {
+      if (gesture.moved) onMoveChord(gesture.measureIndex, gesture.chordId, gesture.pendingOffset);
+      suppressClickRef.current = gesture.moved;
+      clearGhost(overlayRef.current);
+      return;
+    }
+
+    if (gesture.kind === 'add') {
+      const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.measureIndex && s.clef === gesture.clef);
+      if (staff) commitAdd(gesture.measureIndex, gesture.clef, staff, gesture.line, gesture.x, gesture.duration);
+      suppressClickRef.current = true;
+      clearGhost(overlayRef.current);
+      return;
+    }
+
+    // note gesture
+    if (gesture.mode === 'drag') {
+      const staff = point
+        ? result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef)
+        : undefined;
+      if (point && staff) {
+        const { letter, octave } = pitchAt(gesture.location.clef, staff, point.y);
+        const x = staff.full ? undefined : xFractionAt(staff, point.x);
+        onMoveNote(gesture.location, letter, octave, x);
+      }
+      suppressClickRef.current = true;
+      setDraggingNote(null);
+      clearGhost(overlayRef.current);
+    } else if (gesture.mode === 'durationCycle') {
+      onChangeDuration(gesture.location, gesture.cycleDuration);
+      suppressClickRef.current = true;
+      clearGhost(overlayRef.current);
+    } else {
+      onSelectNote(gesture.location);
+      onFocusMeasure(gesture.location.measureIndex);
+      clearGhost(overlayRef.current);
+    }
+  };
+
+  /** Hold on a selected note: cycle its duration once per second, previewing in a red ghost. */
+  const startNoteHoldCycle = (isTouch: boolean) => {
+    const tick = () => {
+      const g = isTouch ? touchGestureRef.current : mouseGestureRef.current;
+      const result = renderResultRef.current;
+      if (!g || g.kind !== 'note' || g.mode === 'drag' || !result) return;
+      g.mode = 'durationCycle';
+      g.cycleDuration = cycleDurationLonger(g.cycleDuration);
+      const staff = result.staffHitboxes.find((s) => s.measureIndex === g.location.measureIndex && s.clef === g.location.clef);
+      const note = score.measures[g.location.measureIndex][g.location.clef].notes[g.location.noteIndex];
+      const noteHitbox = result.noteHitboxes.find(
+        (n) => n.measureIndex === g.location.measureIndex && n.clef === g.location.clef && n.noteIndex === g.location.noteIndex,
+      );
+      if (!staff || !note || note.isRest || note.pitches.length === 0) return;
+      const line = pitchToLine(g.location.clef, note.pitches[0].letter, note.pitches[0].octave);
+      renderDragGhost(staff, noteHitbox?.centerX ?? staff.noteStartX, line, g.cycleDuration, (note.pitches[0]?.accidental ?? '') as Accidental);
+    };
+    const id = window.setInterval(tick, HOLD_CYCLE_MS);
+    if (isTouch) touchHoldRef.current = id;
+    else mouseHoldRef.current = id;
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -208,11 +376,19 @@ export function StaffEditor({
     const point = eventPoint(event);
     if (!result || !point) return;
     event.preventDefault();
+    clearGhost(overlayRef.current);
+
+    const lineBreak = findLineBreakAt(result, point.x, point.y);
+    if (lineBreak) {
+      onAddLineBreak(lineBreak.afterMeasureIndex);
+      suppressClickRef.current = true;
+      return;
+    }
 
     const chordHit = findChordAt(result, point.x, point.y);
     if (chordHit) {
-      dragRef.current = {
-        type: 'chord',
+      mouseGestureRef.current = {
+        kind: 'chordSymbol',
         measureIndex: chordHit.measureIndex,
         chordId: chordHit.chordId,
         startX: point.x,
@@ -220,126 +396,14 @@ export function StaffEditor({
         pendingOffset: 0,
       };
       document.addEventListener('mousemove', handleDocumentMouseMove);
-      document.addEventListener('mouseup', handleChordMouseUp);
-      return;
-    }
-
-    const click = resolveClick(result, point.x, point.y);
-    if (click?.type === 'select') {
-      const note = score.measures[click.measureIndex][click.clef].notes[click.noteIndex];
-      if (note.isRest) return; // rests have no pitch to drag
-      dragRef.current = {
-        type: 'note',
-        measureIndex: click.measureIndex,
-        clef: click.clef,
-        noteIndex: click.noteIndex,
-        startX: point.x,
-        startY: point.y,
-        moved: false,
-      };
-      document.addEventListener('mousemove', handleDocumentMouseMove);
-      document.addEventListener('mouseup', handleNoteMouseUp);
-    }
-  };
-
-  const handleNoteMouseUp = (event: MouseEvent) => {
-    const drag = dragRef.current;
-    const result = renderResultRef.current;
-    if (drag?.type === 'note' && drag.moved && result) {
-      const point = eventPoint(event);
-      const staff = result.staffHitboxes.find((s) => s.measureIndex === drag.measureIndex && s.clef === drag.clef);
-      if (point && staff) {
-        const rawLine = lineAt(staff, point.y);
-        const snappedLine = Math.round(rawLine * 2) / 2;
-        const { letter, octave } = lineToPitch(drag.clef, snappedLine);
-        onMoveNote({ measureIndex: drag.measureIndex, clef: drag.clef, noteIndex: drag.noteIndex }, letter, octave);
-      }
-    }
-    suppressClickRef.current = Boolean(drag?.moved);
-    setDraggingNote(null);
-    clearGhost(overlayRef.current);
-    dragRef.current = null;
-    endDrag();
-    document.removeEventListener('mouseup', handleNoteMouseUp);
-  };
-
-  const handleChordMouseUp = () => {
-    const drag = dragRef.current;
-    if (drag?.type === 'chord' && drag.moved) {
-      onMoveChord(drag.measureIndex, drag.chordId, drag.pendingOffset);
-    }
-    suppressClickRef.current = Boolean(drag?.moved);
-    clearGhost(overlayRef.current);
-    dragRef.current = null;
-    endDrag();
-    document.removeEventListener('mouseup', handleChordMouseUp);
-  };
-
-  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (dragRef.current) return; // handled by document-level listeners
-    const result = renderResultRef.current;
-    const point = eventPoint(event);
-    if (!result || !point) {
-      clearGhost(overlayRef.current);
-      return;
-    }
-    const click = resolveClick(result, point.x, point.y);
-    if (click?.type === 'add') {
-      const snappedLine = Math.round(click.line * 2) / 2;
-      const staff = findStaffAt(result, point.x, point.y);
-      if (!staff) {
-        clearGhost(overlayRef.current);
-        return;
-      }
-      const ghostY = staff.refY0 - snappedLine * staff.spacing;
-      renderGhost(overlayRef.current, {
-        kind: 'note',
-        x: point.x,
-        y: ghostY,
-        duration: editTool.duration,
-        isRest: editTool.isRest,
-        stemUp: stemPointsUp(snappedLine),
-        accidental: editTool.accidental,
-        ledgerLineYs: ledgerLinePositions(snappedLine).map((l) => staff.refY0 - l * staff.spacing),
-        opacity: 0.35,
-        color: '#7a5cff',
-      });
-    } else {
-      clearGhost(overlayRef.current);
-    }
-  };
-
-  const handleMouseLeave = () => {
-    if (!dragRef.current) clearGhost(overlayRef.current);
-  };
-
-  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false;
-      return;
-    }
-    const result = renderResultRef.current;
-    const point = eventPoint(event);
-    if (!result || !point) return;
-    // The next render (triggered by the resulting score/selection change) will
-    // rebuild the real note; clear the hover ghost so it doesn't linger on top.
-    clearGhost(overlayRef.current);
-
-    const lineBreak = findLineBreakAt(result, point.x, point.y);
-    if (lineBreak) {
-      onAddLineBreak(lineBreak.afterMeasureIndex);
-      return;
-    }
-
-    const chordHit = findChordAt(result, point.x, point.y);
-    if (chordHit) {
-      onFocusMeasure(chordHit.measureIndex);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
     }
 
     const band = findChordBandAt(result, point.x, point.y);
     if (band) {
       onFocusMeasure(band.measureIndex);
+      suppressClickRef.current = true;
       return;
     }
 
@@ -348,33 +412,81 @@ export function StaffEditor({
       onDeselectNote();
       return;
     }
+
     if (click.type === 'select') {
-      const location = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
-      const alreadySelected =
-        selected &&
-        selected.measureIndex === location.measureIndex &&
-        selected.clef === location.clef &&
-        selected.noteIndex === location.noteIndex;
-      if (alreadySelected) {
-        // Clicking the already-selected note again at a different pitch adds
-        // (or removes) that pitch, building/editing a chord in place.
-        const staff = findStaffAt(result, point.x, point.y);
-        if (staff) {
-          const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
-          const { letter, octave } = lineToPitch(click.clef, snappedLine);
-          onTogglePitch(location, letter, octave);
-        }
-      } else {
-        onSelectNote(location);
-      }
-      onFocusMeasure(click.measureIndex);
-    } else {
-      const snappedLine = Math.round(click.line * 2) / 2;
-      const { letter, octave } = lineToPitch(click.clef, snappedLine);
-      const insertIndex = findInsertIndex(result, click.measureIndex, click.clef, point.x);
-      onAddNote(click.measureIndex, click.clef, letter, octave, insertIndex);
-      onFocusMeasure(click.measureIndex);
+      const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
+      const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      const gesture: Extract<MouseGesture, { kind: 'note' }> = {
+        kind: 'note',
+        location,
+        startX: point.x,
+        startY: point.y,
+        mode: 'undetermined',
+        cycleDuration: note.duration,
+      };
+      mouseGestureRef.current = gesture;
+      if (!note.isRest) startNoteHoldCycle(false);
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
+      return;
     }
+
+    // add
+    const staff = findStaffAt(result, point.x, point.y);
+    if (!staff) return;
+    const { snappedLine } = pitchAt(click.clef, staff, point.y);
+    const isChord = chordMergeTargetAt(click.measureIndex, click.clef, point.x) !== null;
+    mouseGestureRef.current = {
+      kind: 'add',
+      measureIndex: click.measureIndex,
+      clef: click.clef,
+      line: snappedLine,
+      x: point.x,
+      duration: editTool.duration,
+    };
+    renderAddGhost(staff, point.x, snappedLine, editTool.duration, isChord);
+    mouseHoldRef.current = window.setInterval(() => {
+      const g = mouseGestureRef.current;
+      if (!g || g.kind !== 'add') return;
+      g.duration = cycleDurationLonger(g.duration);
+      const chord = chordMergeTargetAt(g.measureIndex, g.clef, g.x) !== null;
+      renderAddGhost(staff, g.x, g.line, g.duration, chord);
+    }, HOLD_CYCLE_MS);
+    document.addEventListener('mousemove', handleDocumentMouseMove);
+    document.addEventListener('mouseup', handleDocumentMouseUp);
+  };
+
+  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (mouseGestureRef.current) return; // active press handled by document listeners
+    const result = renderResultRef.current;
+    const point = eventPoint(event);
+    if (!result || !point) {
+      clearGhost(overlayRef.current);
+      return;
+    }
+    const click = resolveClick(result, point.x, point.y);
+    if (click?.type === 'add') {
+      const staff = findStaffAt(result, point.x, point.y);
+      if (!staff) {
+        clearGhost(overlayRef.current);
+        return;
+      }
+      const snappedLine = Math.round(click.line * 2) / 2;
+      const isChord = chordMergeTargetAt(click.measureIndex, click.clef, point.x) !== null;
+      renderAddGhost(staff, point.x, snappedLine, editTool.duration, isChord);
+    } else {
+      clearGhost(overlayRef.current);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (!mouseGestureRef.current) clearGhost(overlayRef.current);
+  };
+
+  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    // Placement/selection now happens on mousedown/mouseup; click only guards the suppress flag.
+    if (suppressClickRef.current) suppressClickRef.current = false;
+    void event;
   };
 
   const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -399,83 +511,40 @@ export function StaffEditor({
   //
   // Touch has no hover, so placement is a two-step "tap to preview, tap again to
   // confirm" flow. Holding (instead of a quick second tap) cycles the preview's
-  // note duration once per second; lifting the finger then places it immediately
-  // at whatever duration it landed on. The same hold-to-cycle applies to an
-  // existing note (changing its duration in place); moving the finger before the
-  // hold triggers switches to the existing drag-to-reposition-pitch gesture.
+  // note duration once per second; lifting then places it at whatever duration
+  // it landed on. Tapping directly above/below an existing note (same X) stacks
+  // onto it as a chord tone. An existing note can be held to change its duration
+  // or dragged (X + pitch) to move it freely within the clef.
 
-  const clearHoldInterval = () => {
-    if (holdIntervalRef.current !== null) {
-      window.clearInterval(holdIntervalRef.current);
-      holdIntervalRef.current = null;
-    }
-  };
-
-  const renderPendingPreviewGhost = () => {
+  const renderPendingGhost = () => {
     const preview = pendingPreviewRef.current;
-    if (!preview) {
+    const result = renderResultRef.current;
+    if (!preview || !result) {
       clearGhost(overlayRef.current);
       return;
     }
-    const result = renderResultRef.current;
-    const staff = result?.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
     if (!staff) return;
-    const ledgerLineYs = ledgerLinePositions(preview.line).map((l) => staff.refY0 - l * staff.spacing);
-    if (preview.action === 'add') {
-      renderGhost(overlayRef.current, {
-        kind: 'note',
-        x: preview.x,
-        y: preview.y,
-        duration: preview.duration,
-        isRest: editTool.isRest,
-        stemUp: stemPointsUp(preview.line),
-        accidental: editTool.accidental,
-        ledgerLineYs,
-        opacity: 0.5,
-        color: '#7a5cff',
-      });
-    } else {
-      const hostNote =
-        preview.noteIndex !== undefined ? score.measures[preview.measureIndex][preview.clef].notes[preview.noteIndex] : null;
-      renderGhost(overlayRef.current, {
-        kind: 'note',
-        x: preview.x,
-        y: preview.y,
-        duration: hostNote?.duration ?? 'q',
-        isRest: false,
-        stemUp: stemPointsUp(preview.line),
-        accidental: editTool.accidental,
-        ledgerLineYs,
-        opacity: 0.6,
-        color: '#2f9e44',
-      });
-    }
+    renderAddGhost(staff, preview.x, preview.line, preview.duration, preview.chordTarget !== null);
   };
 
-  const commitPendingPreview = () => {
+  const commitPending = () => {
     const preview = pendingPreviewRef.current;
     const result = renderResultRef.current;
     if (!preview || !result) return;
-    if (preview.action === 'add') {
-      const { letter, octave } = lineToPitch(preview.clef, preview.line);
-      const insertIndex = findInsertIndex(result, preview.measureIndex, preview.clef, preview.x);
-      onAddNote(preview.measureIndex, preview.clef, letter, octave, insertIndex, preview.duration);
-    } else if (preview.noteIndex !== undefined) {
-      const { letter, octave } = lineToPitch(preview.clef, preview.line);
-      onTogglePitch({ measureIndex: preview.measureIndex, clef: preview.clef, noteIndex: preview.noteIndex }, letter, octave);
-    }
-    onFocusMeasure(preview.measureIndex);
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
+    if (staff) commitAdd(preview.measureIndex, preview.clef, staff, preview.line, preview.x, preview.duration);
     pendingPreviewRef.current = null;
     clearGhost(overlayRef.current);
   };
 
-  const startAddHoldCycle = () => {
-    holdIntervalRef.current = window.setInterval(() => {
+  const startPendingHoldCycle = () => {
+    touchHoldRef.current = window.setInterval(() => {
       const preview = pendingPreviewRef.current;
-      if (!preview || preview.action !== 'add') return;
+      if (!preview) return;
       preview.duration = cycleDurationLonger(preview.duration);
-      if (touchGestureRef.current) (touchGestureRef.current as { cycled: boolean }).cycled = true;
-      renderPendingPreviewGhost();
+      if (touchGestureRef.current && touchGestureRef.current.kind === 'newPreview') touchGestureRef.current.cycled = true;
+      renderPendingGhost();
     }, HOLD_CYCLE_MS);
   };
 
@@ -511,16 +580,16 @@ export function StaffEditor({
 
     event.preventDefault();
 
-    // Second touch confirming an existing pending preview?
+    // Second tap confirming a pending preview?
     const preview = pendingPreviewRef.current;
     if (preview) {
-      const near = Math.abs(point.x - preview.x) < TOUCH_PREVIEW_RADIUS && Math.abs(point.y - preview.y) < TOUCH_PREVIEW_RADIUS;
+      const near =
+        Math.abs(point.x - preview.x) < TOUCH_PREVIEW_RADIUS && Math.abs(point.y - preview.y) < TOUCH_PREVIEW_RADIUS;
       if (near) {
-        touchGestureRef.current = { kind: 'confirmPreview', cycled: false };
-        if (preview.action === 'add') startAddHoldCycle();
+        touchGestureRef.current = { kind: 'confirmPreview' };
+        startPendingHoldCycle();
         return;
       }
-      // Touched elsewhere: drop the stale preview and fall through to re-evaluate.
       pendingPreviewRef.current = null;
       clearGhost(overlayRef.current);
     }
@@ -529,74 +598,38 @@ export function StaffEditor({
     if (click?.type === 'select') {
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
-      const wasAlreadySelected = Boolean(
-        selected &&
-          selected.measureIndex === location.measureIndex &&
-          selected.clef === location.clef &&
-          selected.noteIndex === location.noteIndex,
-      );
-      touchGestureRef.current = {
+      const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
         startX: point.x,
         startY: point.y,
         mode: 'undetermined',
-        wasAlreadySelected,
         cycleDuration: note.duration,
       };
-      if (!note.isRest) {
-        holdIntervalRef.current = window.setInterval(() => {
-          const gesture = touchGestureRef.current;
-          const res = renderResultRef.current;
-          if (!gesture || gesture.kind !== 'note' || gesture.mode === 'drag' || !res) return;
-          gesture.mode = 'durationCycle';
-          gesture.cycleDuration = cycleDurationLonger(gesture.cycleDuration);
-          const staff = res.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
-          const noteHitbox = res.noteHitboxes.find(
-            (n) =>
-              n.measureIndex === gesture.location.measureIndex &&
-              n.clef === gesture.location.clef &&
-              n.noteIndex === gesture.location.noteIndex,
-          );
-          if (!staff || note.pitches.length === 0) return;
-          const line = pitchToLine(gesture.location.clef, note.pitches[0].letter, note.pitches[0].octave);
-          renderGhost(overlayRef.current, {
-            kind: 'note',
-            x: noteHitbox?.centerX ?? point.x,
-            y: staff.refY0 - line * staff.spacing,
-            duration: gesture.cycleDuration,
-            isRest: false,
-            stemUp: stemPointsUp(line),
-            accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
-            ledgerLineYs: ledgerLinePositions(line).map((l) => staff.refY0 - l * staff.spacing),
-            opacity: 0.65,
-            color: '#d6432b',
-          });
-        }, HOLD_CYCLE_MS);
-      }
+      touchGestureRef.current = gesture;
+      if (!note.isRest) startNoteHoldCycle(true);
       return;
     }
 
     if (click?.type === 'add') {
-      const snappedLine = Math.round(click.line * 2) / 2;
       const staff = findStaffAt(result, point.x, point.y);
       if (!staff) return;
+      const snappedLine = Math.round(click.line * 2) / 2;
       pendingPreviewRef.current = {
-        action: 'add',
         measureIndex: click.measureIndex,
         clef: click.clef,
         x: point.x,
         y: staff.refY0 - snappedLine * staff.spacing,
         line: snappedLine,
         duration: editTool.duration,
+        chordTarget: chordMergeTargetAt(click.measureIndex, click.clef, point.x),
       };
-      renderPendingPreviewGhost();
+      renderPendingGhost();
       touchGestureRef.current = { kind: 'newPreview', cycled: false };
-      startAddHoldCycle();
+      startPendingHoldCycle();
       return;
     }
 
-    // Truly empty area: deselect, matching desktop click behavior.
     onDeselectNote();
   };
 
@@ -612,37 +645,26 @@ export function StaffEditor({
     const dy = point.y - gesture.startY;
     if (gesture.mode === 'undetermined') {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
-      clearHoldInterval();
+      clearTouchHold();
       gesture.mode = 'drag';
-      setDraggingNote({ measureIndex: gesture.location.measureIndex, clef: gesture.location.clef, noteIndex: gesture.location.noteIndex });
+      setDraggingNote({ ...gesture.location });
     }
 
     event.preventDefault();
     const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
-    const noteHitbox = result.noteHitboxes.find(
-      (n) =>
-        n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
-    );
     if (!staff) return;
-    const rawLine = lineAt(staff, point.y);
-    const snappedLine = Math.round(rawLine * 2) / 2;
     const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
-    renderGhost(overlayRef.current, {
-      kind: 'note',
-      x: noteHitbox?.centerX ?? point.x,
-      y: staff.refY0 - snappedLine * staff.spacing,
-      duration: note.duration,
-      isRest: false,
-      stemUp: stemPointsUp(snappedLine),
-      accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
-      ledgerLineYs: ledgerLinePositions(snappedLine).map((l) => staff.refY0 - l * staff.spacing),
-      opacity: 0.65,
-      color: '#d6432b',
-    });
+    const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
+    const ghostX = staff.full
+      ? result.noteHitboxes.find(
+          (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
+        )?.centerX ?? point.x
+      : point.x;
+    renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[0]?.accidental ?? '') as Accidental);
   };
 
   const handleTouchEnd = (event: TouchEvent) => {
-    clearHoldInterval();
+    clearTouchHold();
     const gesture = touchGestureRef.current;
     if (!gesture) return;
     event.preventDefault();
@@ -657,9 +679,8 @@ export function StaffEditor({
         if (point && result) {
           const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
           if (staff) {
-            const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
-            const { letter, octave } = lineToPitch(gesture.location.clef, snappedLine);
-            onMoveNote(gesture.location, letter, octave);
+            const { letter, octave } = pitchAt(gesture.location.clef, staff, point.y);
+            onMoveNote(gesture.location, letter, octave, staff.full ? undefined : xFractionAt(staff, point.x));
           }
         }
         setDraggingNote(null);
@@ -667,25 +688,6 @@ export function StaffEditor({
       } else if (gesture.mode === 'durationCycle') {
         onChangeDuration(gesture.location, gesture.cycleDuration);
         clearGhost(overlayRef.current);
-      } else if (gesture.wasAlreadySelected) {
-        if (point && result) {
-          const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
-          if (staff) {
-            const snappedLine = Math.round(lineAt(staff, point.y) * 2) / 2;
-            pendingPreviewRef.current = {
-              action: 'chord',
-              measureIndex: gesture.location.measureIndex,
-              clef: gesture.location.clef,
-              noteIndex: gesture.location.noteIndex,
-              x: point.x,
-              y: staff.refY0 - snappedLine * staff.spacing,
-              line: snappedLine,
-              duration: 'q',
-            };
-            renderPendingPreviewGhost();
-          }
-        }
-        onFocusMeasure(gesture.location.measureIndex);
       } else {
         onSelectNote(gesture.location);
         onFocusMeasure(gesture.location.measureIndex);
@@ -694,12 +696,14 @@ export function StaffEditor({
     }
 
     if (gesture.kind === 'newPreview') {
-      if (gesture.cycled) commitPendingPreview();
+      // A quick tap leaves the preview waiting for a confirming tap; a hold that
+      // cycled the duration places immediately on release.
+      if (gesture.cycled) commitPending();
       return;
     }
 
     if (gesture.kind === 'confirmPreview') {
-      commitPendingPreview();
+      commitPending();
     }
   };
 

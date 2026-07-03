@@ -15,10 +15,19 @@ import type { ChordSymbol, Clef, NoteEvent, NoteLocation, Score } from '../types
 import {
   chordLabel,
   computeRows,
+  isStaffMeasureFull,
   measureCapacityBeats,
+  pitchToLine,
   pitchToVexKey,
   vexDurationString,
 } from './scoreUtils';
+
+/** Right-hand padding kept clear of notes inside a measure, for free-X mapping. */
+const NOTE_AREA_RIGHT_PAD = 16;
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
 
 const FIRST_MEASURE_WIDTH = 300;
 const MEASURE_WIDTH = 220;
@@ -36,6 +45,8 @@ export interface NoteHitbox {
   clef: Clef;
   noteIndex: number;
   centerX: number;
+  /** Y of each notehead (a chord has several), for pitch-aware click hit-testing. */
+  ys: number[];
 }
 
 export interface StaffHitbox {
@@ -50,6 +61,12 @@ export interface StaffHitbox {
   /** Usable note area (excludes clef/key/time signature glyphs), for grid-snapped previews. */
   contentX0: number;
   contentWidth: number;
+  /** Left edge where notes begin (after clef/key/time glyphs). */
+  noteStartX: number;
+  /** Width of the free-placement note area (noteStartX .. right padding). */
+  noteAreaWidth: number;
+  /** True when the measure is filled to capacity and auto-formatted. */
+  full: boolean;
 }
 
 export interface ChordHitbox {
@@ -239,6 +256,14 @@ export function renderScore(
             : null;
         const staveNotes = buildStaveNotes(clef, measureIndex, notes, selected, hiddenNoteIndex);
 
+        const refY0 = stave.getYForNote(0);
+        const spacing = refY0 - stave.getYForNote(1);
+        const noteStartX = stave.getNoteStartX();
+        const noteAreaWidth = Math.max(40, stave.getX() + stave.getWidth() - NOTE_AREA_RIGHT_PAD - noteStartX);
+        // Once a measure is full it auto-formats (free X positions ignored) so
+        // the score tidies itself; until then notes sit where they were placed.
+        const full = isStaffMeasureFull({ notes }, score.timeSignature);
+
         if (staveNotes.length > 0) {
           const voice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
           voice.addTickables(staveNotes);
@@ -246,32 +271,57 @@ export function renderScore(
           // Beams must be built before the notes are drawn: creating a Beam
           // marks its notes so they skip drawing their own individual flag.
           // Doing this after voice.draw() left both the flag and the beam
-          // rendered on top of each other.
+          // rendered on top of each other. Only beam auto-formatted (full)
+          // measures; free-placed notes would produce misshapen beams.
           let beams: Beam[] = [];
-          try {
-            const beamable = staveNotes.filter((n) => !n.isRest());
-            beams = Beam.generateBeams(beamable);
-          } catch {
-            // Beaming is a visual nicety; ignore failures on unusual note groupings.
+          if (full) {
+            try {
+              const beamable = staveNotes.filter((n) => !n.isRest());
+              beams = Beam.generateBeams(beamable);
+            } catch {
+              // Beaming is a visual nicety; ignore failures on unusual groupings.
+            }
           }
 
           new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 100 : 20));
+
+          // getAbsoluteX() is only meaningful once each note knows its stave
+          // (Voice.draw sets this internally, but we need the formatted X now to
+          // compute free-X shifts before drawing).
+          staveNotes.forEach((sn) => sn.setStave(stave));
+
+          // Free-X placement: shift each positioned note from its formatted spot
+          // to the requested fraction of the note area.
+          const centerXs: number[] = staveNotes.map((sn) => sn.getAbsoluteX());
+          if (!full) {
+            staveNotes.forEach((sn, i) => {
+              const fx = notes[i].x;
+              if (fx === undefined) return;
+              const desiredX = noteStartX + clamp01(fx) * noteAreaWidth;
+              sn.setXShift(desiredX - sn.getAbsoluteX());
+              centerXs[i] = desiredX;
+            });
+          }
+
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
 
           staveNotes.forEach((sn, noteIndex) => {
+            const note = notes[noteIndex];
+            const ys = note.isRest
+              ? [refY0 - 3 * spacing]
+              : note.pitches.map((p) => refY0 - pitchToLine(clef, p.letter, p.octave) * spacing);
             noteHitboxes.push({
               measureIndex,
               clef,
               noteIndex,
-              centerX: sn.getAbsoluteX(),
+              centerX: centerXs[noteIndex],
+              ys,
             });
-            noteChain[clef].push({ event: notes[noteIndex], staveNote: sn });
+            noteChain[clef].push({ event: note, staveNote: sn });
           });
         }
 
-        const refY0 = stave.getYForNote(0);
-        const spacing = refY0 - stave.getYForNote(1);
         const contentStartOffset = isRowStart ? 100 : 20;
         staffHitboxes.push({
           measureIndex,
@@ -284,6 +334,9 @@ export function renderScore(
           spacing,
           contentX0: x + contentStartOffset,
           contentWidth: measureWidth - contentStartOffset,
+          noteStartX,
+          noteAreaWidth,
+          full,
         });
       });
 
@@ -416,8 +469,15 @@ export function resolveClick(result: RenderResult, x: number, y: number): ClickR
   const staff = findStaffAt(result, x, y);
   if (!staff) return null;
 
+  // A note is "hit" only near one of its noteheads (pitch-aware), so that
+  // clicking clearly above or below a note falls through to an add preview.
+  const yRadius = staff.spacing * 0.45;
   const hitNote = result.noteHitboxes.find(
-    (n) => n.measureIndex === staff.measureIndex && n.clef === staff.clef && Math.abs(n.centerX - x) < NOTE_HIT_RADIUS,
+    (n) =>
+      n.measureIndex === staff.measureIndex &&
+      n.clef === staff.clef &&
+      Math.abs(n.centerX - x) < NOTE_HIT_RADIUS &&
+      n.ys.some((ny) => Math.abs(ny - y) < yRadius),
   );
   if (hitNote) {
     return { type: 'select', measureIndex: hitNote.measureIndex, clef: hitNote.clef, noteIndex: hitNote.noteIndex };
@@ -429,6 +489,11 @@ export function resolveClick(result: RenderResult, x: number, y: number): ClickR
 
 export function lineAt(staff: StaffHitbox, y: number): number {
   return (staff.refY0 - y) / staff.spacing;
+}
+
+/** Fractional (0..1) horizontal position of an X within a staff's free-placement note area. */
+export function xFractionAt(staff: StaffHitbox, x: number): number {
+  return Math.min(1, Math.max(0, (x - staff.noteStartX) / staff.noteAreaWidth));
 }
 
 /** Where a new note should be spliced into the staff's note list for a given click X. */

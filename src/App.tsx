@@ -86,9 +86,17 @@ function App() {
   );
 
   const handleAddNote = useCallback(
-    (measureIndex: number, clef: Clef, letter: string, octave: number, insertIndex: number, durationOverride?: DurationValue) => {
+    (
+      measureIndex: number,
+      clef: Clef,
+      letter: string,
+      octave: number,
+      insertIndex: number,
+      durationOverride?: DurationValue,
+      x?: number,
+    ) => {
       const pitch: Pitch = { letter: letter as Pitch['letter'], accidental: editTool.accidental, octave };
-      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest);
+      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
         window.alert('마디가 가득 찼습니다. "마디 추가" 버튼으로 새 마디를 만들어주세요.');
@@ -100,11 +108,12 @@ function App() {
     [score, editTool],
   );
 
-  const handleMoveNote = useCallback((location: NoteLocation, letter: string, octave: number) => {
+  const handleMoveNote = useCallback((location: NoteLocation, letter: string, octave: number, x?: number) => {
     setScore((prev) =>
       updateNoteInScore(prev, location, (note) => ({
         ...note,
         pitches: [{ letter: letter as Pitch['letter'], accidental: note.pitches[0]?.accidental ?? '', octave }],
+        x: x ?? note.x,
       })),
     );
   }, []);
