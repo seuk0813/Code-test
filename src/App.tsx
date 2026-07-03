@@ -46,6 +46,11 @@ function App() {
   // clicking an already-selected chord's specific notehead again sets this;
   // clicking a different note or deselecting always clears it back to null.
   const [selectedPitchIndex, setSelectedPitchIndex] = useState<number | null>(null);
+  // The connection explicitly selected by clicking its tie/slur curve — kept
+  // independent of `selected` so a curve click never red-highlights a note
+  // (see StaffEditor's onSelectConnection / H5). Cleared whenever a plain
+  // note is (de)selected so a stale curve-selection doesn't linger.
+  const [selectedConnection, setSelectedConnection] = useState<NoteLocation | null>(null);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
   const [, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -79,6 +84,7 @@ function App() {
     setScoreRaw(prevState);
     setSelected(null);
     setSelectedPitchIndex(null);
+    setSelectedConnection(null);
   }, []);
 
   const handleRedo = useCallback(() => {
@@ -88,6 +94,7 @@ function App() {
     setScoreRaw(nextState);
     setSelected(null);
     setSelectedPitchIndex(null);
+    setSelectedConnection(null);
   }, []);
 
   useEffect(() => {
@@ -101,6 +108,7 @@ function App() {
       setScore((prev) => removeNoteFromScore(prev, location));
       setSelected(adjacent === null ? null : { measureIndex: location.measureIndex, clef: location.clef, noteIndex: adjacent });
       setSelectedPitchIndex(null);
+      setSelectedConnection(null);
     },
     [score, setScore],
   );
@@ -137,6 +145,7 @@ function App() {
     (location: NoteLocation, pitchIndex?: number) => {
       setSelected(location);
       setSelectedPitchIndex(pitchIndex ?? null);
+      setSelectedConnection(null);
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
         const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
@@ -150,6 +159,13 @@ function App() {
     },
     [score],
   );
+
+  /** Clicking a rendered tie/slur curve selects the connection itself (green from/to handles), leaving any note red-selection untouched otherwise but never turning the curve's own notes red (H5). */
+  const handleSelectConnection = useCallback((source: NoteLocation) => {
+    setSelected(null);
+    setSelectedPitchIndex(null);
+    setSelectedConnection(source);
+  }, []);
 
   const handleAddNote = useCallback(
     (
@@ -171,6 +187,7 @@ function App() {
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
+      setSelectedConnection(null);
     },
     [score, editTool, setScore],
   );
@@ -217,6 +234,7 @@ function App() {
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
     setSelectedPitchIndex(null);
+    setSelectedConnection(null);
   }, []);
 
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
@@ -270,6 +288,7 @@ function App() {
     setScore((prev) => removeMeasure(prev, target));
     setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
     setSelectedPitchIndex(null);
+    setSelectedConnection(null);
     setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
   }, [score.measures.length, setScore]);
 
@@ -379,6 +398,7 @@ function App() {
         setScore(loaded);
         setSelected(null);
         setSelectedPitchIndex(null);
+        setSelectedConnection(null);
         setFocusedMeasureIndex(null);
       })
       .catch(() => window.alert('악보 파일을 읽을 수 없습니다.'));
@@ -436,8 +456,10 @@ function App() {
         score={score}
         selected={selected}
         selectedPitchIndex={selectedPitchIndex}
+        selectedConnection={selectedConnection}
         editTool={editTool}
         onSelectNote={handleSelectNote}
+        onSelectConnection={handleSelectConnection}
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
         onMoveNote={handleMoveNote}

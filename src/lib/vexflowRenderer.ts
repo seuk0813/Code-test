@@ -15,6 +15,7 @@ import type { ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score }
 import {
   chordLabel,
   computeRows,
+  connectionTargetLocation,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   measureCapacityBeats,
@@ -33,6 +34,15 @@ function clamp01(value: number): number {
 
 const FIRST_MEASURE_WIDTH = 300;
 const MEASURE_WIDTH = 220;
+
+/** The X range a measure slot occupies in its row, purely from layout constants — independent of whether that measure actually exists yet. */
+function measureSlotXRange(indexInRow: number): { x0: number; x1: number } {
+  let x = 10;
+  for (let i = 0; i < indexInRow; i++) x += i === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH;
+  const w = indexInRow === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH;
+  return { x0: x, x1: x + w };
+}
+
 const ROW_HEIGHT = 320;
 // Kept clear of the staff's own clickable "add a ledger-line note" region
 // (which reaches STAVE_TOP_MARGIN above the top staff line) so the chord
@@ -189,7 +199,7 @@ export interface OverflowHitbox {
   radius: number;
 }
 
-/** Clickable region over a rendered tie/slur curve — clicking it selects the connection's source note. */
+/** Clickable region over a rendered tie/slur curve — clicking it selects the connection itself (see `selectedConnectionSource`), not either note. */
 export interface ConnectionHitbox {
   source: NoteLocation;
   x0: number;
@@ -199,12 +209,18 @@ export interface ConnectionHitbox {
 }
 
 /**
- * Small draggable handle shown on the selected note, for connecting it to an
- * arbitrary other note. A chord (multiple pitches) gets one handle per
- * pitch — dragging a specific one picks which pitch the tie starts from
- * (pitchIndex), instead of always tying the whole chord.
+ * Small draggable green handle shown on a note that's part of the active
+ * connection (see `selectedConnectionSource`) — one per pitch, on both the
+ * "from" note and the resolved "to" note, so a chord-to-chord tie/slur shows
+ * every possible start/end pitch as its own handle. Dragging any handle
+ * reconnects the SAME underlying connection (`sourceLocation` always owns
+ * the connectToNext/connectToId data): a "from" handle picks which of its
+ * own pitches the tie starts at, a "to" handle picks which pitch/note it
+ * ends at, while the other side stays put.
  */
 export interface ConnectHandle {
+  role: 'from' | 'to';
+  sourceLocation: NoteLocation;
   measureIndex: number;
   clef: Clef;
   noteIndex: number;
@@ -320,6 +336,8 @@ export function renderScore(
   draggingNote: DraggingNote | null,
   playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
   selectedPitchIndex?: number | null,
+  /** The connection (by its owning "from" note) whose green from/to handles should be shown — see ConnectHandle. */
+  selectedConnectionSource?: NoteLocation | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -331,7 +349,12 @@ export function renderScore(
   const rowWidths = rows.map((row) =>
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
   );
-  const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20);
+  // The composer credit always sits above the 4th measure's slot (index 3 in
+  // row 0) — even before that measure actually exists — so it never jumps
+  // around as measures are added; the canvas is widened to fit that slot if
+  // the score doesn't reach it yet.
+  const composerSlot = measureSlotXRange(3);
+  const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20, composerSlot.x1 + 20);
   // The composer credit gets its own dedicated band between the title and
   // the first row, so it never has to share pixels with the chord-symbol
   // band or the staff's ledger-line click region below it. `titleBand` (used
@@ -452,7 +475,14 @@ export function renderScore(
           if (full) {
             try {
               const beamable = staveNotes.filter((n) => !n.isRest());
-              beams = Beam.generateBeams(beamable);
+              // Group beams by the time signature's actual beat, not a fixed
+              // quarter-note assumption: simple meters (2/4, 3/4, 4/4, ...)
+              // beam 2 eighth notes per beat; compound/triple meters (6/8,
+              // 9/8, 12/8, ...) beam 3 per beat (the dotted-quarter pulse) —
+              // see Beam.getDefaultBeamGroups, VexFlow's own implementation
+              // of the standard notation convention.
+              const beamGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+              beams = Beam.generateBeams(beamable, { groups: beamGroups });
             } catch {
               // Beaming is a visual nicety; ignore failures on unusual groupings.
             }
@@ -583,16 +613,22 @@ export function renderScore(
 
   const connectionHitboxes: ConnectionHitbox[] = [];
 
-  /** Bounding-box click region spanning two connected notes, generous enough to cover the curve's arc. */
+  /**
+   * Bounding-box click region spanning two connected notes, covering the
+   * curve's arc — but kept clear of each note's own notehead click radius
+   * (NOTE_HIT_RADIUS) so it never swallows a click meant to (re-)select or
+   * narrow a chord pitch on the note itself (see resolveClick). If the notes
+   * are too close together to leave any room, no separate hitbox is pushed;
+   * the connection is still reachable by clicking either note (see
+   * connectionOwnerAt / H8).
+   */
   function pushConnectionHitbox(source: NoteLocation, a: NoteHitbox, b: NoteHitbox): void {
     const allYs = [...a.ys, ...b.ys];
-    connectionHitboxes.push({
-      source,
-      x0: Math.min(a.centerX, b.centerX) - 6,
-      x1: Math.max(a.centerX, b.centerX) + 6,
-      y0: Math.min(...allYs) - 18,
-      y1: Math.max(...allYs) + 6,
-    });
+    const margin = NOTE_HIT_RADIUS - 2;
+    const x0 = Math.min(a.centerX, b.centerX) + margin;
+    const x1 = Math.max(a.centerX, b.centerX) - margin;
+    if (x1 <= x0) return;
+    connectionHitboxes.push({ source, x0, x1, y0: Math.min(...allYs) - 18, y1: Math.max(...allYs) + 6 });
   }
 
   // A single "connect to next" flag becomes a tie when the pitches match, a
@@ -664,48 +700,69 @@ export function renderScore(
     });
   });
 
-  // Connector handle(s) on the selected note (hidden during playback, since
-  // effectiveSelected is null then) — only shown for a note that already has
-  // a tie/slur connection (via the toolbar button or a previous drag), so it
-  // doesn't clutter every selected note; dragging one re-targets the
-  // connection. A chord gets one handle per pitch (stacked, one per notehead)
-  // so the user can drag from the specific pitch the tie should start from.
+  // Green handles for the active connection (hidden during playback, since
+  // effectiveSelected suppresses selectedConnectionSource too via the
+  // caller) — one per pitch on BOTH the "from" note and the resolved "to"
+  // note, so a 3-pitch-to-3-pitch chord connection shows all 6 handles (9
+  // possible drag combinations). Dragging any handle re-targets the SAME
+  // connection; see ConnectHandle's doc comment.
   const connectHandles: ConnectHandle[] = [];
-  if (effectiveSelected) {
-    const hb = noteHitboxes.find(
-      (n) =>
-        n.measureIndex === effectiveSelected.measureIndex &&
-        n.clef === effectiveSelected.clef &&
-        n.noteIndex === effectiveSelected.noteIndex,
+  const connSource = playingLocations ? null : selectedConnectionSource ?? null;
+  if (connSource) {
+    const fromHb = noteHitboxes.find(
+      (n) => n.measureIndex === connSource.measureIndex && n.clef === connSource.clef && n.noteIndex === connSource.noteIndex,
     );
-    const note = score.measures[effectiveSelected.measureIndex]?.[effectiveSelected.clef].notes[effectiveSelected.noteIndex];
-    if (hb && note && !note.isRest && (noteConnects(note) || note.connectToId)) {
-      hb.ys.forEach((y, pitchIndex) => {
+    const fromNote = score.measures[connSource.measureIndex]?.[connSource.clef].notes[connSource.noteIndex];
+    if (fromHb && fromNote && !fromNote.isRest) {
+      fromHb.ys.forEach((y, pitchIndex) => {
         connectHandles.push({
-          measureIndex: effectiveSelected.measureIndex,
-          clef: effectiveSelected.clef,
-          noteIndex: effectiveSelected.noteIndex,
+          role: 'from',
+          sourceLocation: connSource,
+          measureIndex: connSource.measureIndex,
+          clef: connSource.clef,
+          noteIndex: connSource.noteIndex,
           pitchIndex,
-          x: hb.centerX + CONNECT_HANDLE_DX,
+          x: fromHb.centerX + CONNECT_HANDLE_DX,
           y: y - CONNECT_HANDLE_DY,
           radius: CONNECT_HANDLE_RADIUS,
         });
       });
+      const targetLoc = connectionTargetLocation(score, connSource);
+      const targetHb = targetLoc
+        ? noteHitboxes.find(
+            (n) => n.measureIndex === targetLoc.measureIndex && n.clef === targetLoc.clef && n.noteIndex === targetLoc.noteIndex,
+          )
+        : null;
+      if (targetLoc && targetHb) {
+        targetHb.ys.forEach((y, pitchIndex) => {
+          connectHandles.push({
+            role: 'to',
+            sourceLocation: connSource,
+            measureIndex: targetLoc.measureIndex,
+            clef: targetLoc.clef,
+            noteIndex: targetLoc.noteIndex,
+            pitchIndex,
+            x: targetHb.centerX + CONNECT_HANDLE_DX,
+            y: y - CONNECT_HANDLE_DY,
+            radius: CONNECT_HANDLE_RADIUS,
+          });
+        });
+      }
     }
   }
 
   const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 28 };
-  // Directly under the title, centered on the same axis, rather than tied to
-  // a specific measure's edge — keeps the two visually paired regardless of
-  // how many measures exist or how wide the first one is.
-  const composerCenterHalfWidth = Math.min(140, width / 2 - 4);
+  // Right-aligned above the 4th measure's slot (computed above, fixed by
+  // layout geometry regardless of how many measures actually exist yet) —
+  // so it sits in its final resting spot from the very first empty measure
+  // and never jumps as more measures get added.
   const composerY = TITLE_BAND + COMPOSER_BAND - 8;
   const composerHitbox: ComposerHitbox = {
-    x0: width / 2 - composerCenterHalfWidth,
-    x1: width / 2 + composerCenterHalfWidth,
+    x0: composerSlot.x0,
+    x1: composerSlot.x1,
     y0: TITLE_BAND,
     y1: titleBand,
-    x: width / 2,
+    x: composerSlot.x1 - 4,
     y: composerY,
   };
 
@@ -755,13 +812,13 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   svg.appendChild(text);
 }
 
-/** Centered credit line directly under the title. Click target to add/edit. */
+/** Right-aligned credit line above the 4th measure's slot. Click target to add/edit. */
 function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): void {
   const composer = score.composer?.trim();
   const text = document.createElementNS(SVG_NS, 'text');
   text.setAttribute('x', String(hb.x));
   text.setAttribute('y', String(hb.y));
-  text.setAttribute('text-anchor', 'middle');
+  text.setAttribute('text-anchor', 'end');
   text.setAttribute('font-family', CREDIT_FONT);
   text.setAttribute('font-style', 'italic');
   text.setAttribute('font-size', '13');
@@ -982,7 +1039,7 @@ export function findConnectHandleAt(result: RenderResult, x: number, y: number):
   );
 }
 
-/** A click on a rendered tie/slur curve selects its source note, so its connect handle(s) become draggable to re-pick the start/end pitch. */
+/** A click on a rendered tie/slur curve selects the connection itself (not either note) — returns the connection's owning "from" note, used as `selectedConnectionSource` to reveal its green from/to handles. */
 export function findConnectionAt(result: RenderResult, x: number, y: number): NoteLocation | null {
   const hit = result.connectionHitboxes.find((c) => x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1);
   return hit ? hit.source : null;

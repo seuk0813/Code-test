@@ -20,6 +20,7 @@ import {
   renderScore,
   resolveClick,
   xFractionAt,
+  type ConnectHandle,
   type DraggingNote,
   type LyricHitbox,
   type RenderResult,
@@ -27,6 +28,7 @@ import {
 } from '../lib/vexflowRenderer';
 import {
   chordLabel,
+  connectionOwnerAt,
   cycleDurationLonger,
   lineToPitch,
   measureCapacityBeats,
@@ -66,8 +68,12 @@ interface StaffEditorProps {
   selected: NoteLocation | null;
   /** When the selected note is a chord, narrows the selection to one specific pitch (see App.tsx's handleSelectNote). */
   selectedPitchIndex: number | null;
+  /** The connection explicitly selected by clicking its tie/slur curve (see onSelectConnection) — independent of `selected`, so a curve click never red-highlights either note (H5). */
+  selectedConnection: NoteLocation | null;
   editTool: EditTool;
   onSelectNote: (location: NoteLocation, pitchIndex?: number) => void;
+  /** Clicking a rendered tie/slur curve selects the connection itself (green from/to handles), not either note. */
+  onSelectConnection: (source: NoteLocation) => void;
   onAddNote: (
     measureIndex: number,
     clef: Clef,
@@ -104,7 +110,7 @@ interface StaffEditorProps {
 /** A floating text input overlaid on the score for in-place editing of title, composer, chords, and lyrics. */
 type InlineEditor =
   | { kind: 'title'; left: number; top: number; width: number; align: 'center'; value: string }
-  | { kind: 'composer'; left: number; top: number; width: number; align: 'center'; value: string }
+  | { kind: 'composer'; left: number; top: number; width: number; align: 'right'; value: string }
   | { kind: 'chordAdd'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; offset: number }
   | { kind: 'chordEdit'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; chordId: string }
   | { kind: 'lyricAdd'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; offset: number }
@@ -211,8 +217,10 @@ export function StaffEditor({
   score,
   selected,
   selectedPitchIndex,
+  selectedConnection,
   editTool,
   onSelectNote,
+  onSelectConnection,
   onAddNote,
   onDeleteNote,
   onMoveNote,
@@ -258,16 +266,30 @@ export function StaffEditor({
     null,
   );
 
+  // The connection whose green from/to handles should be shown: either the
+  // one explicitly selected by clicking its curve (selectedConnection), or —
+  // so H8's "clicking a connected note also reveals its handles" works — the
+  // connection touching the currently-selected note, from whichever end.
+  const activeConnectionSource = selectedConnection ?? (selected ? connectionOwnerAt(score, selected) : null);
+
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex);
+    const result = renderScore(
+      containerRef.current,
+      score,
+      selected,
+      draggingNote,
+      playingLocations,
+      selectedPitchIndex,
+      activeConnectionSource,
+    );
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
       overlayRef.current.setAttribute('height', String(result.height));
       overlayRef.current.setAttribute('viewBox', `0 0 ${result.width} ${result.height}`);
     }
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedConnection, activeConnectionSource]);
 
   // Playback playhead: a red bar per staff, snapped exactly to the real X of
   // the currently-sounding note (never interpolated — that's what previously
@@ -324,7 +346,7 @@ export function StaffEditor({
         const seg = segs[idx];
         const staff = result.staffHitboxes.find((s) => s.measureIndex === seg.measureIndex && s.clef === clef);
         if (!staff) return;
-        bars.push({ x: seg.x, y0: staff.refY0 - staff.spacing * 6.4, y1: staff.refY0 + staff.spacing * 0.4 });
+        bars.push({ x: seg.x, y0: staff.refY0 - staff.spacing * 7.4, y1: staff.refY0 + staff.spacing * 1.4 });
         if (!seg.isRest) nextLoc[clef] = { measureIndex: seg.measureIndex, clef, noteIndex: seg.noteIndex };
       });
       renderPlayback(overlayRef.current, { bars });
@@ -400,6 +422,23 @@ export function StaffEditor({
     if (!hit) return null;
     const note = score.measures[measureIndex][clef].notes[hit.noteIndex];
     return note && !note.isRest ? hit.noteIndex : null;
+  };
+
+  /**
+   * Starting a drag from a green connect handle: a "from" handle picks which
+   * of the connection-owning note's own pitches the tie starts at (its own
+   * pitchIndex, same as before). A "to" handle instead re-targets just the
+   * end of the SAME connection — the gesture still originates from the
+   * owning note (`sourceLocation`), but at whichever pitch the connection
+   * currently starts from, so dragging it only changes where it ends.
+   */
+  const resolveConnectDragSource = (handle: ConnectHandle): { source: NoteLocation; sourcePitchIndex: number } => {
+    if (handle.role === 'from') {
+      return { source: handle.sourceLocation, sourcePitchIndex: handle.pitchIndex };
+    }
+    const ownerNote =
+      score.measures[handle.sourceLocation.measureIndex]?.[handle.sourceLocation.clef]?.notes[handle.sourceLocation.noteIndex];
+    return { source: handle.sourceLocation, sourcePitchIndex: ownerNote?.connectFromIndex ?? 0 };
   };
 
   /** Resolve a valid tie/slur drop target (a different, non-rest note) under a point, else null. */
@@ -599,7 +638,7 @@ export function StaffEditor({
     if (!result) return;
     const hb = result.composerHitbox;
     const width = 220;
-    setInlineEditor({ kind: 'composer', left: hb.x - width / 2, top: hb.y - 17, width, align: 'center', value: score.composer });
+    setInlineEditor({ kind: 'composer', left: hb.x - width, top: hb.y - 17, width, align: 'right', value: score.composer });
   };
 
   /** Opens the edit box for an existing chord/lyric symbol after a non-dragging click on it. */
@@ -856,24 +895,18 @@ export function StaffEditor({
 
     const connectHandle = findConnectHandleAt(result, point.x, point.y);
     if (connectHandle) {
-      mouseGestureRef.current = {
-        kind: 'connectDrag',
-        source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
-        sourcePitchIndex: connectHandle.pitchIndex,
-        x0: connectHandle.x,
-        y0: connectHandle.y,
-      };
+      const { source, sourcePitchIndex } = resolveConnectDragSource(connectHandle);
+      mouseGestureRef.current = { kind: 'connectDrag', source, sourcePitchIndex, x0: connectHandle.x, y0: connectHandle.y };
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
     }
 
-    // Clicking directly on a rendered tie/slur curve selects its source note
-    // — the same per-pitch connect handle(s) then let the user drag to
-    // re-pick which pitch it starts/ends at.
+    // Clicking directly on a rendered tie/slur curve selects the connection
+    // itself (green from/to handles on both ends), not either note (H5).
     const connectionHit = findConnectionAt(result, point.x, point.y);
     if (connectionHit) {
-      onSelectNote(connectionHit);
+      onSelectConnection(connectionHit);
       onFocusMeasure(connectionHit.measureIndex);
       suppressClickRef.current = true;
       return;
@@ -1116,20 +1149,15 @@ export function StaffEditor({
     const connectHandle = findConnectHandleAt(result, point.x, point.y);
     if (connectHandle) {
       event.preventDefault();
-      touchGestureRef.current = {
-        kind: 'connectDrag',
-        source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
-        sourcePitchIndex: connectHandle.pitchIndex,
-        x0: connectHandle.x,
-        y0: connectHandle.y,
-      };
+      const { source, sourcePitchIndex } = resolveConnectDragSource(connectHandle);
+      touchGestureRef.current = { kind: 'connectDrag', source, sourcePitchIndex, x0: connectHandle.x, y0: connectHandle.y };
       return;
     }
 
     const connectionHit = findConnectionAt(result, point.x, point.y);
     if (connectionHit) {
       event.preventDefault();
-      onSelectNote(connectionHit);
+      onSelectConnection(connectionHit);
       onFocusMeasure(connectionHit.measureIndex);
       return;
     }

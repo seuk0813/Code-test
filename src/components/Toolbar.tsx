@@ -170,6 +170,14 @@ export function Toolbar({
 }: ToolbarProps) {
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
+  // Purely visual: clicking the already-active duration button again in "new
+  // note" mode (no staff note selected) hides its highlight — the tool still
+  // uses this duration for the next placed note, since there's no other
+  // duration to fall back to; clicking any duration button restores the glow.
+  const [toolHighlightHidden, setToolHighlightHidden] = useState(false);
+  useEffect(() => {
+    setToolHighlightHidden(false);
+  }, [editTool.duration, hasSelection]);
 
   const clearLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -203,6 +211,13 @@ export function Toolbar({
       onDeselectNote();
       return;
     }
+    // In "new note" mode, clicking the already-active duration again just
+    // toggles its highlight off (see toolHighlightHidden above).
+    if (!hasSelection && duration === editTool.duration && !toolHighlightHidden) {
+      setToolHighlightHidden(true);
+      return;
+    }
+    setToolHighlightHidden(false);
     onEditToolChange({ duration });
   };
 
@@ -258,7 +273,7 @@ export function Toolbar({
         {DURATIONS.map((d) => (
           <button
             key={d}
-            className={`tool-icon-btn ${editTool.duration === d ? 'active' : ''}`}
+            className={`tool-icon-btn ${editTool.duration === d && !(toolHighlightHidden && !hasSelection) ? 'active' : ''}`}
             onClick={() => handleDurationClick(d)}
             onMouseDown={() => startLongPress(d)}
             onMouseUp={clearLongPress}
