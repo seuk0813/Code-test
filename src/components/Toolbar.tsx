@@ -150,6 +150,7 @@ interface ToolbarProps {
   onEditToolChange: (patch: Partial<EditTool>) => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
+  onDeselectNote: () => void;
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
@@ -162,6 +163,7 @@ export function Toolbar({
   onEditToolChange,
   hasSelection,
   onDeleteSelected,
+  onDeselectNote,
   connectActive,
   canConnect,
   onToggleConnect,
@@ -193,6 +195,12 @@ export function Toolbar({
   const handleDurationClick = (duration: DurationValue) => {
     if (longPressAdvancedRef.current) {
       longPressAdvancedRef.current = false;
+      return;
+    }
+    // While editing a selected note, clicking its own already-active duration
+    // again deselects it (back to "new note" mode) instead of a no-op re-set.
+    if (hasSelection && duration === editTool.duration) {
+      onDeselectNote();
       return;
     }
     onEditToolChange({ duration });

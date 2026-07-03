@@ -189,6 +189,15 @@ export interface OverflowHitbox {
   radius: number;
 }
 
+/** Clickable region over a rendered tie/slur curve — clicking it selects the connection's source note. */
+export interface ConnectionHitbox {
+  source: NoteLocation;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 /**
  * Small draggable handle shown on the selected note, for connecting it to an
  * arbitrary other note. A chord (multiple pitches) gets one handle per
@@ -215,6 +224,7 @@ export interface RenderResult {
   lyricBandHitboxes: LyricBandHitbox[];
   overflowHitboxes: OverflowHitbox[];
   connectHandles: ConnectHandle[];
+  connectionHitboxes: ConnectionHitbox[];
   titleHitbox: TitleHitbox;
   composerHitbox: ComposerHitbox;
   width: number;
@@ -240,6 +250,7 @@ function buildStaveNotes(
   selected: NoteLocation | null,
   hiddenNoteIndex: number | null,
   playingNoteIndex: number | null,
+  selectedPitchIndex: number | null,
 ): StaveNote[] {
   return notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY[clef]] : note.pitches.map(pitchToVexKey);
@@ -274,11 +285,19 @@ function buildStaveNotes(
       selected.noteIndex === noteIndex;
     const isPlaying = playingNoteIndex === noteIndex;
     if (isSelected || isPlaying) {
-      staveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
-      // Ledger lines are drawn with their own independent style (VexFlow does
-      // not inherit the note's setStyle() for them), so a ledger-line note
-      // like middle C needs this set explicitly to turn red too.
-      staveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+      // A chord narrowed to one specific pitch (second click on that
+      // notehead — see App.tsx's selectedPitchIndex) recolors just that
+      // notehead via setKeyStyle, leaving the chord's other tones alone,
+      // instead of setStyle()'s whole-note recolor.
+      if (isSelected && !isPlaying && selectedPitchIndex !== null && note.pitches.length > 1) {
+        staveNote.setKeyStyle(selectedPitchIndex, { fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+      } else {
+        staveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+        // Ledger lines are drawn with their own independent style (VexFlow
+        // does not inherit the note's setStyle() for them), so a
+        // ledger-line note like middle C needs this set explicitly too.
+        staveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+      }
     }
     if (hiddenNoteIndex === noteIndex) {
       staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
@@ -300,6 +319,7 @@ export function renderScore(
   selected: NoteLocation | null,
   draggingNote: DraggingNote | null,
   playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
+  selectedPitchIndex?: number | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -335,10 +355,6 @@ export function renderScore(
   const overflowHitboxes: OverflowHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
-  // Composer credit sits above the 4th measure (or the score's last measure,
-  // if there are fewer than 4), matching typical lead-sheet layout.
-  const composerMeasureIndex = Math.min(3, score.measures.length - 1);
-  let composerAnchor: { x0: number; x1: number } | null = null;
 
   // Flat, in-order chain of every rendered note per staff (spanning measures
   // and rows), used after the layout pass to connect ties/slurs between
@@ -347,6 +363,7 @@ export function renderScore(
   // Every note by id (any clef/measure), for connections dragged onto an
   // arbitrary target rather than just "the next note".
   const noteById = new Map<string, { event: NoteEvent; staveNote: StaveNote }>();
+  const noteHitboxById = new Map<string, NoteHitbox>();
 
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * ROW_HEIGHT + titleBand;
@@ -378,10 +395,6 @@ export function renderScore(
         bassStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
       }
 
-      if (measureIndex === composerMeasureIndex) {
-        composerAnchor = { x0: x, x1: x + measureWidth };
-      }
-
       trebleStave.setContext(context).draw();
       bassStave.setContext(context).draw();
 
@@ -408,7 +421,15 @@ export function renderScore(
         const playingLoc = playingLocations?.[clef];
         const playingNoteIndex =
           playingLoc && playingLoc.measureIndex === measureIndex && playingLoc.clef === clef ? playingLoc.noteIndex : null;
-        const staveNotes = buildStaveNotes(clef, measureIndex, notes, effectiveSelected, hiddenNoteIndex, playingNoteIndex);
+        const staveNotes = buildStaveNotes(
+          clef,
+          measureIndex,
+          notes,
+          effectiveSelected,
+          hiddenNoteIndex,
+          playingNoteIndex,
+          playingLocations ? null : selectedPitchIndex ?? null,
+        );
 
         const refY0 = stave.getYForNote(0);
         const spacing = refY0 - stave.getYForNote(1);
@@ -473,14 +494,16 @@ export function renderScore(
                 // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
               }
             }
-            noteHitboxes.push({
+            const hb: NoteHitbox = {
               measureIndex,
               clef,
               noteIndex,
               centerX: centerXs[noteIndex],
               stemX,
               ys,
-            });
+            };
+            noteHitboxes.push(hb);
+            noteHitboxById.set(note.id, hb);
             noteChain[clef].push({ event: note, staveNote: sn });
             noteById.set(note.id, { event: note, staveNote: sn });
           });
@@ -558,6 +581,20 @@ export function renderScore(
     });
   });
 
+  const connectionHitboxes: ConnectionHitbox[] = [];
+
+  /** Bounding-box click region spanning two connected notes, generous enough to cover the curve's arc. */
+  function pushConnectionHitbox(source: NoteLocation, a: NoteHitbox, b: NoteHitbox): void {
+    const allYs = [...a.ys, ...b.ys];
+    connectionHitboxes.push({
+      source,
+      x0: Math.min(a.centerX, b.centerX) - 6,
+      x1: Math.max(a.centerX, b.centerX) + 6,
+      y0: Math.min(...allYs) - 18,
+      y1: Math.max(...allYs) + 6,
+    });
+  }
+
   // A single "connect to next" flag becomes a tie when the pitches match, a
   // slur when they differ — so one toolbar button covers both.
   (['treble', 'bass'] as const).forEach((clef) => {
@@ -571,6 +608,12 @@ export function renderScore(
           new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
         } else {
           new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+        }
+        const curHb = noteHitboxById.get(cur.event.id);
+        const nextHb = noteHitboxById.get(next.event.id);
+        if (curHb && nextHb) {
+          const curLoc = { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
+          pushConnectionHitbox(curLoc, curHb, nextHb);
         }
       } catch {
         // Skip connections VexFlow can't render (e.g. mismatched key counts).
@@ -609,6 +652,12 @@ export function renderScore(
         } else {
           new Curve(cur.staveNote, target.staveNote, {}).setContext(context).draw();
         }
+        const curHb = noteHitboxById.get(cur.event.id);
+        const targetHb = noteHitboxById.get(target.event.id);
+        if (curHb && targetHb) {
+          const curLoc = { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
+          pushConnectionHitbox(curLoc, curHb, targetHb);
+        }
       } catch {
         // Skip connections VexFlow can't render.
       }
@@ -646,14 +695,17 @@ export function renderScore(
   }
 
   const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 28 };
-  const anchor = composerAnchor ?? { x0: width - 240, x1: width - 4 };
+  // Directly under the title, centered on the same axis, rather than tied to
+  // a specific measure's edge — keeps the two visually paired regardless of
+  // how many measures exist or how wide the first one is.
+  const composerCenterHalfWidth = Math.min(140, width / 2 - 4);
   const composerY = TITLE_BAND + COMPOSER_BAND - 8;
   const composerHitbox: ComposerHitbox = {
-    x0: anchor.x0,
-    x1: anchor.x1,
+    x0: width / 2 - composerCenterHalfWidth,
+    x1: width / 2 + composerCenterHalfWidth,
     y0: TITLE_BAND,
     y1: titleBand,
-    x: anchor.x1 - 4,
+    x: width / 2,
     y: composerY,
   };
 
@@ -678,6 +730,7 @@ export function renderScore(
     lyricHitboxes,
     lyricBandHitboxes,
     connectHandles,
+    connectionHitboxes,
     titleHitbox,
     composerHitbox,
     width,
@@ -702,13 +755,13 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   svg.appendChild(text);
 }
 
-/** Right-aligned credit line at the bottom of the score, mirroring the title. Click target to add/edit. */
+/** Centered credit line directly under the title. Click target to add/edit. */
 function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): void {
   const composer = score.composer?.trim();
   const text = document.createElementNS(SVG_NS, 'text');
   text.setAttribute('x', String(hb.x));
   text.setAttribute('y', String(hb.y));
-  text.setAttribute('text-anchor', 'end');
+  text.setAttribute('text-anchor', 'middle');
   text.setAttribute('font-family', CREDIT_FONT);
   text.setAttribute('font-style', 'italic');
   text.setAttribute('font-size', '13');
@@ -927,6 +980,12 @@ export function findConnectHandleAt(result: RenderResult, x: number, y: number):
   return (
     result.connectHandles.find((h) => Math.hypot(h.x - x, h.y - y) < h.radius + CONNECT_HANDLE_HIT_SLACK) ?? null
   );
+}
+
+/** A click on a rendered tie/slur curve selects its source note, so its connect handle(s) become draggable to re-pick the start/end pitch. */
+export function findConnectionAt(result: RenderResult, x: number, y: number): NoteLocation | null {
+  const hit = result.connectionHitboxes.find((c) => x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1);
+  return hit ? hit.source : null;
 }
 
 /** Index of the pitch (within a note's own `pitches`) nearest a Y position — used to pick which chord tone a connect-drag drop should end at. */

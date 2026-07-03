@@ -1,21 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export type SaveFormat = 'pdf' | 'json';
 
 interface SaveDialogProps {
-  defaultName: string;
   onCancel: () => void;
-  onSave: (filename: string, format: SaveFormat) => void;
+  onSave: (format: SaveFormat) => void;
 }
 
-/** Modal asking for a filename and a format (PDF or JSON) before saving. */
-export function SaveDialog({ defaultName, onCancel, onSave }: SaveDialogProps) {
-  const [name, setName] = useState(defaultName || '제목 없는 악보');
+/** Modal asking only for a format (PDF or JSON) before saving — the filename comes from the score's own title, not a separate prompt. */
+export function SaveDialog({ onCancel, onSave }: SaveDialogProps) {
   const [format, setFormat] = useState<SaveFormat>('pdf');
-  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    inputRef.current?.select();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
     };
@@ -23,28 +19,10 @@ export function SaveDialog({ defaultName, onCancel, onSave }: SaveDialogProps) {
     return () => document.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
-  const submit = () => {
-    const trimmed = name.trim() || '제목 없는 악보';
-    onSave(trimmed, format);
-  };
-
   return (
     <div className="modal-backdrop" onMouseDown={onCancel}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2 className="modal-title">악보 저장</h2>
-
-        <label className="modal-field">
-          <span>파일 이름</span>
-          <input
-            ref={inputRef}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
-            }}
-            placeholder="파일 이름을 입력하세요"
-          />
-        </label>
 
         <div className="modal-field">
           <span>형식</span>
@@ -64,7 +42,7 @@ export function SaveDialog({ defaultName, onCancel, onSave }: SaveDialogProps) {
 
         <div className="modal-actions">
           <button onClick={onCancel}>취소</button>
-          <button className="modal-primary" onClick={submit}>
+          <button className="modal-primary" onClick={() => onSave(format)}>
             저장
           </button>
         </div>

@@ -1,4 +1,5 @@
 import type { Measure, Score } from '../types/score';
+import { renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
 
@@ -116,20 +117,39 @@ async function embedMusicFonts(svg: SVGSVGElement): Promise<SVGSVGElement> {
 }
 
 /**
- * Renders the on-screen score SVG to a PDF (via an offscreen canvas raster,
- * so it doesn't depend on the browser having the printed fonts installed)
- * and saves it through the same native "Save As" dialog as JSON — falling
- * back to a plain download where the File System Access API isn't available.
+ * Renders the score to a PDF (via an offscreen canvas raster, so it doesn't
+ * depend on the browser having the printed fonts installed) and saves it
+ * through the same native "Save As" dialog as JSON — falling back to a plain
+ * download where the File System Access API isn't available.
+ *
+ * Renders its own clean, unselected copy of the score into a detached
+ * container rather than reusing the live on-screen SVG — so whatever note
+ * happens to be selected/highlighted red on screen doesn't leak into the
+ * saved file.
  */
-export async function saveScorePdf(filename?: string): Promise<void> {
-  const svg = document.querySelector<SVGSVGElement>('.staff-container svg');
-  if (!svg) return;
-  const width = Number(svg.getAttribute('width')) || svg.clientWidth;
-  const height = Number(svg.getAttribute('height')) || svg.clientHeight;
-  const embedded = await embedMusicFonts(svg);
-  const svgString = new XMLSerializer().serializeToString(embedded);
-  const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
+export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-99999px';
+  container.style.top = '0';
+  document.body.appendChild(container);
 
+  try {
+    renderScore(container, score, null, null, null);
+    const svg = container.querySelector<SVGSVGElement>('svg');
+    if (!svg) return;
+    const width = Number(svg.getAttribute('width')) || svg.clientWidth;
+    const height = Number(svg.getAttribute('height')) || svg.clientHeight;
+    const embedded = await embedMusicFonts(svg);
+    const svgString = new XMLSerializer().serializeToString(embedded);
+    const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
+    await saveRasterizedSvgAsPdf(svgUrl, width, height, filename);
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
+async function saveRasterizedSvgAsPdf(svgUrl: string, width: number, height: number, filename?: string): Promise<void> {
   try {
     const img = await loadImage(svgUrl);
     const scale = 2; // rasterize at 2x for a crisper PDF

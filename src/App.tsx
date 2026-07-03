@@ -42,6 +42,10 @@ const UNDO_HISTORY_LIMIT = 100;
 function App() {
   const [score, setScoreRaw] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
   const [selected, setSelected] = useState<NoteLocation | null>(null);
+  // Narrows a chord (multi-pitch note) selection to one specific pitch —
+  // clicking an already-selected chord's specific notehead again sets this;
+  // clicking a different note or deselecting always clears it back to null.
+  const [selectedPitchIndex, setSelectedPitchIndex] = useState<number | null>(null);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
   const [, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -74,6 +78,7 @@ function App() {
     redoStackRef.current.push(scoreRef.current);
     setScoreRaw(prevState);
     setSelected(null);
+    setSelectedPitchIndex(null);
   }, []);
 
   const handleRedo = useCallback(() => {
@@ -82,6 +87,7 @@ function App() {
     undoStackRef.current.push(scoreRef.current);
     setScoreRaw(nextState);
     setSelected(null);
+    setSelectedPitchIndex(null);
   }, []);
 
   useEffect(() => {
@@ -94,6 +100,7 @@ function App() {
       const adjacent = adjacentIndexAfterDelete(location.noteIndex, oldLength);
       setScore((prev) => removeNoteFromScore(prev, location));
       setSelected(adjacent === null ? null : { measureIndex: location.measureIndex, clef: location.clef, noteIndex: adjacent });
+      setSelectedPitchIndex(null);
     },
     [score, setScore],
   );
@@ -127,15 +134,17 @@ function App() {
   }, [setScore]);
 
   const handleSelectNote = useCallback(
-    (location: NoteLocation) => {
+    (location: NoteLocation, pitchIndex?: number) => {
       setSelected(location);
+      setSelectedPitchIndex(pitchIndex ?? null);
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
+        const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
         setEditTool({
           duration: note.duration,
           dotted: note.dotted,
           isRest: note.isRest,
-          accidental: note.pitches[0]?.accidental ?? '',
+          accidental: pitch?.accidental ?? '',
         });
       }
     },
@@ -161,22 +170,26 @@ function App() {
       }
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
+      setSelectedPitchIndex(null);
     },
     [score, editTool, setScore],
   );
 
   /**
    * `deltaLine` is how many staff-line units the drag moved (see
-   * StaffEditor's `startLine`/`pitchAt`), applied to EVERY pitch in the note
-   * so a dragged chord tone shifts all its tones together instead of
-   * collapsing the note down to the single dragged pitch (which used to
-   * silently drop the other chord tones).
+   * StaffEditor's `startLine`/`pitchAt`). With no `pitchIndex` (the whole
+   * chord selected), every pitch shifts by the same amount so dragging one
+   * doesn't collapse the note down to a single pitch (which used to silently
+   * drop the other chord tones). With a `pitchIndex` (one specific pitch
+   * narrowed via a second click — see handleSelectNote), only that pitch
+   * moves; the chord's other tones stay put.
    */
-  const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number) => {
+  const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => {
     setScore((prev) =>
       updateNoteInScore(prev, location, (note) => ({
         ...note,
-        pitches: note.pitches.map((p) => {
+        pitches: note.pitches.map((p, i) => {
+          if (pitchIndex !== undefined && pitchIndex !== null && i !== pitchIndex) return p;
           const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
           const { letter, octave } = lineToPitch(location.clef, line);
           return { ...p, letter: letter as Pitch['letter'], octave };
@@ -203,6 +216,7 @@ function App() {
 
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
+    setSelectedPitchIndex(null);
   }, []);
 
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
@@ -255,6 +269,7 @@ function App() {
     const target = score.measures.length - 1;
     setScore((prev) => removeMeasure(prev, target));
     setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
+    setSelectedPitchIndex(null);
     setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
   }, [score.measures.length, setScore]);
 
@@ -350,10 +365,10 @@ function App() {
   const [saveOpen, setSaveOpen] = useState(false);
   const handleOpenSave = useCallback(() => setSaveOpen(true), []);
   const handleSaveConfirm = useCallback(
-    (filename: string, format: SaveFormat) => {
+    (format: SaveFormat) => {
       setSaveOpen(false);
-      if (format === 'json') void saveScoreJson(score, filename);
-      else void saveScorePdf(filename);
+      if (format === 'json') void saveScoreJson(score, score.title);
+      else void saveScorePdf(score, score.title);
     },
     [score],
   );
@@ -363,6 +378,7 @@ function App() {
       .then((loaded) => {
         setScore(loaded);
         setSelected(null);
+        setSelectedPitchIndex(null);
         setFocusedMeasureIndex(null);
       })
       .catch(() => window.alert('악보 파일을 읽을 수 없습니다.'));
@@ -406,6 +422,7 @@ function App() {
         onEditToolChange={handleEditToolChange}
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
+        onDeselectNote={handleDeselectNote}
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}
@@ -418,6 +435,7 @@ function App() {
       <StaffEditor
         score={score}
         selected={selected}
+        selectedPitchIndex={selectedPitchIndex}
         editTool={editTool}
         onSelectNote={handleSelectNote}
         onAddNote={handleAddNote}
@@ -456,7 +474,7 @@ function App() {
         </button>
       </div>
       {saveOpen && (
-        <SaveDialog defaultName={score.title} onCancel={() => setSaveOpen(false)} onSave={handleSaveConfirm} />
+        <SaveDialog onCancel={() => setSaveOpen(false)} onSave={handleSaveConfirm} />
       )}
     </div>
   );
