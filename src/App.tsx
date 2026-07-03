@@ -17,6 +17,7 @@ import {
   noteConnects,
   removeChordFromScore,
   removeLyricFromScore,
+  removeMeasure,
   removeNoteFromScore,
   togglePitchInNote,
   toggleConnectToNext,
@@ -188,6 +189,22 @@ function App() {
     setScore((prev) => addMeasure(prev));
   }, []);
 
+  const handleDeleteMeasure = useCallback(() => {
+    if (focusedMeasureIndex === null) return;
+    const target = focusedMeasureIndex;
+    setScore((prev) => removeMeasure(prev, target));
+    setSelected((prev) => {
+      if (!prev) return prev;
+      if (prev.measureIndex === target) return null;
+      return prev.measureIndex > target ? { ...prev, measureIndex: prev.measureIndex - 1 } : prev;
+    });
+    setFocusedMeasureIndex((prev) => {
+      if (prev === null) return null;
+      if (prev === target) return null;
+      return prev > target ? prev - 1 : prev;
+    });
+  }, [focusedMeasureIndex]);
+
   const handleToggleConnect = useCallback(() => {
     if (!selected) return;
     setScore((prev) => toggleConnectToNext(prev, selected));
@@ -310,6 +327,8 @@ function App() {
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
         onAddMeasure={handleAddMeasure}
+        onDeleteMeasure={handleDeleteMeasure}
+        canDeleteMeasure={focusedMeasureIndex !== null && score.measures.length > 1}
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}

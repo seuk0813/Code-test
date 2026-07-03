@@ -407,6 +407,16 @@ export function addMeasure(score: Score): Score {
   return { ...score, measures: [...score.measures, createEmptyMeasure()] };
 }
 
+/** Removes a measure and reindexes any manual line breaks that referenced measures after it. Keeps at least one measure. */
+export function removeMeasure(score: Score, measureIndex: number): Score {
+  if (score.measures.length <= 1) return score;
+  const measures = score.measures.filter((_, i) => i !== measureIndex);
+  const lineBreaks = score.lineBreaks
+    .filter((b) => b !== measureIndex)
+    .map((b) => (b > measureIndex ? b - 1 : b));
+  return { ...score, measures, lineBreaks };
+}
+
 export interface AddNoteResult {
   score: Score;
   noteIndex: number;

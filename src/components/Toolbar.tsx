@@ -95,6 +95,8 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onAddMeasure: () => void;
+  onDeleteMeasure: () => void;
+  canDeleteMeasure: boolean;
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
@@ -126,6 +128,8 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onAddMeasure,
+  onDeleteMeasure,
+  canDeleteMeasure,
   connectActive,
   canConnect,
   onToggleConnect,
@@ -294,6 +298,14 @@ export function Toolbar({
         </button>
         <button className="tool-compact" onClick={onAddMeasure} title="마디 추가">
           ＋마디
+        </button>
+        <button
+          className="tool-compact"
+          onClick={onDeleteMeasure}
+          disabled={!canDeleteMeasure}
+          title={canDeleteMeasure ? '선택한 마디 삭제' : '악보에서 마디를 클릭해 선택하면 삭제할 수 있습니다'}
+        >
+          －마디
         </button>
       </div>
 
