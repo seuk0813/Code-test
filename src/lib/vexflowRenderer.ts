@@ -614,21 +614,28 @@ export function renderScore(
   const connectionHitboxes: ConnectionHitbox[] = [];
 
   /**
-   * Bounding-box click region spanning two connected notes, covering the
-   * curve's arc — but kept clear of each note's own notehead click radius
-   * (NOTE_HIT_RADIUS) so it never swallows a click meant to (re-)select or
-   * narrow a chord pitch on the note itself (see resolveClick). If the notes
-   * are too close together to leave any room, no separate hitbox is pushed;
-   * the connection is still reachable by clicking either note (see
-   * connectionOwnerAt / H8).
+   * Click region spanning two connected notes, covering the curve's arc.
+   * Excluding overlap with each note's own notehead click region by shrinking
+   * the X range (an earlier approach) falls apart for closely-spaced notes —
+   * eighth notes ~25px apart left literally 0px of hitbox (silently skipped),
+   * and even a modest gap left only a couple of unclickable pixels. Curves
+   * are drawn arcing above the notes (see CONNECT_HANDLE_DY), so instead this
+   * keeps the FULL x-span (no margin needed) and excludes overlap by Y
+   * instead: the hitbox sits in a band well above the topmost pitch's own
+   * click radius (resolveClick's yRadius, ~staff.spacing*0.45), so it never
+   * competes with a click meant to (re-)select or narrow a notehead,
+   * regardless of how close the two notes are horizontally.
    */
   function pushConnectionHitbox(source: NoteLocation, a: NoteHitbox, b: NoteHitbox): void {
     const allYs = [...a.ys, ...b.ys];
-    const margin = NOTE_HIT_RADIUS - 2;
-    const x0 = Math.min(a.centerX, b.centerX) + margin;
-    const x1 = Math.max(a.centerX, b.centerX) - margin;
-    if (x1 <= x0) return;
-    connectionHitboxes.push({ source, x0, x1, y0: Math.min(...allYs) - 18, y1: Math.max(...allYs) + 6 });
+    const topY = Math.min(...allYs);
+    connectionHitboxes.push({
+      source,
+      x0: Math.min(a.centerX, b.centerX) - 6,
+      x1: Math.max(a.centerX, b.centerX) + 6,
+      y0: topY - 26,
+      y1: topY - 9,
+    });
   }
 
   // A single "connect to next" flag becomes a tie when the pitches match, a
@@ -702,9 +709,14 @@ export function renderScore(
 
   // Green handles for the active connection (hidden during playback, since
   // effectiveSelected suppresses selectedConnectionSource too via the
-  // caller) — one per pitch on BOTH the "from" note and the resolved "to"
-  // note, so a 3-pitch-to-3-pitch chord connection shows all 6 handles (9
-  // possible drag combinations). Dragging any handle re-targets the SAME
+  // caller) — exactly ONE static handle on the "from" side and ONE on the
+  // "to" side, sitting at whichever pitch the connection currently uses
+  // (connectFromIndex/connectToIndex, defaulting to the first pitch).
+  // Showing every pitch of both chords at once was cluttered and mostly
+  // redundant; the other pitches instead appear as drop candidates while a
+  // handle is actively being dragged (see StaffEditor's
+  // renderNearbyConnectCandidates), which is when picking a different pitch
+  // is actually relevant. Dragging either handle re-targets the SAME
   // connection; see ConnectHandle's doc comment.
   const connectHandles: ConnectHandle[] = [];
   const connSource = playingLocations ? null : selectedConnectionSource ?? null;
@@ -714,18 +726,17 @@ export function renderScore(
     );
     const fromNote = score.measures[connSource.measureIndex]?.[connSource.clef].notes[connSource.noteIndex];
     if (fromHb && fromNote && !fromNote.isRest) {
-      fromHb.ys.forEach((y, pitchIndex) => {
-        connectHandles.push({
-          role: 'from',
-          sourceLocation: connSource,
-          measureIndex: connSource.measureIndex,
-          clef: connSource.clef,
-          noteIndex: connSource.noteIndex,
-          pitchIndex,
-          x: fromHb.centerX + CONNECT_HANDLE_DX,
-          y: y - CONNECT_HANDLE_DY,
-          radius: CONNECT_HANDLE_RADIUS,
-        });
+      const fromPitchIndex = Math.min(fromNote.connectFromIndex ?? 0, fromHb.ys.length - 1);
+      connectHandles.push({
+        role: 'from',
+        sourceLocation: connSource,
+        measureIndex: connSource.measureIndex,
+        clef: connSource.clef,
+        noteIndex: connSource.noteIndex,
+        pitchIndex: fromPitchIndex,
+        x: fromHb.centerX + CONNECT_HANDLE_DX,
+        y: fromHb.ys[fromPitchIndex] - CONNECT_HANDLE_DY,
+        radius: CONNECT_HANDLE_RADIUS,
       });
       const targetLoc = connectionTargetLocation(score, connSource);
       const targetHb = targetLoc
@@ -734,18 +745,17 @@ export function renderScore(
           )
         : null;
       if (targetLoc && targetHb) {
-        targetHb.ys.forEach((y, pitchIndex) => {
-          connectHandles.push({
-            role: 'to',
-            sourceLocation: connSource,
-            measureIndex: targetLoc.measureIndex,
-            clef: targetLoc.clef,
-            noteIndex: targetLoc.noteIndex,
-            pitchIndex,
-            x: targetHb.centerX + CONNECT_HANDLE_DX,
-            y: y - CONNECT_HANDLE_DY,
-            radius: CONNECT_HANDLE_RADIUS,
-          });
+        const toPitchIndex = Math.min(fromNote.connectToIndex ?? 0, targetHb.ys.length - 1);
+        connectHandles.push({
+          role: 'to',
+          sourceLocation: connSource,
+          measureIndex: targetLoc.measureIndex,
+          clef: targetLoc.clef,
+          noteIndex: targetLoc.noteIndex,
+          pitchIndex: toPitchIndex,
+          x: targetHb.centerX + CONNECT_HANDLE_DX,
+          y: targetHb.ys[toPitchIndex] - CONNECT_HANDLE_DY,
+          radius: CONNECT_HANDLE_RADIUS,
         });
       }
     }

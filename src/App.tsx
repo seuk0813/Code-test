@@ -51,6 +51,12 @@ function App() {
   // (see StaffEditor's onSelectConnection / H5). Cleared whenever a plain
   // note is (de)selected so a stale curve-selection doesn't linger.
   const [selectedConnection, setSelectedConnection] = useState<NoteLocation | null>(null);
+  // Toggled by re-clicking the active duration button while nothing is
+  // selected (Toolbar's "새 음표 배치" highlight toggle). While true and no
+  // note is selected, clicking the staff prefers selecting the nearest
+  // existing note over adding a new one (see StaffEditor). Reset to false
+  // whenever a note becomes selected or the duration actually changes.
+  const [selectMode, setSelectMode] = useState(false);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
   const [, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -446,6 +452,8 @@ function App() {
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}
+        selectMode={selectMode}
+        onSetSelectMode={setSelectMode}
       />
       <div className="status-line">
         {isPlaying
@@ -457,6 +465,7 @@ function App() {
         selected={selected}
         selectedPitchIndex={selectedPitchIndex}
         selectedConnection={selectedConnection}
+        noteSelectMode={selectMode}
         editTool={editTool}
         onSelectNote={handleSelectNote}
         onSelectConnection={handleSelectConnection}

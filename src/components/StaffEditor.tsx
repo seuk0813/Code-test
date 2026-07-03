@@ -58,6 +58,8 @@ const TOUCH_PREVIEW_RADIUS = 22;
 const CHORD_MERGE_X = 16;
 /** While dragging the connect handle, notes within this radius show up as selectable candidates. */
 const CONNECT_CANDIDATE_RADIUS = 55;
+/** In note-select mode (see noteSelectMode), a staff click within this radius of an existing note selects it instead of adding a new one. */
+const SELECT_MODE_RADIUS = 45;
 
 const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
@@ -70,6 +72,8 @@ interface StaffEditorProps {
   selectedPitchIndex: number | null;
   /** The connection explicitly selected by clicking its tie/slur curve (see onSelectConnection) — independent of `selected`, so a curve click never red-highlights either note (H5). */
   selectedConnection: NoteLocation | null;
+  /** Toggled by re-clicking the active duration button while nothing is selected (Toolbar). While true and nothing is selected, a staff click prefers selecting the nearest existing note over adding a new one. */
+  noteSelectMode: boolean;
   editTool: EditTool;
   onSelectNote: (location: NoteLocation, pitchIndex?: number) => void;
   /** Clicking a rendered tie/slur curve selects the connection itself (green from/to handles), not either note. */
@@ -218,6 +222,7 @@ export function StaffEditor({
   selected,
   selectedPitchIndex,
   selectedConnection,
+  noteSelectMode,
   editTool,
   onSelectNote,
   onSelectConnection,
@@ -408,6 +413,22 @@ export function StaffEditor({
     return hb ? nearestPitchIndexAt(hb, pressY) : undefined;
   };
 
+  /**
+   * Resolves a staff click, but in note-select mode (with nothing already
+   * selected) an "add" result is redirected to the nearest existing note
+   * within SELECT_MODE_RADIUS instead — clicking the staff selects rather
+   * than adding, so it's not so easy to place a stray note while just
+   * trying to pick one out of a cluster. If nothing is nearby, the click is
+   * simply ignored (still no new note placed).
+   */
+  const resolveClickPreferSelect = (result: RenderResult, x: number, y: number) => {
+    const click = resolveClick(result, x, y);
+    if (!noteSelectMode || selected || !click || click.type !== 'add') return click;
+    const nearest = findNearbyNotesAt(result, x, y, SELECT_MODE_RADIUS)[0];
+    if (!nearest) return null;
+    return { type: 'select' as const, measureIndex: nearest.measureIndex, clef: nearest.clef, noteIndex: nearest.noteIndex };
+  };
+
   /** Index of an existing non-rest note whose X is within merge distance, else null. */
   const chordMergeTargetAt = (measureIndex: number, clef: Clef, x: number, exclude?: number): number | null => {
     const result = renderResultRef.current;
@@ -461,8 +482,14 @@ export function StaffEditor({
   /**
    * Shows every valid connect target near the cursor while dragging, not
    * just whichever one is exactly under it — the layout the user asked for
-   * to pick a note when several sit close together. The nearest valid one
-   * (the one connectTargetAt would actually pick) is highlighted active.
+   * to pick a note when several sit close together. One candidate dot per
+   * PITCH (not just one per note), so dropping onto a specific chord tone
+   * (e.g. picking 솔 vs 레 within the same target chord) is a visible,
+   * clickable option instead of only being reachable by pixel-precise
+   * guessing — this is also how a chord's other pitches become reachable
+   * targets, since the static connect handle only shows the one currently
+   * in use (see ConnectHandle's doc comment). The nearest valid pitch (the
+   * one connectTargetAt would actually pick) is highlighted active.
    */
   const renderNearbyConnectCandidates = (result: RenderResult, source: NoteLocation, x: number, y: number) => {
     const nearby = findNearbyNotesAt(result, x, y, CONNECT_CANDIDATE_RADIUS).filter((n) => {
@@ -473,14 +500,22 @@ export function StaffEditor({
       return note && !note.isRest;
     });
     const activeId = connectTargetAt(result, source, x, y);
-    renderConnectCandidates(
-      overlayRef.current,
-      nearby.map((n) => ({
-        x: n.centerX,
-        y: n.ys[0],
-        active: !!activeId && n.measureIndex === activeId.location.measureIndex && n.clef === activeId.location.clef && n.noteIndex === activeId.location.noteIndex,
-      })),
-    );
+    const candidates: { x: number; y: number; active: boolean }[] = [];
+    nearby.forEach((n) => {
+      n.ys.forEach((y, pitchIndex) => {
+        candidates.push({
+          x: n.centerX,
+          y,
+          active:
+            !!activeId &&
+            n.measureIndex === activeId.location.measureIndex &&
+            n.clef === activeId.location.clef &&
+            n.noteIndex === activeId.location.noteIndex &&
+            pitchIndex === activeId.pitchIndex,
+        });
+      });
+    });
+    renderConnectCandidates(overlayRef.current, candidates);
   };
 
   const renderAddGhost = (staff: StaffHitbox, x: number, line: number, duration: DurationValue, isChord: boolean) => {
@@ -943,7 +978,7 @@ export function StaffEditor({
       return;
     }
 
-    const click = resolveClick(result, point.x, point.y);
+    const click = resolveClickPreferSelect(result, point.x, point.y);
     if (!click) {
       onDeselectNote();
       return;
@@ -1014,7 +1049,7 @@ export function StaffEditor({
     }
     clearTooltip(overlayRef.current);
 
-    const click = resolveClick(result, point.x, point.y);
+    const click = resolveClickPreferSelect(result, point.x, point.y);
     if (click?.type === 'add') {
       const staff = findStaffAt(result, point.x, point.y);
       if (!staff) {
@@ -1207,7 +1242,7 @@ export function StaffEditor({
       clearGhost(overlayRef.current);
     }
 
-    const click = resolveClick(result, point.x, point.y);
+    const click = resolveClickPreferSelect(result, point.x, point.y);
     if (click?.type === 'select') {
       event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };

@@ -154,6 +154,9 @@ interface ToolbarProps {
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
+  /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
+  selectMode: boolean;
+  onSetSelectMode: (value: boolean) => void;
 }
 
 export function Toolbar({
@@ -167,17 +170,14 @@ export function Toolbar({
   connectActive,
   canConnect,
   onToggleConnect,
+  selectMode,
+  onSetSelectMode,
 }: ToolbarProps) {
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
-  // Purely visual: clicking the already-active duration button again in "new
-  // note" mode (no staff note selected) hides its highlight — the tool still
-  // uses this duration for the next placed note, since there's no other
-  // duration to fall back to; clicking any duration button restores the glow.
-  const [toolHighlightHidden, setToolHighlightHidden] = useState(false);
   useEffect(() => {
-    setToolHighlightHidden(false);
-  }, [editTool.duration, hasSelection]);
+    onSetSelectMode(false);
+  }, [editTool.duration, hasSelection, onSetSelectMode]);
 
   const clearLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -211,13 +211,15 @@ export function Toolbar({
       onDeselectNote();
       return;
     }
-    // In "new note" mode, clicking the already-active duration again just
-    // toggles its highlight off (see toolHighlightHidden above).
-    if (!hasSelection && duration === editTool.duration && !toolHighlightHidden) {
-      setToolHighlightHidden(true);
+    // In "new note" mode, clicking the already-active duration again toggles
+    // into note-selection mode: the highlight hides, and clicking the staff
+    // now prefers selecting the nearest existing note over adding a new one
+    // (see StaffEditor's noteSelectMode).
+    if (!hasSelection && duration === editTool.duration && !selectMode) {
+      onSetSelectMode(true);
       return;
     }
-    setToolHighlightHidden(false);
+    onSetSelectMode(false);
     onEditToolChange({ duration });
   };
 
@@ -273,7 +275,7 @@ export function Toolbar({
         {DURATIONS.map((d) => (
           <button
             key={d}
-            className={`tool-icon-btn ${editTool.duration === d && !(toolHighlightHidden && !hasSelection) ? 'active' : ''}`}
+            className={`tool-icon-btn ${editTool.duration === d && !(selectMode && !hasSelection) ? 'active' : ''}`}
             onClick={() => handleDurationClick(d)}
             onMouseDown={() => startLongPress(d)}
             onMouseUp={clearLongPress}
