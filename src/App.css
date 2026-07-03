@@ -6,29 +6,26 @@
   gap: 12px;
 }
 
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .app-title {
   font-size: 28px;
-  margin: 8px 0 0;
+  margin: 0;
 }
 
-.score-title-input {
-  font-size: 22px;
-  font-weight: 600;
-  padding: 8px 4px;
-  border: none;
-  border-bottom: 2px solid var(--border);
-  background: transparent;
-  color: var(--text-h);
-  width: 100%;
-  max-width: 480px;
+.quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.score-title-input:focus {
-  outline: none;
-  border-bottom-color: var(--accent);
-}
-
-.save-file-button {
+.quick-action-button {
   background: var(--accent-bg);
   border-color: var(--accent-border);
   font-weight: 600;
@@ -62,8 +59,12 @@
   width: 64px;
 }
 
-.tempo-field {
+.tempo-more-group {
   margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
 .play-button {
@@ -167,31 +168,21 @@
   font-size: 13px;
 }
 
-.title-input {
-  font-size: 16px;
-  font-weight: 600;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  min-width: 200px;
+.tool-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 3px 8px;
+  cursor: pointer;
+  color: var(--text-h);
 }
 
-.composer-input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  min-width: 140px;
-}
-
-.chord-input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  min-width: 180px;
-}
-
-.chord-input:disabled {
-  opacity: 0.5;
+.tool-checkbox input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent, #7a5cff);
 }
 
 .file-input-label {
@@ -248,27 +239,58 @@
   pointer-events: none;
 }
 
-/* Composer field, placed at the bottom-right of the score (mirrors the title). */
-.composer-row {
-  display: flex;
-  justify-content: flex-end;
+/* Floating text input overlaid on the score for in-place title/composer/chord/lyric editing. */
+.staff-input-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
 }
 
-.composer-row .composer-input {
-  border: none;
-  border-bottom: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-h);
-  font-size: 14px;
-  font-style: italic;
-  text-align: right;
-  padding: 4px 2px;
-  width: 220px;
-}
-
-.composer-row .composer-input:focus {
+.inline-score-input {
+  position: absolute;
+  pointer-events: auto;
+  border: 1.5px dashed var(--accent, #7a5cff);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 2px 6px;
   outline: none;
-  border-bottom-color: var(--accent);
+  color: #1a1a1a;
+}
+
+.inline-score-input-center {
+  text-align: center;
+}
+
+.inline-score-input-right {
+  text-align: right;
+}
+
+.inline-score-input-title {
+  font-family: 'Noto Serif KR', Batang, serif;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.inline-score-input-composer {
+  font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.inline-score-input-chordAdd,
+.inline-score-input-chordEdit {
+  font-family: 'Times New Roman', Times, serif;
+  font-weight: 700;
+  font-style: italic;
+  font-size: 15px;
+  color: #2f3a8f;
+}
+
+.inline-score-input-lyricAdd,
+.inline-score-input-lyricEdit {
+  font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  font-size: 14px;
 }
 
 /* Floating add/remove-measure buttons — always act on the last measure. */
@@ -437,7 +459,6 @@
     padding: 0;
   }
   .measure-fabs,
-  .composer-row,
   .staff-ghost-overlay {
     display: none !important;
   }

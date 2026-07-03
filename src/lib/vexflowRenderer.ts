@@ -40,8 +40,10 @@ const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
-/** Vertical space reserved at the very top for the centered title/composer. */
+/** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). */
 const TITLE_BAND = 48;
+/** Vertical space reserved at the bottom for the composer credit, right-aligned like the title. */
+const COMPOSER_BAND = 34;
 const OVERFLOW_MARK_RADIUS = 8;
 /** Extra slack added to the overflow marker's hit-test so a small marker is still easy to hover/tap. */
 const OVERFLOW_HIT_SLACK = 8;
@@ -50,6 +52,13 @@ const CONNECT_HANDLE_HIT_SLACK = 8;
 /** Offset of the connector handle from the selected note's topmost pitch. */
 const CONNECT_HANDLE_DX = 15;
 const CONNECT_HANDLE_DY = 16;
+
+/** Font stacks for the printed-score text elements, matching a typical published lead sheet. */
+const TITLE_FONT = "'Noto Serif KR', Batang, serif";
+const CREDIT_FONT = "'Noto Sans KR', 'Malgun Gothic', sans-serif";
+const CHORD_FONT = "'Times New Roman', Times, serif";
+const LYRIC_FONT = "'Noto Sans KR', 'Malgun Gothic', sans-serif";
+const PLACEHOLDER_COLOR = '#b8b8c2';
 
 export interface NoteHitbox {
   measureIndex: number;
@@ -117,6 +126,38 @@ export interface LyricHitbox {
   measureWidth: number;
 }
 
+/** Empty area of the lyric band (between staves) for a measure, click-to-add-lyric target. */
+export interface LyricBandHitbox {
+  measureIndex: number;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  y: number;
+  measureX: number;
+  measureWidth: number;
+}
+
+/** The clickable region over the rendered (or placeholder) title text. */
+export interface TitleHitbox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  x: number;
+  y: number;
+}
+
+/** The clickable region over the rendered (or placeholder) composer credit. */
+export interface ComposerHitbox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  x: number;
+  y: number;
+}
+
 export interface OverflowHitbox {
   measureIndex: number;
   x: number;
@@ -141,8 +182,11 @@ export interface RenderResult {
   chordBandHitboxes: ChordBandHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
+  lyricBandHitboxes: LyricBandHitbox[];
   overflowHitboxes: OverflowHitbox[];
   connectHandle: ConnectHandle | null;
+  titleHitbox: TitleHitbox;
+  composerHitbox: ComposerHitbox;
   width: number;
   height: number;
 }
@@ -234,9 +278,8 @@ export function renderScore(
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
   );
   const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20);
-  const hasHeading = Boolean(score.title?.trim());
-  const titleBand = hasHeading ? TITLE_BAND : 0;
-  const height = rows.length * ROW_HEIGHT + titleBand;
+  const titleBand = TITLE_BAND;
+  const height = rows.length * ROW_HEIGHT + titleBand + COMPOSER_BAND;
 
   const renderer = new Renderer(container, Renderer.Backends.SVG);
   renderer.resize(width, height);
@@ -248,6 +291,7 @@ export function renderScore(
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
+  const lyricBandHitboxes: LyricBandHitbox[] = [];
   const overflowHitboxes: OverflowHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
@@ -431,6 +475,16 @@ export function renderScore(
           measureWidth,
         });
       });
+      lyricBandHitboxes.push({
+        measureIndex,
+        x0: x,
+        x1: x + measureWidth,
+        y0: lyricY - 10,
+        y1: lyricY + 10,
+        y: lyricY,
+        measureX: x,
+        measureWidth,
+      });
 
       // Beat-overflow warning marker for either staff of this measure.
       if (
@@ -511,9 +565,21 @@ export function renderScore(
     }
   }
 
+  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: titleBand, x: width / 2, y: 28 };
+  const composerY = titleBand + rows.length * ROW_HEIGHT + 22;
+  const composerHitbox: ComposerHitbox = {
+    x0: Math.max(0, width - 240),
+    x1: width - 4,
+    y0: composerY - 16,
+    y1: composerY + 8,
+    x: width - 10,
+    y: composerY,
+  };
+
   const svg = container.querySelector('svg');
   if (svg) {
-    if (hasHeading) drawHeading(svg, score, width);
+    drawHeading(svg, score, titleHitbox);
+    drawComposer(svg, score, composerHitbox);
     drawChordLabels(svg, score, chordHitboxes);
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
@@ -529,7 +595,10 @@ export function renderScore(
     lineBreakHitboxes,
     overflowHitboxes,
     lyricHitboxes,
+    lyricBandHitboxes,
     connectHandle,
+    titleHitbox,
+    composerHitbox,
     width,
     height,
   };
@@ -537,17 +606,33 @@ export function renderScore(
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-function drawHeading(svg: SVGSVGElement, score: Score, width: number): void {
+/** Always drawn (even empty) so there's a click target to add a title; shows a faint placeholder when empty. */
+function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   const title = score.title?.trim();
-  if (!title) return;
   const text = document.createElementNS(SVG_NS, 'text');
-  text.setAttribute('x', String(width / 2));
-  text.setAttribute('y', '28');
+  text.setAttribute('x', String(hb.x));
+  text.setAttribute('y', String(hb.y));
   text.setAttribute('text-anchor', 'middle');
-  text.setAttribute('font-size', '22');
-  text.setAttribute('font-weight', '700');
-  text.setAttribute('fill', '#1a1a1a');
-  text.textContent = title;
+  text.setAttribute('font-family', TITLE_FONT);
+  text.setAttribute('font-size', '24');
+  text.setAttribute('font-weight', '800');
+  text.setAttribute('fill', title ? '#1a1a1a' : PLACEHOLDER_COLOR);
+  text.textContent = title || '제목을 입력하려면 클릭하세요';
+  svg.appendChild(text);
+}
+
+/** Right-aligned credit line at the bottom of the score, mirroring the title. Click target to add/edit. */
+function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): void {
+  const composer = score.composer?.trim();
+  const text = document.createElementNS(SVG_NS, 'text');
+  text.setAttribute('x', String(hb.x));
+  text.setAttribute('y', String(hb.y));
+  text.setAttribute('text-anchor', 'end');
+  text.setAttribute('font-family', CREDIT_FONT);
+  text.setAttribute('font-style', 'italic');
+  text.setAttribute('font-size', '13');
+  text.setAttribute('fill', composer ? '#333' : PLACEHOLDER_COLOR);
+  text.textContent = composer || '작곡가를 입력하려면 클릭하세요';
   svg.appendChild(text);
 }
 
@@ -559,6 +644,7 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.setAttribute('x', String(hb.x));
     text.setAttribute('y', String(hb.y));
     text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-family', LYRIC_FONT);
     text.setAttribute('font-size', '14');
     text.setAttribute('fill', '#333');
     text.textContent = syllable.text;
@@ -621,8 +707,10 @@ function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordH
     text.setAttribute('x', String(hb.x));
     text.setAttribute('y', String(hb.y));
     text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('font-size', '15');
+    text.setAttribute('font-family', CHORD_FONT);
+    text.setAttribute('font-size', '16');
     text.setAttribute('font-weight', '700');
+    text.setAttribute('font-style', 'italic');
     text.setAttribute('fill', '#2f3a8f');
     text.textContent = chordLabel(chord);
     svg.appendChild(text);
@@ -732,6 +820,20 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {
   return result.lyricHitboxes.find((l) => Math.abs(l.x - x) < l.halfWidth && Math.abs(l.y - y) < 12) ?? null;
+}
+
+export function findLyricBandAt(result: RenderResult, x: number, y: number): LyricBandHitbox | null {
+  return result.lyricBandHitboxes.find((b) => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) ?? null;
+}
+
+export function findTitleAt(result: RenderResult, x: number, y: number): boolean {
+  const hb = result.titleHitbox;
+  return x >= hb.x0 && x <= hb.x1 && y >= hb.y0 && y <= hb.y1;
+}
+
+export function findComposerAt(result: RenderResult, x: number, y: number): boolean {
+  const hb = result.composerHitbox;
+  return x >= hb.x0 && x <= hb.x1 && y >= hb.y0 && y <= hb.y1;
 }
 
 export function findOverflowMarkAt(result: RenderResult, x: number, y: number): OverflowHitbox | null {

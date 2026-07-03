@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor } from './components/StaffEditor';
-import { Toolbar, type ChordTool, type EditTool } from './components/Toolbar';
+import { Toolbar, type EditTool } from './components/Toolbar';
 import type { Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
 import {
-  addChordToScore,
+  addChordToScoreAt,
   addLineBreak,
-  addLyricsToScore,
+  addLyricsToScoreAt,
   addMeasure,
   addNoteToScore,
   adjacentIndexAfterDelete,
   connectNoteTo,
   createEmptyScore,
   createNote,
+  editChordText,
+  editLyricText,
   moveChordInScore,
   moveLyricInScore,
   noteConnects,
@@ -31,15 +34,12 @@ import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
-const DEFAULT_CHORD_TOOL: ChordTool = { text: '' };
 
 function App() {
   const [score, setScore] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
   const [selected, setSelected] = useState<NoteLocation | null>(null);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
-  const [chordTool, setChordTool] = useState<ChordTool>(DEFAULT_CHORD_TOOL);
-  const [lyricText, setLyricText] = useState('');
-  const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
+  const [, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
@@ -206,15 +206,21 @@ function App() {
     setScore((prev) => connectNoteTo(prev, source, targetId));
   }, []);
 
-  const handleChordToolChange = useCallback((patch: Partial<ChordTool>) => {
-    setChordTool((prev) => ({ ...prev, ...patch }));
+  const handleSetTitle = useCallback((title: string) => {
+    setScore((prev) => ({ ...prev, title }));
   }, []);
 
-  const handleAddChord = useCallback(() => {
-    if (focusedMeasureIndex === null || !chordTool.text.trim()) return;
-    setScore((prev) => addChordToScore(prev, focusedMeasureIndex, chordTool.text));
-    setChordTool({ text: '' });
-  }, [focusedMeasureIndex, chordTool]);
+  const handleSetComposer = useCallback((composer: string) => {
+    setScore((prev) => ({ ...prev, composer }));
+  }, []);
+
+  const handleAddChordAt = useCallback((measureIndex: number, text: string, offset: number) => {
+    setScore((prev) => addChordToScoreAt(prev, measureIndex, text, offset));
+  }, []);
+
+  const handleEditChordText = useCallback((measureIndex: number, chordId: string, text: string) => {
+    setScore((prev) => editChordText(prev, measureIndex, chordId, text));
+  }, []);
 
   const handleMoveChord = useCallback((measureIndex: number, chordId: string, offset: number) => {
     setScore((prev) => moveChordInScore(prev, measureIndex, chordId, offset));
@@ -224,15 +230,13 @@ function App() {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));
   }, []);
 
-  const handleLyricToolChange = useCallback((text: string) => {
-    setLyricText(text);
+  const handleAddLyricAt = useCallback((measureIndex: number, text: string, offset: number) => {
+    setScore((prev) => addLyricsToScoreAt(prev, measureIndex, text, offset));
   }, []);
 
-  const handleAddLyrics = useCallback(() => {
-    if (focusedMeasureIndex === null || !lyricText.trim()) return;
-    setScore((prev) => addLyricsToScore(prev, focusedMeasureIndex, lyricText));
-    setLyricText('');
-  }, [focusedMeasureIndex, lyricText]);
+  const handleEditLyricText = useCallback((measureIndex: number, lyricId: string, text: string) => {
+    setScore((prev) => editLyricText(prev, measureIndex, lyricId, text));
+  }, []);
 
   const handleMoveLyric = useCallback(
     (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => {
@@ -300,23 +304,37 @@ function App() {
       .catch(() => window.alert('악보 파일을 읽을 수 없습니다.'));
   }, []);
 
-  const focusedMeasureChordCount =
-    focusedMeasureIndex !== null && focusedMeasureIndex < score.measures.length
-      ? score.measures[focusedMeasureIndex].chords.length
-      : 0;
-
   const selectedNote = selected ? score.measures[selected.measureIndex][selected.clef].notes[selected.noteIndex] : null;
+
+  const handleLoadFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) handleLoadJson(file);
+    event.target.value = '';
+  };
 
   return (
     <div className="app">
-      <h1 className="app-title">피아노 악보 편집기</h1>
-      <input
-        className="score-title-input"
-        value={score.title}
-        onChange={(e) => handleScoreMetaChange({ title: e.target.value })}
-        placeholder="악보 제목을 입력하세요"
-        aria-label="악보 제목"
-      />
+      <div className="app-header">
+        <h1 className="app-title">피아노 악보 편집기</h1>
+        <div className="quick-actions">
+          {isPlaying ? (
+            <button className="play-button" onClick={handleStop} aria-label="정지" title="정지">
+              ⏹
+            </button>
+          ) : (
+            <button className="play-button" onClick={handlePlay} aria-label="재생" title="재생">
+              ▶
+            </button>
+          )}
+          <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
+            💾 저장
+          </button>
+          <label className="file-input-label quick-action-button" title="저장했던 악보 파일(.json)을 불러옵니다">
+            📂 불러오기
+            <input type="file" accept="application/json" onChange={handleLoadFile} />
+          </label>
+        </div>
+      </div>
       <Toolbar
         score={score}
         onScoreMetaChange={handleScoreMetaChange}
@@ -327,26 +345,13 @@ function App() {
         connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
         onToggleConnect={handleToggleConnect}
-        isPlaying={isPlaying}
-        onPlay={handlePlay}
-        onStop={handleStop}
         onExportMusicXml={handleExportMusicXml}
         onExportMidi={handleExportMidi}
-        onSaveJson={handleOpenSave}
-        onLoadJson={handleLoadJson}
-        chordTool={chordTool}
-        onChordToolChange={handleChordToolChange}
-        lyricText={lyricText}
-        onLyricToolChange={handleLyricToolChange}
-        onAddLyrics={handleAddLyrics}
-        focusedMeasureIndex={focusedMeasureIndex}
-        focusedMeasureChordCount={focusedMeasureChordCount}
-        onAddChord={handleAddChord}
       />
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
-          : '오선보를 클릭해 음표를 입력하세요. 드래그로 이동, 우클릭으로 삭제할 수 있습니다.'}
+          : '오선보 위의 제목·작곡가·코드·가사를 클릭해 직접 입력하세요. 음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제할 수 있습니다.'}
       </div>
       <StaffEditor
         score={score}
@@ -366,17 +371,14 @@ function App() {
         onDeleteLyric={handleDeleteLyric}
         onDeselectNote={handleDeselectNote}
         onConnectNote={handleConnectNote}
+        onSetTitle={handleSetTitle}
+        onSetComposer={handleSetComposer}
+        onAddChordAt={handleAddChordAt}
+        onEditChordText={handleEditChordText}
+        onAddLyricAt={handleAddLyricAt}
+        onEditLyricText={handleEditLyricText}
         playbackClock={playbackClock}
       />
-      <div className="composer-row">
-        <input
-          className="composer-input"
-          value={score.composer}
-          onChange={(e) => handleScoreMetaChange({ composer: e.target.value })}
-          placeholder="작곡가"
-          aria-label="작곡가"
-        />
-      </div>
       <div className="measure-fabs">
         <button
           className="measure-fab measure-fab-remove"

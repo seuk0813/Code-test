@@ -303,6 +303,42 @@ export function addChordToScore(score: Score, measureIndex: number, text: string
   return { ...score, measures };
 }
 
+/** Adds a chord symbol at an exact clicked position, instead of auto-spacing it. */
+export function addChordToScoreAt(score: Score, measureIndex: number, text: string, offset: number): Score {
+  const trimmed = text.trim();
+  if (!trimmed) return score;
+  const parsed = parseChordText(trimmed);
+  const chord: ChordSymbol = {
+    id: nextId('c'),
+    root: parsed?.root ?? 'C',
+    accidental: parsed?.accidental ?? '',
+    quality: parsed?.quality ?? 'maj',
+    text: trimmed,
+    offset: Math.min(0.95, Math.max(0.05, offset)),
+  };
+  const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, chords: [...m.chords, chord] } : m));
+  return { ...score, measures };
+}
+
+/** Edits an existing chord's text in place. Clearing it entirely removes the chord. */
+export function editChordText(score: Score, measureIndex: number, chordId: string, text: string): Score {
+  const trimmed = text.trim();
+  const measures = score.measures.map((m, i) => {
+    if (i !== measureIndex) return m;
+    if (!trimmed) return { ...m, chords: m.chords.filter((c) => c.id !== chordId) };
+    const parsed = parseChordText(trimmed);
+    return {
+      ...m,
+      chords: m.chords.map((c) =>
+        c.id === chordId
+          ? { ...c, text: trimmed, root: parsed?.root ?? c.root, accidental: parsed?.accidental ?? c.accidental, quality: parsed?.quality ?? c.quality }
+          : c,
+      ),
+    };
+  });
+  return { ...score, measures };
+}
+
 export function moveChordInScore(score: Score, measureIndex: number, chordId: string, offset: number): Score {
   const clamped = Math.min(0.95, Math.max(0.05, offset));
   const measures = score.measures.map((m, i) =>
@@ -373,6 +409,34 @@ export function moveLyricInScore(
     if (i === fromMeasureIndex) return { ...m, lyrics: source.filter((l) => l.id !== lyricId) };
     if (i === toMeasureIndex) return { ...m, lyrics: [...(m.lyrics ?? []), { ...syllable, offset: clamped }] };
     return m;
+  });
+  return { ...score, measures };
+}
+
+/** Adds lyric text starting at an exact clicked offset, spreading subsequent characters evenly to the right. */
+export function addLyricsToScoreAt(score: Score, measureIndex: number, text: string, startOffset: number): Score {
+  const chars = Array.from(text.trim()).filter((c) => c.trim().length > 0);
+  if (chars.length === 0) return score;
+  const existing = score.measures[measureIndex].lyrics ?? [];
+  const step = 0.09;
+  const newSyllables: LyricSyllable[] = chars.map((c, i) => ({
+    id: nextId('ly'),
+    text: c,
+    offset: Math.min(0.97, Math.max(0.03, startOffset + i * step)),
+  }));
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...m, lyrics: [...existing, ...newSyllables] } : m,
+  );
+  return { ...score, measures };
+}
+
+/** Edits an existing lyric syllable's text in place. Clearing it entirely removes the syllable. */
+export function editLyricText(score: Score, measureIndex: number, lyricId: string, text: string): Score {
+  const trimmed = text.trim();
+  const measures = score.measures.map((m, i) => {
+    if (i !== measureIndex) return m;
+    if (!trimmed) return { ...m, lyrics: (m.lyrics ?? []).filter((l) => l.id !== lyricId) };
+    return { ...m, lyrics: (m.lyrics ?? []).map((l) => (l.id === lyricId ? { ...l, text: trimmed } : l)) };
   });
   return { ...score, measures };
 }

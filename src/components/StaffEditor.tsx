@@ -3,13 +3,16 @@ import type { Accidental, Clef, DurationValue, NoteLocation, Score } from '../ty
 import {
   findChordAt,
   findChordBandAt,
+  findComposerAt,
   findConnectHandleAt,
   findInsertIndex,
   findLineBreakAt,
   findLyricAt,
+  findLyricBandAt,
   findNoteAt,
   findOverflowMarkAt,
   findStaffAt,
+  findTitleAt,
   lineAt,
   renderScore,
   resolveClick,
@@ -80,7 +83,23 @@ interface StaffEditorProps {
   onConnectNote: (source: NoteLocation, targetId: string) => void;
   /** When playing, a clock returning elapsed transport seconds (drives the playhead). */
   playbackClock: { get: () => number } | null;
+  /** Inline editing directly on the score: title, composer, and adding/editing chords & lyrics in place. */
+  onSetTitle: (title: string) => void;
+  onSetComposer: (composer: string) => void;
+  onAddChordAt: (measureIndex: number, text: string, offset: number) => void;
+  onEditChordText: (measureIndex: number, chordId: string, text: string) => void;
+  onAddLyricAt: (measureIndex: number, text: string, offset: number) => void;
+  onEditLyricText: (measureIndex: number, lyricId: string, text: string) => void;
 }
+
+/** A floating text input overlaid on the score for in-place editing of title, composer, chords, and lyrics. */
+type InlineEditor =
+  | { kind: 'title'; left: number; top: number; width: number; align: 'center'; value: string }
+  | { kind: 'composer'; left: number; top: number; width: number; align: 'right'; value: string }
+  | { kind: 'chordAdd'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; offset: number }
+  | { kind: 'chordEdit'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; chordId: string }
+  | { kind: 'lyricAdd'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; offset: number }
+  | { kind: 'lyricEdit'; left: number; top: number; width: number; align: 'center'; value: string; measureIndex: number; lyricId: string };
 
 /**
  * A chord symbol or lyric syllable being dragged horizontally. Chord symbols
@@ -190,12 +209,20 @@ export function StaffEditor({
   onDeselectNote,
   onConnectNote,
   playbackClock,
+  onSetTitle,
+  onSetComposer,
+  onAddChordAt,
+  onEditChordText,
+  onAddLyricAt,
+  onEditLyricText,
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
   const renderResultRef = useRef<RenderResult | null>(null);
   const suppressClickRef = useRef(false);
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
+  const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
+  const inlineCancelledRef = useRef(false);
 
   const mouseGestureRef = useRef<MouseGesture>(null);
   const mouseHoldRef = useRef<number | null>(null);
@@ -488,6 +515,120 @@ export function StaffEditor({
     pendingOffset: 0,
   });
 
+  // --- Inline editing directly on the score (title/composer/chord/lyric) -----
+
+  const openTitleEditor = () => {
+    const result = renderResultRef.current;
+    if (!result) return;
+    const hb = result.titleHitbox;
+    const width = Math.min(480, result.width * 0.9);
+    setInlineEditor({ kind: 'title', left: hb.x - width / 2, top: 4, width, align: 'center', value: score.title });
+  };
+
+  const openComposerEditor = () => {
+    const result = renderResultRef.current;
+    if (!result) return;
+    const hb = result.composerHitbox;
+    const width = 220;
+    setInlineEditor({ kind: 'composer', left: hb.x - width, top: hb.y - 17, width, align: 'right', value: score.composer });
+  };
+
+  /** Opens the edit box for an existing chord/lyric symbol after a non-dragging click on it. */
+  const openSymbolEditor = (drag: SymbolDrag) => {
+    const measure = score.measures[drag.measureIndex];
+    if (drag.kind === 'chordSymbol') {
+      const chord = measure.chords.find((c) => c.id === drag.id);
+      if (!chord) return;
+      const x = drag.measureX + chord.offset * drag.measureWidth;
+      setInlineEditor({
+        kind: 'chordEdit',
+        measureIndex: drag.measureIndex,
+        chordId: drag.id,
+        left: x - 45,
+        top: drag.y - 14,
+        width: 90,
+        align: 'center',
+        value: chordLabel(chord),
+      });
+    } else {
+      const syllable = (measure.lyrics ?? []).find((l) => l.id === drag.id);
+      if (!syllable) return;
+      const x = drag.measureX + syllable.offset * drag.measureWidth;
+      setInlineEditor({
+        kind: 'lyricEdit',
+        measureIndex: drag.measureIndex,
+        lyricId: drag.id,
+        left: x - 30,
+        top: drag.y - 12,
+        width: 60,
+        align: 'center',
+        value: syllable.text,
+      });
+    }
+  };
+
+  /** Opens an empty edit box to add a new chord at the clicked position in the chord band. */
+  const openChordAddEditor = (band: { measureIndex: number; x0: number; x1: number; y0: number; y1: number; measureX: number; measureWidth: number }, x: number) => {
+    const offset = Math.min(0.95, Math.max(0.05, (x - band.measureX) / band.measureWidth));
+    setInlineEditor({
+      kind: 'chordAdd',
+      measureIndex: band.measureIndex,
+      offset,
+      left: x - 45,
+      top: (band.y0 + band.y1) / 2 - 8,
+      width: 90,
+      align: 'center',
+      value: '',
+    });
+  };
+
+  /** Opens an empty edit box to add new lyric text at the clicked position in the lyric band. */
+  const openLyricAddEditor = (band: { measureIndex: number; y: number; measureX: number; measureWidth: number }, x: number) => {
+    const offset = Math.min(0.97, Math.max(0.03, (x - band.measureX) / band.measureWidth));
+    setInlineEditor({
+      kind: 'lyricAdd',
+      measureIndex: band.measureIndex,
+      offset,
+      left: x - 30,
+      top: band.y - 12,
+      width: 60,
+      align: 'center',
+      value: '',
+    });
+  };
+
+  const commitInlineEditor = () => {
+    const ed = inlineEditor;
+    setInlineEditor(null);
+    if (!ed) return;
+    if (ed.kind === 'title') onSetTitle(ed.value);
+    else if (ed.kind === 'composer') onSetComposer(ed.value);
+    else if (ed.kind === 'chordAdd') onAddChordAt(ed.measureIndex, ed.value, ed.offset);
+    else if (ed.kind === 'chordEdit') onEditChordText(ed.measureIndex, ed.chordId, ed.value);
+    else if (ed.kind === 'lyricAdd') onAddLyricAt(ed.measureIndex, ed.value, ed.offset);
+    else if (ed.kind === 'lyricEdit') onEditLyricText(ed.measureIndex, ed.lyricId, ed.value);
+  };
+
+  const handleInlineBlur = () => {
+    if (inlineCancelledRef.current) {
+      inlineCancelledRef.current = false;
+      setInlineEditor(null);
+      return;
+    }
+    commitInlineEditor();
+  };
+
+  const handleInlineKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.currentTarget.blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      inlineCancelledRef.current = true;
+      event.currentTarget.blur();
+    }
+  };
+
   // --- Mouse (desktop) interactions -------------------------------------------
 
   const handleDocumentMouseMove = (event: MouseEvent) => {
@@ -544,6 +685,7 @@ export function StaffEditor({
 
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       commitSymbolDrag(gesture);
+      if (!gesture.moved) openSymbolEditor(gesture);
       suppressClickRef.current = gesture.moved;
       clearGhost(overlayRef.current);
       return;
@@ -620,6 +762,19 @@ export function StaffEditor({
     if (!result || !point) return;
     event.preventDefault();
     clearGhost(overlayRef.current);
+    if (inlineEditor) commitInlineEditor();
+
+    if (findTitleAt(result, point.x, point.y)) {
+      openTitleEditor();
+      suppressClickRef.current = true;
+      return;
+    }
+
+    if (findComposerAt(result, point.x, point.y)) {
+      openComposerEditor();
+      suppressClickRef.current = true;
+      return;
+    }
 
     const lineBreak = findLineBreakAt(result, point.x, point.y);
     if (lineBreak) {
@@ -660,6 +815,14 @@ export function StaffEditor({
     const band = findChordBandAt(result, point.x, point.y);
     if (band) {
       onFocusMeasure(band.measureIndex);
+      openChordAddEditor(band, point.x);
+      suppressClickRef.current = true;
+      return;
+    }
+
+    const lyricBand = findLyricBandAt(result, point.x, point.y);
+    if (lyricBand) {
+      openLyricAddEditor(lyricBand, point.x);
       suppressClickRef.current = true;
       return;
     }
@@ -832,6 +995,19 @@ export function StaffEditor({
     const touch = event.touches[0];
     const point = touch && eventPoint(touch);
     if (!result || !point) return;
+    if (inlineEditor) commitInlineEditor();
+
+    if (findTitleAt(result, point.x, point.y)) {
+      event.preventDefault();
+      openTitleEditor();
+      return;
+    }
+
+    if (findComposerAt(result, point.x, point.y)) {
+      event.preventDefault();
+      openComposerEditor();
+      return;
+    }
 
     const lineBreak = findLineBreakAt(result, point.x, point.y);
     if (lineBreak) {
@@ -881,6 +1057,14 @@ export function StaffEditor({
     if (band) {
       event.preventDefault();
       onFocusMeasure(band.measureIndex);
+      openChordAddEditor(band, point.x);
+      return;
+    }
+
+    const lyricBand = findLyricBandAt(result, point.x, point.y);
+    if (lyricBand) {
+      event.preventDefault();
+      openLyricAddEditor(lyricBand, point.x);
       return;
     }
 
@@ -1027,7 +1211,7 @@ export function StaffEditor({
 
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       commitSymbolDrag(gesture);
-      if (!gesture.moved && gesture.kind === 'chordSymbol') onFocusMeasure(gesture.measureIndex);
+      if (!gesture.moved) openSymbolEditor(gesture);
       clearGhost(overlayRef.current);
       return;
     }
@@ -1095,6 +1279,21 @@ export function StaffEditor({
           onContextMenu={handleContextMenu}
         />
         <svg ref={overlayRef} className="staff-ghost-overlay" />
+        {inlineEditor && (
+          <div className="staff-input-layer">
+            <input
+              key={inlineEditor.kind}
+              className={`inline-score-input inline-score-input-${inlineEditor.kind} inline-score-input-${inlineEditor.align}`}
+              style={{ left: inlineEditor.left, top: inlineEditor.top, width: inlineEditor.width }}
+              value={inlineEditor.value}
+              autoFocus
+              onFocus={(e) => e.currentTarget.select()}
+              onChange={(e) => setInlineEditor((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+              onKeyDown={handleInlineKeyDown}
+              onBlur={handleInlineBlur}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

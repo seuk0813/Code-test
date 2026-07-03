@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent } from 'react';
 import type { Accidental, DurationValue, Score } from '../types/score';
 import { DURATION_LABELS } from '../lib/scoreUtils';
 
@@ -12,8 +11,32 @@ const ACCIDENTALS: { value: Accidental; label: string }[] = [
   { value: 'n', label: '♮' },
 ];
 
-/** Simple inline quarter-rest glyph (SVG so it renders on every device, unlike the SMP 𝄽). */
-function RestIcon() {
+/** Note-shape parameters for each duration, drawn as a small inline SVG icon. */
+const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: number }> = {
+  w: { filled: false, stem: false, flags: 0 },
+  h: { filled: false, stem: true, flags: 0 },
+  q: { filled: true, stem: true, flags: 0 },
+  '8': { filled: true, stem: true, flags: 1 },
+  '16': { filled: true, stem: true, flags: 2 },
+};
+
+/** Rest glyph for a duration: filled blocks for whole/half, the quarter-rest squiggle (plus one flag dot per extra subdivision) for the rest. */
+function RestGlyph({ duration }: { duration: DurationValue }) {
+  if (duration === 'w') {
+    return (
+      <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+        <rect x="5" y="6" width="10" height="4" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (duration === 'h') {
+    return (
+      <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+        <rect x="5" y="14" width="10" height="4" fill="currentColor" />
+      </svg>
+    );
+  }
+  const flagCount = duration === '8' ? 1 : duration === '16' ? 2 : 0;
   return (
     <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
       <path
@@ -24,21 +47,16 @@ function RestIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+      {Array.from({ length: flagCount }).map((_, i) => (
+        <circle key={i} cx={12 - i * 3} cy={5 + i * 5} r="1.8" fill="currentColor" />
+      ))}
     </svg>
   );
 }
 
-/** Note-shape parameters for each duration, drawn as a small inline SVG icon. */
-const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: number }> = {
-  w: { filled: false, stem: false, flags: 0 },
-  h: { filled: false, stem: true, flags: 0 },
-  q: { filled: true, stem: true, flags: 0 },
-  '8': { filled: true, stem: true, flags: 1 },
-  '16': { filled: true, stem: true, flags: 2 },
-};
-
-/** Compact note glyph used on the duration buttons (renders identically on every device). */
-function DurationIcon({ duration }: { duration: DurationValue }) {
+/** Compact note (or, when isRest, rest) glyph used on the duration buttons — renders identically on every device. */
+function DurationIcon({ duration, isRest }: { duration: DurationValue; isRest: boolean }) {
+  if (isRest) return <RestGlyph duration={duration} />;
   const s = NOTE_ICON[duration];
   const headCx = 6.5;
   const headCy = 17;
@@ -83,10 +101,6 @@ export interface EditTool {
   accidental: Accidental;
 }
 
-export interface ChordTool {
-  text: string;
-}
-
 interface ToolbarProps {
   score: Score;
   onScoreMetaChange: (patch: Partial<Score>) => void;
@@ -97,25 +111,9 @@ interface ToolbarProps {
   connectActive: boolean;
   canConnect: boolean;
   onToggleConnect: () => void;
-  isPlaying: boolean;
-  onPlay: () => void;
-  onStop: () => void;
   onExportMusicXml: () => void;
   onExportMidi: () => void;
-  onSaveJson: () => void;
-  onLoadJson: (file: File) => void;
-  chordTool: ChordTool;
-  onChordToolChange: (patch: Partial<ChordTool>) => void;
-  lyricText: string;
-  onLyricToolChange: (text: string) => void;
-  onAddLyrics: () => void;
-  focusedMeasureIndex: number | null;
-  focusedMeasureChordCount: number;
-  onAddChord: () => void;
 }
-
-const CHORD_PLACEHOLDER = '자유 입력 (예: Cadd9, 아무 텍스트나)';
-const LYRIC_PLACEHOLDER = '가사 입력 후 추가 (글자별로 배치)';
 
 export function Toolbar({
   score,
@@ -127,28 +125,9 @@ export function Toolbar({
   connectActive,
   canConnect,
   onToggleConnect,
-  isPlaying,
-  onPlay,
-  onStop,
   onExportMusicXml,
   onExportMidi,
-  onSaveJson,
-  onLoadJson,
-  chordTool,
-  onChordToolChange,
-  lyricText,
-  onLyricToolChange,
-  onAddLyrics,
-  focusedMeasureIndex,
-  focusedMeasureChordCount,
-  onAddChord,
 }: ToolbarProps) {
-  const handleLoadFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) onLoadJson(file);
-    event.target.value = '';
-  };
-
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
 
@@ -213,17 +192,20 @@ export function Toolbar({
             ))}
           </select>
         </label>
-        <label className="tempo-field">
-          템포
-          <input
-            type="number"
-            min={20}
-            max={300}
-            value={score.tempo}
-            onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
-          />
-          BPM
-        </label>
+        <div className="tempo-more-group">
+          <label className="tempo-field">
+            템포
+            <input
+              type="number"
+              min={20}
+              max={300}
+              value={score.tempo}
+              onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
+            />
+            BPM
+          </label>
+          <MoreMenu onExportMusicXml={onExportMusicXml} onExportMidi={onExportMidi} />
+        </div>
       </div>
 
       <div className="toolbar-row toolbar-row-compact">
@@ -243,7 +225,7 @@ export function Toolbar({
             aria-label={DURATION_LABELS[d]}
             title={`${DURATION_LABELS[d]} (길게 누르면 더 긴 음표로 전환)`}
           >
-            <DurationIcon duration={d} />
+            <DurationIcon duration={d} isRest={editTool.isRest} />
           </button>
         ))}
         <button
@@ -254,14 +236,14 @@ export function Toolbar({
         >
           <span className="tool-glyph">♩.</span>
         </button>
-        <button
-          className={`tool-icon-btn ${editTool.isRest ? 'active' : ''}`}
-          onClick={() => onEditToolChange({ isRest: !editTool.isRest })}
-          aria-label="쉼표"
-          title="쉼표"
-        >
-          <RestIcon />
-        </button>
+        <label className="tool-checkbox" title="쉼표">
+          <input
+            type="checkbox"
+            checked={editTool.isRest}
+            onChange={(e) => onEditToolChange({ isRest: e.target.checked })}
+          />
+          쉼표
+        </label>
         {ACCIDENTALS.map((a) => (
           <button
             key={a.value || 'none'}
@@ -284,66 +266,6 @@ export function Toolbar({
         >
           이음줄/붙임줄
         </button>
-      </div>
-
-      <div className="toolbar-row">
-        <span className="group-label">코드 기호</span>
-        <input
-          className="chord-input"
-          value={chordTool.text}
-          placeholder={CHORD_PLACEHOLDER}
-          onChange={(e) => onChordToolChange({ text: e.target.value })}
-          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-            if (e.key === 'Enter') onAddChord();
-          }}
-          disabled={focusedMeasureIndex === null}
-        />
-        <button onClick={onAddChord} disabled={focusedMeasureIndex === null || !chordTool.text.trim()}>
-          코드 추가
-        </button>
-        <span className="group-label">
-          {focusedMeasureIndex === null
-            ? '악보에서 마디를 클릭해 선택하세요'
-            : `${focusedMeasureIndex + 1}번 마디 (${focusedMeasureChordCount}개) — 추가 후 드래그로 위치 조정, 우클릭으로 삭제`}
-        </span>
-      </div>
-
-      <div className="toolbar-row">
-        <span className="group-label">가사</span>
-        <input
-          className="chord-input"
-          value={lyricText}
-          placeholder={LYRIC_PLACEHOLDER}
-          onChange={(e) => onLyricToolChange(e.target.value)}
-          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-            if (e.key === 'Enter') onAddLyrics();
-          }}
-          disabled={focusedMeasureIndex === null}
-        />
-        <button onClick={onAddLyrics} disabled={focusedMeasureIndex === null || !lyricText.trim()}>
-          가사 추가
-        </button>
-        <span className="group-label">두 보표 사이에 표시 · 글자별 드래그 이동, 우클릭 삭제</span>
-      </div>
-
-      <div className="toolbar-row">
-        {isPlaying ? (
-          <button className="play-button" onClick={onStop} aria-label="정지" title="정지">
-            ⏹
-          </button>
-        ) : (
-          <button className="play-button" onClick={onPlay} aria-label="재생" title="재생">
-            ▶
-          </button>
-        )}
-        <button className="save-file-button" onClick={onSaveJson} title="현재 악보를 파일(.json)로 저장합니다">
-          💾 파일 저장
-        </button>
-        <label className="file-input-label save-file-button" title="저장했던 악보 파일(.json)을 불러옵니다">
-          📂 파일 불러오기
-          <input type="file" accept="application/json" onChange={handleLoadFile} />
-        </label>
-        <MoreMenu onExportMusicXml={onExportMusicXml} onExportMidi={onExportMidi} />
       </div>
     </div>
   );
