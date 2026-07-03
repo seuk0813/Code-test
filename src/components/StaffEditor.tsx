@@ -16,8 +16,16 @@ import {
   type RenderResult,
   type StaffHitbox,
 } from '../lib/vexflowRenderer';
-import { chordLabel, cycleDurationLonger, lineToPitch, pitchToLine, stemPointsUp } from '../lib/scoreUtils';
-import { clearGhost, ledgerLinePositions, renderGhost } from '../lib/ghostOverlay';
+import {
+  chordLabel,
+  cycleDurationLonger,
+  lineToPitch,
+  measureCapacityBeats,
+  noteBeats,
+  pitchToLine,
+  stemPointsUp,
+} from '../lib/scoreUtils';
+import { clearGhost, clearPlayback, ledgerLinePositions, renderGhost, renderPlayback } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
 const DRAG_THRESHOLD_PX = 4;
@@ -55,6 +63,8 @@ interface StaffEditorProps {
   onMoveLyric: (measureIndex: number, lyricId: string, offset: number) => void;
   onDeleteLyric: (measureIndex: number, lyricId: string) => void;
   onDeselectNote: () => void;
+  /** When playing, a clock returning elapsed transport seconds (drives the playhead). */
+  playbackClock: { get: () => number } | null;
 }
 
 /** A chord symbol or lyric syllable being dragged horizontally within its measure. */
@@ -146,6 +156,7 @@ export function StaffEditor({
   onMoveLyric,
   onDeleteLyric,
   onDeselectNote,
+  playbackClock,
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
@@ -159,6 +170,7 @@ export function StaffEditor({
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const touchGestureRef = useRef<TouchGesture>(null);
   const touchHoldRef = useRef<number | null>(null);
+  const playbackRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -170,6 +182,74 @@ export function StaffEditor({
       overlayRef.current.setAttribute('viewBox', `0 0 ${result.width} ${result.height}`);
     }
   }, [score, selected, draggingNote]);
+
+  // Playback playhead: a red bar per staff sweeps across the notes in time, and
+  // the note currently sounding in each staff is highlighted red.
+  useEffect(() => {
+    if (!playbackClock) {
+      clearPlayback(overlayRef.current);
+      return;
+    }
+    const secondsPerBeat = 60 / score.tempo;
+    const measureBeats = measureCapacityBeats(score.timeSignature);
+
+    interface Seg {
+      startBeat: number;
+      endBeat: number;
+      x: number;
+      ys: number[];
+      isRest: boolean;
+      measureIndex: number;
+    }
+    const buildTimeline = (clef: Clef): Seg[] => {
+      const result = renderResultRef.current;
+      if (!result) return [];
+      const segs: Seg[] = [];
+      score.measures.forEach((measure, measureIndex) => {
+        let beat = measureIndex * measureBeats;
+        measure[clef].notes.forEach((note, noteIndex) => {
+          const dur = noteBeats(note);
+          const hb = result.noteHitboxes.find(
+            (n) => n.measureIndex === measureIndex && n.clef === clef && n.noteIndex === noteIndex,
+          );
+          if (hb) segs.push({ startBeat: beat, endBeat: beat + dur, x: hb.centerX, ys: hb.ys, isRest: note.isRest, measureIndex });
+          beat += dur;
+        });
+      });
+      return segs;
+    };
+    const timelines: Record<Clef, Seg[]> = { treble: buildTimeline('treble'), bass: buildTimeline('bass') };
+
+    const tick = () => {
+      const result = renderResultRef.current;
+      const beats = playbackClock.get() / secondsPerBeat;
+      const bars: { x: number; y0: number; y1: number }[] = [];
+      const highlights: { cx: number; cy: number }[] = [];
+      (['treble', 'bass'] as const).forEach((clef) => {
+        const segs = timelines[clef];
+        const idx = segs.findIndex((s) => beats >= s.startBeat && beats < s.endBeat);
+        if (idx < 0 || !result) return;
+        const seg = segs[idx];
+        const staff = result.staffHitboxes.find((s) => s.measureIndex === seg.measureIndex && s.clef === clef);
+        if (!staff) return;
+        const next = segs[idx + 1];
+        const progress = (beats - seg.startBeat) / Math.max(1e-6, seg.endBeat - seg.startBeat);
+        // Sweep toward the next note only when it sits to the right in the same row.
+        const barX = next && next.x > seg.x ? seg.x + (next.x - seg.x) * progress : seg.x;
+        bars.push({ x: barX, y0: staff.refY0 - staff.spacing * 5.4, y1: staff.refY0 - staff.spacing * 0.6 });
+        if (!seg.isRest) seg.ys.forEach((cy) => highlights.push({ cx: seg.x, cy }));
+      });
+      renderPlayback(overlayRef.current, { bars, highlights });
+      playbackRafRef.current = requestAnimationFrame(tick);
+    };
+    playbackRafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (playbackRafRef.current !== null) cancelAnimationFrame(playbackRafRef.current);
+      playbackRafRef.current = null;
+      clearPlayback(overlayRef.current);
+    };
+  }, [playbackClock, score]);
 
   const eventPoint = (event: { clientX: number; clientY: number }) => {
     const svg = containerRef.current?.querySelector('svg');

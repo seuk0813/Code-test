@@ -368,22 +368,23 @@ export function addLineBreak(score: Score, afterMeasureIndex: number): Score {
   return { ...score, lineBreaks: [...score.lineBreaks, afterMeasureIndex].sort((a, b) => a - b) };
 }
 
-/** Groups measure indices into rows (systems), splitting after each registered line break. */
-export function computeRows(measureCount: number, lineBreaks: number[]): number[][] {
-  const breaks = Array.from(new Set(lineBreaks))
-    .filter((i) => i >= 0 && i < measureCount - 1)
-    .sort((a, b) => a - b);
+/**
+ * Groups measure indices into rows (systems). A row wraps automatically once it
+ * holds `maxPerRow` measures, and a manually registered line break forces an
+ * earlier wrap after that measure.
+ */
+export function computeRows(measureCount: number, lineBreaks: number[], maxPerRow = 4): number[][] {
+  const breaks = new Set(lineBreaks.filter((i) => i >= 0 && i < measureCount - 1));
   const rows: number[][] = [];
-  let start = 0;
-  for (const b of breaks) {
-    const row: number[] = [];
-    for (let i = start; i <= b; i++) row.push(i);
-    rows.push(row);
-    start = b + 1;
+  let row: number[] = [];
+  for (let i = 0; i < measureCount; i++) {
+    row.push(i);
+    if (breaks.has(i) || row.length >= maxPerRow) {
+      rows.push(row);
+      row = [];
+    }
   }
-  const tail: number[] = [];
-  for (let i = start; i < measureCount; i++) tail.push(i);
-  if (tail.length > 0 || rows.length === 0) rows.push(tail);
+  if (row.length > 0 || rows.length === 0) rows.push(row);
   return rows;
 }
 

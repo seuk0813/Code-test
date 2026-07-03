@@ -40,7 +40,6 @@ const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
-const LINE_BREAK_MARKER_WIDTH = 24;
 /** Vertical space reserved at the very top for the centered title/composer. */
 const TITLE_BAND = 48;
 
@@ -191,7 +190,7 @@ export function renderScore(
 ): RenderResult {
   container.innerHTML = '';
 
-  const rows = computeRows(score.measures.length, score.lineBreaks);
+  const rows = computeRows(score.measures.length, score.lineBreaks, MEASURES_PER_ROW);
 
   const rowWidths = rows.map((row) =>
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
@@ -396,16 +395,8 @@ export function renderScore(
         overflowMarks.push({ x: x + measureWidth - 12, y: trebleY - 14 });
       }
 
-      // Clickable "next line" marker after every 4th measure of a row.
-      if (localIndex === MEASURES_PER_ROW - 1 && !score.lineBreaks.includes(measureIndex) && !isLastMeasure) {
-        lineBreakHitboxes.push({
-          afterMeasureIndex: measureIndex,
-          x0: x + measureWidth + 2,
-          x1: x + measureWidth + 2 + LINE_BREAK_MARKER_WIDTH,
-          y0: trebleY - 10,
-          y1: bassY + 50,
-        });
-      }
+      // Rows now wrap automatically every MEASURES_PER_ROW measures (see
+      // computeRows), so no manual "next line" marker is drawn.
 
       x += measureWidth;
     });

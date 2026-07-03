@@ -26,9 +26,27 @@ export function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function downloadScoreJson(score: Score): void {
+export function downloadScoreJson(score: Score, filename?: string): void {
   const blob = new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' });
-  downloadBlob(blob, `${score.title || 'score'}.json`);
+  const base = (filename || score.title || 'score').replace(/\.json$/i, '');
+  downloadBlob(blob, `${base}.json`);
+}
+
+/**
+ * Saves the score as a PDF via the browser's print dialog. A print-only
+ * stylesheet (see App.css) shows just the staff; setting the document title
+ * pre-fills the PDF's default filename in the OS/browser save sheet — which is
+ * also how it works on iOS Safari ("공유 → PDF로 저장").
+ */
+export function printScorePdf(filename: string): void {
+  const previous = document.title;
+  document.title = filename.replace(/\.pdf$/i, '') || 'score';
+  const restore = () => {
+    document.title = previous;
+    window.removeEventListener('afterprint', restore);
+  };
+  window.addEventListener('afterprint', restore);
+  window.print();
 }
 
 export function readScoreFile(file: File): Promise<Score> {

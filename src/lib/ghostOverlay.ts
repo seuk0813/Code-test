@@ -140,3 +140,41 @@ export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
 export function clearGhost(svg: SVGSVGElement | null): void {
   renderGhost(svg, null);
 }
+
+const PLAYBACK_GROUP_ID = 'playback-overlay-group';
+
+export interface PlaybackVisual {
+  /** Vertical playhead bars (one per staff being played). */
+  bars: { x: number; y0: number; y1: number }[];
+  /** Noteheads currently sounding, drawn red on top of the black note. */
+  highlights: { cx: number; cy: number }[];
+}
+
+/** Draws the playback playhead bars and red note highlights on the overlay SVG. */
+export function renderPlayback(svg: SVGSVGElement | null, visual: PlaybackVisual | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${PLAYBACK_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', PLAYBACK_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!visual) return;
+
+  visual.bars.forEach((b) => {
+    group!.appendChild(
+      el('line', { x1: b.x, y1: b.y0, x2: b.x, y2: b.y1, stroke: '#e03131', 'stroke-width': 2, opacity: 0.75 }),
+    );
+  });
+  visual.highlights.forEach((h) => {
+    group!.appendChild(
+      el('ellipse', { cx: h.cx, cy: h.cy, rx: 6.2, ry: 4.8, transform: `rotate(-18 ${h.cx} ${h.cy})`, fill: '#e03131' }),
+    );
+  });
+}
+
+export function clearPlayback(svg: SVGSVGElement | null): void {
+  renderPlayback(svg, null);
+}

@@ -24,8 +24,11 @@ import {
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
 import { exportMidi } from './lib/exportMidi';
-import { downloadBlob, downloadScoreJson, loadAutosave, readScoreFile, saveAutosave } from './lib/fileIO';
+import { downloadBlob, downloadScoreJson, loadAutosave, printScorePdf, readScoreFile, saveAutosave } from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
+import { computeRows } from './lib/scoreUtils';
+import { SaveDialog, type SaveFormat } from './components/SaveDialog';
+import { MEASURES_PER_ROW } from './lib/vexflowRenderer';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
 const DEFAULT_CHORD_TOOL: ChordTool = { text: '' };
@@ -39,6 +42,7 @@ function App() {
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
+  const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
   const playbackRef = useRef<PlaybackHandle | null>(null);
 
   useEffect(() => {
@@ -234,10 +238,12 @@ function App() {
       () => {
         setIsPlaying(false);
         setPlayingMeasure(null);
+        setPlaybackClock(null);
         playbackRef.current = null;
       },
     );
     playbackRef.current = handle;
+    setPlaybackClock({ get: handle.getSeconds });
   }, [score, isPlaying]);
 
   const handleStop = useCallback(() => {
@@ -245,6 +251,7 @@ function App() {
     playbackRef.current = null;
     setIsPlaying(false);
     setPlayingMeasure(null);
+    setPlaybackClock(null);
   }, []);
 
   const handleExportMusicXml = useCallback(() => {
@@ -256,9 +263,16 @@ function App() {
     downloadBlob(exportMidi(score), `${score.title || 'score'}.mid`);
   }, [score]);
 
-  const handleSaveJson = useCallback(() => {
-    downloadScoreJson(score);
-  }, [score]);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const handleOpenSave = useCallback(() => setSaveOpen(true), []);
+  const handleSaveConfirm = useCallback(
+    (filename: string, format: SaveFormat) => {
+      setSaveOpen(false);
+      if (format === 'json') downloadScoreJson(score, filename);
+      else printScorePdf(filename);
+    },
+    [score],
+  );
 
   const handleLoadJson = useCallback((file: File) => {
     readScoreFile(file)
@@ -276,6 +290,7 @@ function App() {
       : 0;
 
   const selectedNote = selected ? score.measures[selected.measureIndex][selected.clef].notes[selected.noteIndex] : null;
+  const rowCount = computeRows(score.measures.length, score.lineBreaks, MEASURES_PER_ROW).length;
 
   return (
     <div className="app">
@@ -303,7 +318,7 @@ function App() {
         onStop={handleStop}
         onExportMusicXml={handleExportMusicXml}
         onExportMidi={handleExportMidi}
-        onSaveJson={handleSaveJson}
+        onSaveJson={handleOpenSave}
         onLoadJson={handleLoadJson}
         chordTool={chordTool}
         onChordToolChange={handleChordToolChange}
@@ -336,7 +351,21 @@ function App() {
         onMoveLyric={handleMoveLyric}
         onDeleteLyric={handleDeleteLyric}
         onDeselectNote={handleDeselectNote}
+        playbackClock={playbackClock}
       />
+      {rowCount > 3 && (
+        <button
+          className="add-measure-fab"
+          onClick={handleAddMeasure}
+          title="마디 추가"
+          aria-label="마디 추가"
+        >
+          +
+        </button>
+      )}
+      {saveOpen && (
+        <SaveDialog defaultName={score.title} onCancel={() => setSaveOpen(false)} onSave={handleSaveConfirm} />
+      )}
     </div>
   );
 }

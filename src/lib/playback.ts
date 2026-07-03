@@ -4,6 +4,8 @@ import { measureCapacityBeats, noteBeats, pitchToToneNote } from './scoreUtils';
 
 export interface PlaybackHandle {
   stop: () => void;
+  /** Elapsed transport time in seconds, for syncing the visual playhead. */
+  getSeconds: () => number;
 }
 
 interface ScheduledEvent {
@@ -99,5 +101,6 @@ export async function playScore(
     stop: () => {
       cleanup();
     },
+    getSeconds: () => Tone.getTransport().seconds,
   };
 }

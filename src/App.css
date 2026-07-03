@@ -211,3 +211,150 @@
   left: 0;
   pointer-events: none;
 }
+
+/* Floating "add measure" button that stays in reach once the score is long. */
+.add-measure-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent, #7a5cff);
+  color: #fff;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  z-index: 50;
+}
+
+.add-measure-fab:hover {
+  filter: brightness(1.08);
+}
+
+/* Save dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--bg, #fff);
+  color: var(--text-h, #1a1a1a);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(420px, 92vw);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.modal-title {
+  margin: 0 0 14px;
+  font-size: 19px;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.modal-field > span {
+  font-weight: 600;
+}
+
+.modal-field input[type='text'],
+.modal-field input:not([type]) {
+  padding: 9px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 7px;
+  font: inherit;
+}
+
+.modal-formats {
+  display: flex;
+  gap: 10px;
+}
+
+.format-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border: 1.5px solid var(--border, #ccc);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.format-option.active {
+  border-color: var(--accent, #7a5cff);
+  background: var(--accent-bg, rgba(122, 92, 255, 0.08));
+}
+
+.format-option input {
+  position: absolute;
+  opacity: 0;
+}
+
+.format-option em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text, #666);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.modal-actions button {
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #ccc);
+  background: var(--bg, #fff);
+  color: var(--text-h, #1a1a1a);
+  cursor: pointer;
+}
+
+.modal-primary {
+  background: var(--accent, #7a5cff);
+  border-color: var(--accent, #7a5cff);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* When printing to PDF, show only the staff. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .staff-scroll,
+  .staff-scroll * {
+    visibility: visible;
+  }
+  .staff-scroll {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: auto;
+    border: none;
+    overflow: visible;
+    padding: 0;
+  }
+  .add-measure-fab,
+  .staff-ghost-overlay {
+    display: none !important;
+  }
+}
