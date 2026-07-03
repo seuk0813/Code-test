@@ -34,7 +34,10 @@ function clamp01(value: number): number {
 const FIRST_MEASURE_WIDTH = 300;
 const MEASURE_WIDTH = 220;
 const ROW_HEIGHT = 320;
-const CHORD_BAND_Y = 78;
+// Kept clear of the staff's own clickable "add a ledger-line note" region
+// (which reaches STAVE_TOP_MARGIN above the top staff line) so the chord
+// band's hitbox doesn't swallow clicks meant to place a high note there.
+const CHORD_BAND_Y = 46;
 const TREBLE_Y = 60;
 const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
@@ -245,6 +248,10 @@ function buildStaveNotes(
     const isPlaying = playingNoteIndex === noteIndex;
     if (isSelected || isPlaying) {
       staveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+      // Ledger lines are drawn with their own independent style (VexFlow does
+      // not inherit the note's setStyle() for them), so a ledger-line note
+      // like middle C needs this set explicitly to turn red too.
+      staveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
     }
     if (hiddenNoteIndex === noteIndex) {
       staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
@@ -542,8 +549,9 @@ export function renderScore(
   });
 
   // Connector handle on the selected note (hidden during playback, since
-  // effectiveSelected is null then) — dragging it onto another note connects
-  // the two with a tie/slur, regardless of their sequence order.
+  // effectiveSelected is null then) — only shown for a note that already has
+  // a tie/slur connection (via the toolbar button or a previous drag), so it
+  // doesn't clutter every selected note; dragging it re-targets the connection.
   let connectHandle: ConnectHandle | null = null;
   if (effectiveSelected) {
     const hb = noteHitboxes.find(
@@ -553,7 +561,7 @@ export function renderScore(
         n.noteIndex === effectiveSelected.noteIndex,
     );
     const note = score.measures[effectiveSelected.measureIndex]?.[effectiveSelected.clef].notes[effectiveSelected.noteIndex];
-    if (hb && note && !note.isRest) {
+    if (hb && note && !note.isRest && (noteConnects(note) || note.connectToId)) {
       connectHandle = {
         measureIndex: effectiveSelected.measureIndex,
         clef: effectiveSelected.clef,
@@ -853,4 +861,18 @@ export function findNoteAt(result: RenderResult, x: number, y: number): NoteHitb
   return (
     result.noteHitboxes.find((n) => Math.abs(n.centerX - x) < 14 && n.ys.some((ny) => Math.abs(ny - y) < 18)) ?? null
   );
+}
+
+/**
+ * All notes within a generous radius of a point, nearest first — used while
+ * dragging the connect handle to show every candidate target nearby (not
+ * just whichever one the cursor happens to sit exactly on), so the user can
+ * see and choose which note to connect to.
+ */
+export function findNearbyNotesAt(result: RenderResult, x: number, y: number, radius: number): NoteHitbox[] {
+  return result.noteHitboxes
+    .map((n) => ({ n, d: Math.min(...n.ys.map((ny) => Math.hypot(n.centerX - x, ny - y))) }))
+    .filter(({ d }) => d < radius)
+    .sort((a, b) => a.d - b.d)
+    .map(({ n }) => n);
 }

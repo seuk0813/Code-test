@@ -9,6 +9,7 @@ import {
   findLineBreakAt,
   findLyricAt,
   findLyricBandAt,
+  findNearbyNotesAt,
   findNoteAt,
   findOverflowMarkAt,
   findStaffAt,
@@ -32,11 +33,13 @@ import {
   stemPointsUp,
 } from '../lib/scoreUtils';
 import {
+  clearConnectCandidates,
   clearConnectPreview,
   clearGhost,
   clearPlayback,
   clearTooltip,
   ledgerLinePositions,
+  renderConnectCandidates,
   renderConnectPreview,
   renderGhost,
   renderPlayback,
@@ -49,6 +52,8 @@ const HOLD_CYCLE_MS = 1000;
 const TOUCH_PREVIEW_RADIUS = 22;
 /** A new note placed within this many px of an existing note's X stacks onto it as a chord tone. */
 const CHORD_MERGE_X = 16;
+/** While dragging the connect handle, notes within this radius show up as selectable candidates. */
+const CONNECT_CANDIDATE_RADIUS = 55;
 
 const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
@@ -375,6 +380,31 @@ export function StaffEditor({
     return { location: { measureIndex: hit.measureIndex, clef: hit.clef, noteIndex: hit.noteIndex } as NoteLocation, id: note.id };
   };
 
+  /**
+   * Shows every valid connect target near the cursor while dragging, not
+   * just whichever one is exactly under it — the layout the user asked for
+   * to pick a note when several sit close together. The nearest valid one
+   * (the one connectTargetAt would actually pick) is highlighted active.
+   */
+  const renderNearbyConnectCandidates = (result: RenderResult, source: NoteLocation, x: number, y: number) => {
+    const nearby = findNearbyNotesAt(result, x, y, CONNECT_CANDIDATE_RADIUS).filter((n) => {
+      if (n.measureIndex === source.measureIndex && n.clef === source.clef && n.noteIndex === source.noteIndex) {
+        return false;
+      }
+      const note = score.measures[n.measureIndex]?.[n.clef]?.notes[n.noteIndex];
+      return note && !note.isRest;
+    });
+    const activeId = connectTargetAt(result, source, x, y);
+    renderConnectCandidates(
+      overlayRef.current,
+      nearby.map((n) => ({
+        x: n.centerX,
+        y: n.ys[0],
+        active: !!activeId && n.measureIndex === activeId.location.measureIndex && n.clef === activeId.location.clef && n.noteIndex === activeId.location.noteIndex,
+      })),
+    );
+  };
+
   const renderAddGhost = (staff: StaffHitbox, x: number, line: number, duration: DurationValue, isChord: boolean) => {
     renderGhost(overlayRef.current, {
       kind: 'note',
@@ -646,6 +676,7 @@ export function StaffEditor({
     if (gesture.kind === 'connectDrag') {
       const target = connectTargetAt(result, gesture.source, point.x, point.y);
       renderConnectPreview(overlayRef.current, { x0: gesture.x0, y0: gesture.y0, x1: point.x, y1: point.y, snapped: !!target });
+      renderNearbyConnectCandidates(result, gesture.source, point.x, point.y);
       return;
     }
 
@@ -693,6 +724,7 @@ export function StaffEditor({
 
     if (gesture.kind === 'connectDrag') {
       clearConnectPreview(overlayRef.current);
+      clearConnectCandidates(overlayRef.current);
       suppressClickRef.current = true;
       if (point) {
         const target = connectTargetAt(result, gesture.source, point.x, point.y);
@@ -1149,6 +1181,7 @@ export function StaffEditor({
       event.preventDefault();
       const target = connectTargetAt(result, gesture.source, point.x, point.y);
       renderConnectPreview(overlayRef.current, { x0: gesture.x0, y0: gesture.y0, x1: point.x, y1: point.y, snapped: !!target });
+      renderNearbyConnectCandidates(result, gesture.source, point.x, point.y);
       return;
     }
 
@@ -1218,6 +1251,7 @@ export function StaffEditor({
 
     if (gesture.kind === 'connectDrag') {
       clearConnectPreview(overlayRef.current);
+      clearConnectCandidates(overlayRef.current);
       if (point && result) {
         const target = connectTargetAt(result, gesture.source, point.x, point.y);
         if (target) onConnectNote(gesture.source, target.id);

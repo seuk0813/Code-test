@@ -161,15 +161,24 @@ export function renderTooltip(svg: SVGSVGElement | null, spec: { x: number; y: n
   if (!spec) return;
 
   const paddingX = 8;
-  const charWidth = 7.2;
-  const w = spec.text.length * charWidth + paddingX * 2;
+  // Generous per-character estimate (Korean glyphs render close to the font
+  // size wide at 12px) — underestimating this let the bubble render narrower
+  // than the actual text, which could then spill past the SVG's own edge and
+  // get clipped by its default overflow:hidden.
+  const charWidth = 11;
+  const w = Math.min(spec.text.length * charWidth + paddingX * 2, 280);
   const h = 24;
-  const x = spec.x - w / 2;
+  const margin = 4;
+  const svgWidth = Number(svg.getAttribute('width')) || w + margin * 2;
+  // Center on the marker, but clamp so the bubble never runs past either edge
+  // of the SVG canvas — otherwise a marker near the left/right border clips
+  // the message instead of just shifting the bubble to stay fully visible.
+  const x = Math.min(Math.max(spec.x - w / 2, margin), svgWidth - w - margin);
   const y = spec.y - h - 10;
 
   group.appendChild(el('rect', { x, y, width: w, height: h, rx: 5, fill: '#2b2b2b', opacity: 0.94 }));
   const text = el('text', {
-    x: spec.x,
+    x: x + w / 2,
     y: y + h / 2 + 4,
     'text-anchor': 'middle',
     'font-size': 12,
@@ -260,4 +269,43 @@ export function renderConnectPreview(
 
 export function clearConnectPreview(svg: SVGSVGElement | null): void {
   renderConnectPreview(svg, null);
+}
+
+const CONNECT_CANDIDATES_GROUP_ID = 'connect-candidates-overlay-group';
+
+/**
+ * While dragging the connect handle, every nearby note is marked as a
+ * possible drop target so the layout makes clear which one the drop will
+ * pick — the closest (the one that will actually be used if dropped now) is
+ * drawn bigger and filled green, the rest are small hollow grey circles.
+ */
+export function renderConnectCandidates(
+  svg: SVGSVGElement | null,
+  candidates: { x: number; y: number; active: boolean }[] | null,
+): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${CONNECT_CANDIDATES_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', CONNECT_CANDIDATES_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!candidates) return;
+
+  candidates.forEach((c) => {
+    if (c.active) {
+      group!.appendChild(el('circle', { cx: c.x, cy: c.y, r: 11, fill: '#2f9e44', opacity: 0.22 }));
+      group!.appendChild(el('circle', { cx: c.x, cy: c.y, r: 6, fill: '#2f9e44', stroke: '#fff', 'stroke-width': 1.5 }));
+    } else {
+      group!.appendChild(
+        el('circle', { cx: c.x, cy: c.y, r: 5, fill: 'none', stroke: '#adb5bd', 'stroke-width': 1.6, opacity: 0.85 }),
+      );
+    }
+  });
+}
+
+export function clearConnectCandidates(svg: SVGSVGElement | null): void {
+  renderConnectCandidates(svg, null);
 }

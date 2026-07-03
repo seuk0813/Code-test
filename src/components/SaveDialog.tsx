@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { hasNativeSavePicker } from '../lib/fileIO';
 
 export type SaveFormat = 'pdf' | 'json';
 
@@ -62,10 +61,6 @@ export function SaveDialog({ defaultName, onCancel, onSave }: SaveDialogProps) {
             </label>
           </div>
         </div>
-
-        {format === 'json' && hasNativeSavePicker() && (
-          <p className="modal-hint">저장 위치를 직접 고를 수 있는 창이 뜹니다.</p>
-        )}
 
         <div className="modal-actions">
           <button onClick={onCancel}>취소</button>

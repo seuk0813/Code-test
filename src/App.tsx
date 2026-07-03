@@ -29,14 +29,16 @@ import {
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
 import { exportMidi } from './lib/exportMidi';
-import { downloadBlob, loadAutosave, printScorePdf, readScoreFile, saveAutosave, saveScoreJson } from './lib/fileIO';
+import { downloadBlob, loadAutosave, readScoreFile, saveAutosave, saveScorePdf, saveScoreJson } from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
 
+const UNDO_HISTORY_LIMIT = 100;
+
 function App() {
-  const [score, setScore] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
+  const [score, setScoreRaw] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
   const [selected, setSelected] = useState<NoteLocation | null>(null);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
   const [, setFocusedMeasureIndex] = useState<number | null>(null);
@@ -44,6 +46,41 @@ function App() {
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
   const playbackRef = useRef<PlaybackHandle | null>(null);
+
+  // Undo/redo history. Every setScore call (the wrapper below, used
+  // everywhere else in this file) pushes the pre-change score onto the undo
+  // stack, so Ctrl+Z can step back through edits one at a time.
+  const scoreRef = useRef(score);
+  scoreRef.current = score;
+  const undoStackRef = useRef<Score[]>([]);
+  const redoStackRef = useRef<Score[]>([]);
+
+  const setScore = useCallback((updater: Score | ((prev: Score) => Score)) => {
+    setScoreRaw((prev) => {
+      const next = typeof updater === 'function' ? (updater as (p: Score) => Score)(prev) : updater;
+      if (next === prev) return prev;
+      undoStackRef.current.push(prev);
+      if (undoStackRef.current.length > UNDO_HISTORY_LIMIT) undoStackRef.current.shift();
+      redoStackRef.current = [];
+      return next;
+    });
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    const prevState = undoStackRef.current.pop();
+    if (prevState === undefined) return;
+    redoStackRef.current.push(scoreRef.current);
+    setScoreRaw(prevState);
+    setSelected(null);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const nextState = redoStackRef.current.pop();
+    if (nextState === undefined) return;
+    undoStackRef.current.push(scoreRef.current);
+    setScoreRaw(nextState);
+    setSelected(null);
+  }, []);
 
   useEffect(() => {
     saveAutosave(score);
@@ -56,13 +93,24 @@ function App() {
       setScore((prev) => removeNoteFromScore(prev, location));
       setSelected(adjacent === null ? null : { measureIndex: location.measureIndex, clef: location.clef, noteIndex: adjacent });
     },
-    [score],
+    [score, setScore],
   );
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
         e.preventDefault();
         deleteNoteAndSelectAdjacent(selected);
@@ -70,11 +118,11 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, deleteNoteAndSelectAdjacent]);
+  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, setScore]);
 
   const handleScoreMetaChange = useCallback((patch: Partial<Score>) => {
     setScore((prev) => ({ ...prev, ...patch }));
-  }, []);
+  }, [setScore]);
 
   const handleSelectNote = useCallback(
     (location: NoteLocation) => {
@@ -112,7 +160,7 @@ function App() {
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
     },
-    [score, editTool],
+    [score, editTool, setScore],
   );
 
   const handleMoveNote = useCallback((location: NoteLocation, letter: string, octave: number, x?: number) => {
@@ -123,17 +171,17 @@ function App() {
         x: x ?? note.x,
       })),
     );
-  }, []);
+  }, [setScore]);
 
   const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
     setScore((prev) => updateNoteInScore(prev, location, (note) => ({ ...note, duration })));
-  }, []);
+  }, [setScore]);
 
   const handleTogglePitch = useCallback(
     (location: NoteLocation, letter: string, octave: number) => {
       setScore((prev) => togglePitchInNote(prev, location, letter as Pitch['letter'], editTool.accidental, octave));
     },
-    [editTool.accidental],
+    [editTool.accidental, setScore],
   );
 
   const handleFocusMeasure = useCallback((measureIndex: number) => {
@@ -146,7 +194,7 @@ function App() {
 
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
     setScore((prev) => addLineBreak(prev, afterMeasureIndex));
-  }, []);
+  }, [setScore]);
 
   const handleEditToolChange = useCallback(
     (patch: Partial<EditTool>) => {
@@ -176,7 +224,7 @@ function App() {
         }),
       );
     },
-    [selected],
+    [selected, setScore],
   );
 
   const handleDeleteSelected = useCallback(() => {
@@ -186,7 +234,7 @@ function App() {
 
   const handleAddMeasure = useCallback(() => {
     setScore((prev) => addMeasure(prev));
-  }, []);
+  }, [setScore]);
 
   /** Always removes the last measure — the FAB's "－" is a fixed end-of-score action, not tied to selection. */
   const handleDeleteLastMeasure = useCallback(() => {
@@ -195,59 +243,59 @@ function App() {
     setScore((prev) => removeMeasure(prev, target));
     setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
     setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
-  }, [score.measures.length]);
+  }, [score.measures.length, setScore]);
 
   const handleToggleConnect = useCallback(() => {
     if (!selected) return;
     setScore((prev) => toggleConnectToNext(prev, selected));
-  }, [selected]);
+  }, [selected, setScore]);
 
   const handleConnectNote = useCallback((source: NoteLocation, targetId: string) => {
     setScore((prev) => connectNoteTo(prev, source, targetId));
-  }, []);
+  }, [setScore]);
 
   const handleSetTitle = useCallback((title: string) => {
     setScore((prev) => ({ ...prev, title }));
-  }, []);
+  }, [setScore]);
 
   const handleSetComposer = useCallback((composer: string) => {
     setScore((prev) => ({ ...prev, composer }));
-  }, []);
+  }, [setScore]);
 
   const handleAddChordAt = useCallback((measureIndex: number, text: string, offset: number) => {
     setScore((prev) => addChordToScoreAt(prev, measureIndex, text, offset));
-  }, []);
+  }, [setScore]);
 
   const handleEditChordText = useCallback((measureIndex: number, chordId: string, text: string) => {
     setScore((prev) => editChordText(prev, measureIndex, chordId, text));
-  }, []);
+  }, [setScore]);
 
   const handleMoveChord = useCallback((measureIndex: number, chordId: string, offset: number) => {
     setScore((prev) => moveChordInScore(prev, measureIndex, chordId, offset));
-  }, []);
+  }, [setScore]);
 
   const handleDeleteChord = useCallback((measureIndex: number, chordId: string) => {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));
-  }, []);
+  }, [setScore]);
 
   const handleAddLyricAt = useCallback((measureIndex: number, text: string, offset: number) => {
     setScore((prev) => addLyricsToScoreAt(prev, measureIndex, text, offset));
-  }, []);
+  }, [setScore]);
 
   const handleEditLyricText = useCallback((measureIndex: number, lyricId: string, text: string) => {
     setScore((prev) => editLyricText(prev, measureIndex, lyricId, text));
-  }, []);
+  }, [setScore]);
 
   const handleMoveLyric = useCallback(
     (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => {
       setScore((prev) => moveLyricInScore(prev, fromMeasureIndex, lyricId, offset, toMeasureIndex));
     },
-    [],
+    [setScore],
   );
 
   const handleDeleteLyric = useCallback((measureIndex: number, lyricId: string) => {
     setScore((prev) => removeLyricFromScore(prev, measureIndex, lyricId));
-  }, []);
+  }, [setScore]);
 
   const handlePlay = useCallback(async () => {
     if (isPlaying) return;
@@ -289,7 +337,7 @@ function App() {
     (filename: string, format: SaveFormat) => {
       setSaveOpen(false);
       if (format === 'json') void saveScoreJson(score, filename);
-      else printScorePdf(filename);
+      else void saveScorePdf(filename);
     },
     [score],
   );
@@ -302,7 +350,7 @@ function App() {
         setFocusedMeasureIndex(null);
       })
       .catch(() => window.alert('악보 파일을 읽을 수 없습니다.'));
-  }, []);
+  }, [setScore]);
 
   const selectedNote = selected ? score.measures[selected.measureIndex][selected.clef].notes[selected.noteIndex] : null;
 

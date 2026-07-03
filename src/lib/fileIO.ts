@@ -77,21 +77,71 @@ export async function saveScoreJson(score: Score, filename?: string): Promise<vo
   downloadBlob(blob, `${base}.json`);
 }
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = src;
+  });
+}
+
 /**
- * Saves the score as a PDF via the browser's print dialog. A print-only
- * stylesheet (see App.css) shows just the staff; setting the document title
- * pre-fills the PDF's default filename in the OS/browser save sheet — which is
- * also how it works on iOS Safari ("공유 → PDF로 저장").
+ * Renders the on-screen score SVG to a PDF (via an offscreen canvas raster,
+ * so it doesn't depend on the browser having the printed fonts installed)
+ * and saves it through the same native "Save As" dialog as JSON — falling
+ * back to a plain download where the File System Access API isn't available.
  */
-export function printScorePdf(filename: string): void {
-  const previous = document.title;
-  document.title = filename.replace(/\.pdf$/i, '') || 'score';
-  const restore = () => {
-    document.title = previous;
-    window.removeEventListener('afterprint', restore);
-  };
-  window.addEventListener('afterprint', restore);
-  window.print();
+export async function saveScorePdf(filename?: string): Promise<void> {
+  const svg = document.querySelector<SVGSVGElement>('.staff-container svg');
+  if (!svg) return;
+  const width = Number(svg.getAttribute('width')) || svg.clientWidth;
+  const height = Number(svg.getAttribute('height')) || svg.clientHeight;
+  const svgString = new XMLSerializer().serializeToString(svg);
+  const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
+
+  try {
+    const img = await loadImage(svgUrl);
+    const scale = 2; // rasterize at 2x for a crisper PDF
+    const canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const pngDataUrl = canvas.toDataURL('image/png');
+
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF({
+      orientation: width >= height ? 'landscape' : 'portrait',
+      unit: 'pt',
+      format: [width, height],
+    });
+    doc.addImage(pngDataUrl, 'PNG', 0, 0, width, height);
+    const blob = doc.output('blob');
+
+    const base = (filename || 'score').replace(/\.pdf$/i, '');
+    if (hasNativeSavePicker()) {
+      try {
+        const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
+        const handle = await showSaveFilePicker({
+          suggestedName: `${base}.pdf`,
+          types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+      }
+    }
+    downloadBlob(blob, `${base}.pdf`);
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
 }
 
 export function readScoreFile(file: File): Promise<Score> {
