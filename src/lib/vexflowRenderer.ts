@@ -42,6 +42,14 @@ const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
 /** Vertical space reserved at the very top for the centered title/composer. */
 const TITLE_BAND = 48;
+const OVERFLOW_MARK_RADIUS = 8;
+/** Extra slack added to the overflow marker's hit-test so a small marker is still easy to hover/tap. */
+const OVERFLOW_HIT_SLACK = 8;
+const CONNECT_HANDLE_RADIUS = 7;
+const CONNECT_HANDLE_HIT_SLACK = 8;
+/** Offset of the connector handle from the selected note's topmost pitch. */
+const CONNECT_HANDLE_DX = 15;
+const CONNECT_HANDLE_DY = 16;
 
 export interface NoteHitbox {
   measureIndex: number;
@@ -109,6 +117,23 @@ export interface LyricHitbox {
   measureWidth: number;
 }
 
+export interface OverflowHitbox {
+  measureIndex: number;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/** Small draggable handle shown on the selected note, for connecting it to an arbitrary other note. */
+export interface ConnectHandle {
+  measureIndex: number;
+  clef: Clef;
+  noteIndex: number;
+  x: number;
+  y: number;
+  radius: number;
+}
+
 export interface RenderResult {
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
@@ -116,6 +141,8 @@ export interface RenderResult {
   chordBandHitboxes: ChordBandHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
+  overflowHitboxes: OverflowHitbox[];
+  connectHandle: ConnectHandle | null;
   width: number;
   height: number;
 }
@@ -138,6 +165,7 @@ function buildStaveNotes(
   notes: NoteEvent[],
   selected: NoteLocation | null,
   hiddenNoteIndex: number | null,
+  playingNoteIndex: number | null,
 ): StaveNote[] {
   return notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY[clef]] : note.pitches.map(pitchToVexKey);
@@ -160,12 +188,18 @@ function buildStaveNotes(
       });
     }
 
+    // During playback the currently-sounding note is recolored the same red
+    // as a selection (real VexFlow styling, so it's pixel-perfectly aligned —
+    // never a separately-computed overlay position). `selected` itself is
+    // passed as null by the caller while playing, so old selections don't
+    // also show red at the same time.
     const isSelected =
       selected &&
       selected.measureIndex === measureIndex &&
       selected.clef === clef &&
       selected.noteIndex === noteIndex;
-    if (isSelected) {
+    const isPlaying = playingNoteIndex === noteIndex;
+    if (isSelected || isPlaying) {
       staveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
     }
     if (hiddenNoteIndex === noteIndex) {
@@ -187,7 +221,11 @@ export function renderScore(
   score: Score,
   selected: NoteLocation | null,
   draggingNote: DraggingNote | null,
+  playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
 ): RenderResult {
+  // While playing, the sounding note is recolored instead of any selection —
+  // so a prior selection doesn't also show red at the same time.
+  const effectiveSelected = playingLocations ? null : selected;
   container.innerHTML = '';
 
   const rows = computeRows(score.measures.length, score.lineBreaks, MEASURES_PER_ROW);
@@ -210,7 +248,7 @@ export function renderScore(
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
-  const overflowMarks: { x: number; y: number }[] = [];
+  const overflowHitboxes: OverflowHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -218,6 +256,9 @@ export function renderScore(
   // and rows), used after the layout pass to connect ties/slurs between
   // consecutive notes — including across a barline or a line break.
   const noteChain: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
+  // Every note by id (any clef/measure), for connections dragged onto an
+  // arbitrary target rather than just "the next note".
+  const noteById = new Map<string, { event: NoteEvent; staveNote: StaveNote }>();
 
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * ROW_HEIGHT + titleBand;
@@ -272,7 +313,10 @@ export function renderScore(
           draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === clef
             ? draggingNote.noteIndex
             : null;
-        const staveNotes = buildStaveNotes(clef, measureIndex, notes, selected, hiddenNoteIndex);
+        const playingLoc = playingLocations?.[clef];
+        const playingNoteIndex =
+          playingLoc && playingLoc.measureIndex === measureIndex && playingLoc.clef === clef ? playingLoc.noteIndex : null;
+        const staveNotes = buildStaveNotes(clef, measureIndex, notes, effectiveSelected, hiddenNoteIndex, playingNoteIndex);
 
         const refY0 = stave.getYForNote(0);
         const spacing = refY0 - stave.getYForNote(1);
@@ -337,6 +381,7 @@ export function renderScore(
               ys,
             });
             noteChain[clef].push({ event: note, staveNote: sn });
+            noteById.set(note.id, { event: note, staveNote: sn });
           });
         }
 
@@ -392,7 +437,7 @@ export function renderScore(
         isStaffMeasureOverflow(measure.treble, score.timeSignature) ||
         isStaffMeasureOverflow(measure.bass, score.timeSignature)
       ) {
-        overflowMarks.push({ x: x + measureWidth - 12, y: trebleY - 14 });
+        overflowHitboxes.push({ measureIndex, x: x + measureWidth - 12, y: trebleY - 14, radius: OVERFLOW_MARK_RADIUS });
       }
 
       // Rows now wrap automatically every MEASURES_PER_ROW measures (see
@@ -422,13 +467,58 @@ export function renderScore(
     }
   });
 
+  // Connections dragged onto an arbitrary target note (not necessarily "the
+  // next note") — see the on-staff connector handle in StaffEditor.
+  (['treble', 'bass'] as const).forEach((clef) => {
+    noteChain[clef].forEach((cur) => {
+      const targetId = cur.event.connectToId;
+      if (!targetId || cur.event.isRest) return;
+      const target = noteById.get(targetId);
+      if (!target || target.event.isRest) return;
+      try {
+        if (pitchesMatch(cur.event, target.event)) {
+          new StaveTie({ firstNote: cur.staveNote, lastNote: target.staveNote }).setContext(context).draw();
+        } else {
+          new Curve(cur.staveNote, target.staveNote, {}).setContext(context).draw();
+        }
+      } catch {
+        // Skip connections VexFlow can't render.
+      }
+    });
+  });
+
+  // Connector handle on the selected note (hidden during playback, since
+  // effectiveSelected is null then) — dragging it onto another note connects
+  // the two with a tie/slur, regardless of their sequence order.
+  let connectHandle: ConnectHandle | null = null;
+  if (effectiveSelected) {
+    const hb = noteHitboxes.find(
+      (n) =>
+        n.measureIndex === effectiveSelected.measureIndex &&
+        n.clef === effectiveSelected.clef &&
+        n.noteIndex === effectiveSelected.noteIndex,
+    );
+    const note = score.measures[effectiveSelected.measureIndex]?.[effectiveSelected.clef].notes[effectiveSelected.noteIndex];
+    if (hb && note && !note.isRest) {
+      connectHandle = {
+        measureIndex: effectiveSelected.measureIndex,
+        clef: effectiveSelected.clef,
+        noteIndex: effectiveSelected.noteIndex,
+        x: hb.centerX + CONNECT_HANDLE_DX,
+        y: Math.min(...hb.ys) - CONNECT_HANDLE_DY,
+        radius: CONNECT_HANDLE_RADIUS,
+      };
+    }
+  }
+
   const svg = container.querySelector('svg');
   if (svg) {
     if (hasHeading) drawHeading(svg, score, width);
     drawChordLabels(svg, score, chordHitboxes);
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
-    drawOverflowMarks(svg, overflowMarks);
+    drawOverflowMarks(svg, overflowHitboxes);
+    if (connectHandle) drawConnectHandle(svg, connectHandle);
   }
 
   return {
@@ -437,7 +527,9 @@ export function renderScore(
     chordHitboxes,
     chordBandHitboxes,
     lineBreakHitboxes,
+    overflowHitboxes,
     lyricHitboxes,
+    connectHandle,
     width,
     height,
   };
@@ -474,7 +566,8 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
   });
 }
 
-function drawOverflowMarks(svg: SVGSVGElement, marks: { x: number; y: number }[]): void {
+/** White marker (red outline + red "!") so it stands out clearly against the staff. */
+function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
   marks.forEach((m) => {
     const g = document.createElementNS(SVG_NS, 'g');
     const title = document.createElementNS(SVG_NS, 'title');
@@ -483,20 +576,40 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: { x: number; y: number }[]
     const circle = document.createElementNS(SVG_NS, 'circle');
     circle.setAttribute('cx', String(m.x));
     circle.setAttribute('cy', String(m.y));
-    circle.setAttribute('r', '7');
-    circle.setAttribute('fill', '#e03131');
+    circle.setAttribute('r', String(m.radius));
+    circle.setAttribute('fill', '#ffffff');
+    circle.setAttribute('stroke', '#e03131');
+    circle.setAttribute('stroke-width', '2');
     g.appendChild(circle);
     const bang = document.createElementNS(SVG_NS, 'text');
     bang.setAttribute('x', String(m.x));
     bang.setAttribute('y', String(m.y + 4));
     bang.setAttribute('text-anchor', 'middle');
-    bang.setAttribute('font-size', '11');
-    bang.setAttribute('font-weight', '700');
-    bang.setAttribute('fill', '#fff');
+    bang.setAttribute('font-size', '12');
+    bang.setAttribute('font-weight', '800');
+    bang.setAttribute('fill', '#e03131');
     bang.textContent = '!';
     g.appendChild(bang);
     svg.appendChild(g);
   });
+}
+
+/** Small filled handle on the selected note — drag it onto another note to tie/slur the two. */
+function drawConnectHandle(svg: SVGSVGElement, handle: ConnectHandle): void {
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('id', 'connect-handle');
+  const title = document.createElementNS(SVG_NS, 'title');
+  title.textContent = '드래그해서 다른 음표와 연결';
+  g.appendChild(title);
+  const circle = document.createElementNS(SVG_NS, 'circle');
+  circle.setAttribute('cx', String(handle.x));
+  circle.setAttribute('cy', String(handle.y));
+  circle.setAttribute('r', String(handle.radius));
+  circle.setAttribute('fill', '#2f9e44');
+  circle.setAttribute('stroke', '#fff');
+  circle.setAttribute('stroke-width', '1.5');
+  g.appendChild(circle);
+  svg.appendChild(g);
 }
 
 function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordHitbox[]): void {
@@ -619,4 +732,23 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {
   return result.lyricHitboxes.find((l) => Math.abs(l.x - x) < l.halfWidth && Math.abs(l.y - y) < 12) ?? null;
+}
+
+export function findOverflowMarkAt(result: RenderResult, x: number, y: number): OverflowHitbox | null {
+  return (
+    result.overflowHitboxes.find((m) => Math.hypot(m.x - x, m.y - y) < m.radius + OVERFLOW_HIT_SLACK) ?? null
+  );
+}
+
+export function findConnectHandleAt(result: RenderResult, x: number, y: number): ConnectHandle | null {
+  const h = result.connectHandle;
+  if (!h) return null;
+  return Math.hypot(h.x - x, h.y - y) < h.radius + CONNECT_HANDLE_HIT_SLACK ? h : null;
+}
+
+/** Hit-test any note (including chord members), used to resolve a connect-drag drop target. */
+export function findNoteAt(result: RenderResult, x: number, y: number): NoteHitbox | null {
+  return (
+    result.noteHitboxes.find((n) => Math.abs(n.centerX - x) < 14 && n.ys.some((ny) => Math.abs(ny - y) < 18)) ?? null
+  );
 }

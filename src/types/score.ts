@@ -30,6 +30,13 @@ export interface NoteEvent {
   /** @deprecated Legacy slur flag, migrated to connectToNext on load. */
   slurToNext?: boolean;
   /**
+   * Connects to an arbitrary other note (by id), set by dragging the small
+   * connector handle that appears on a selected note onto the target — for
+   * chords or out-of-sequence notes where "the next note" isn't the one you
+   * want. Takes precedence over connectToNext when both are somehow set.
+   */
+  connectToId?: string;
+  /**
    * Free horizontal position within the measure's note area, 0 (start)..1 (end).
    * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
    * measure is filled to the time signature's capacity. Undefined = auto layout.

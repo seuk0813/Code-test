@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { hasNativeSavePicker } from '../lib/fileIO';
 
 export type SaveFormat = 'pdf' | 'json';
 
@@ -52,15 +53,19 @@ export function SaveDialog({ defaultName, onCancel, onSave }: SaveDialogProps) {
             <label className={format === 'pdf' ? 'format-option active' : 'format-option'}>
               <input type="radio" name="save-format" checked={format === 'pdf'} onChange={() => setFormat('pdf')} />
               <strong>PDF</strong>
-              <em>악보 이미지로 저장 · 인쇄/공유용</em>
+              <em>인쇄·공유용 이미지</em>
             </label>
             <label className={format === 'json' ? 'format-option active' : 'format-option'}>
               <input type="radio" name="save-format" checked={format === 'json'} onChange={() => setFormat('json')} />
               <strong>JSON</strong>
-              <em>다시 불러와 편집할 수 있는 저장 파일</em>
+              <em>편집용 저장 파일</em>
             </label>
           </div>
         </div>
+
+        {format === 'json' && hasNativeSavePicker() && (
+          <p className="modal-hint">저장 위치를 직접 고를 수 있는 창이 뜹니다.</p>
+        )}
 
         <div className="modal-actions">
           <button onClick={onCancel}>취소</button>

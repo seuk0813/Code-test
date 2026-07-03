@@ -141,16 +141,62 @@ export function clearGhost(svg: SVGSVGElement | null): void {
   renderGhost(svg, null);
 }
 
+const TOOLTIP_GROUP_ID = 'tooltip-overlay-group';
+
+/**
+ * A small custom hover/tap tooltip, used instead of the native SVG <title>
+ * (which is slow to appear and easy to miss on a tiny marker) — e.g. the
+ * "measure is full" warning.
+ */
+export function renderTooltip(svg: SVGSVGElement | null, spec: { x: number; y: number; text: string } | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${TOOLTIP_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', TOOLTIP_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!spec) return;
+
+  const paddingX = 8;
+  const charWidth = 7.2;
+  const w = spec.text.length * charWidth + paddingX * 2;
+  const h = 24;
+  const x = spec.x - w / 2;
+  const y = spec.y - h - 10;
+
+  group.appendChild(el('rect', { x, y, width: w, height: h, rx: 5, fill: '#2b2b2b', opacity: 0.94 }));
+  const text = el('text', {
+    x: spec.x,
+    y: y + h / 2 + 4,
+    'text-anchor': 'middle',
+    'font-size': 12,
+    fill: '#fff',
+  });
+  text.textContent = spec.text;
+  group.appendChild(text);
+}
+
+export function clearTooltip(svg: SVGSVGElement | null): void {
+  renderTooltip(svg, null);
+}
+
 const PLAYBACK_GROUP_ID = 'playback-overlay-group';
 
 export interface PlaybackVisual {
-  /** Vertical playhead bars (one per staff being played). */
+  /** Vertical playhead bars (one per staff being played), snapped exactly to the sounding note's real X — never interpolated, so it can't drift out of alignment. */
   bars: { x: number; y0: number; y1: number }[];
-  /** Noteheads currently sounding, drawn red on top of the black note. */
-  highlights: { cx: number; cy: number }[];
 }
 
-/** Draws the playback playhead bars and red note highlights on the overlay SVG. */
+/**
+ * Draws only the playback playhead bars. The "currently sounding" note
+ * highlight itself is NOT drawn here — it's rendered by recoloring the real
+ * VexFlow note (same styling path as note selection) in renderScore, so it
+ * is pixel-perfectly aligned by construction instead of relying on a
+ * separately-computed overlay position.
+ */
 export function renderPlayback(svg: SVGSVGElement | null, visual: PlaybackVisual | null): void {
   if (!svg) return;
   let group = svg.querySelector<SVGGElement>(`#${PLAYBACK_GROUP_ID}`);
@@ -165,16 +211,53 @@ export function renderPlayback(svg: SVGSVGElement | null, visual: PlaybackVisual
 
   visual.bars.forEach((b) => {
     group!.appendChild(
-      el('line', { x1: b.x, y1: b.y0, x2: b.x, y2: b.y1, stroke: '#e03131', 'stroke-width': 2, opacity: 0.75 }),
-    );
-  });
-  visual.highlights.forEach((h) => {
-    group!.appendChild(
-      el('ellipse', { cx: h.cx, cy: h.cy, rx: 6.2, ry: 4.8, transform: `rotate(-18 ${h.cx} ${h.cy})`, fill: '#e03131' }),
+      el('line', { x1: b.x, y1: b.y0, x2: b.x, y2: b.y1, stroke: '#e03131', 'stroke-width': 2, opacity: 0.55 }),
     );
   });
 }
 
 export function clearPlayback(svg: SVGSVGElement | null): void {
   renderPlayback(svg, null);
+}
+
+const CONNECT_PREVIEW_GROUP_ID = 'connect-preview-overlay-group';
+
+/**
+ * Live curve preview drawn while dragging from a note's connector handle to
+ * another note — follows the cursor until dropped. `snapped` (hovering a
+ * valid target) draws a solid green line; otherwise a dashed grey one.
+ */
+export function renderConnectPreview(
+  svg: SVGSVGElement | null,
+  spec: { x0: number; y0: number; x1: number; y1: number; snapped: boolean } | null,
+): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${CONNECT_PREVIEW_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', CONNECT_PREVIEW_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!spec) return;
+
+  const { x0, y0, x1, y1, snapped } = spec;
+  const midY = Math.min(y0, y1) - 28;
+  const d = `M ${x0} ${y0} Q ${(x0 + x1) / 2} ${midY} ${x1} ${y1}`;
+  group.appendChild(
+    el('path', {
+      d,
+      fill: 'none',
+      stroke: snapped ? '#2f9e44' : '#adb5bd',
+      'stroke-width': snapped ? 2.5 : 2,
+      'stroke-dasharray': snapped ? '0' : '4 4',
+      opacity: 0.9,
+    }),
+  );
+  group.appendChild(el('circle', { cx: x1, cy: y1, r: 4, fill: snapped ? '#2f9e44' : '#adb5bd', opacity: 0.9 }));
+}
+
+export function clearConnectPreview(svg: SVGSVGElement | null): void {
+  renderConnectPreview(svg, null);
 }

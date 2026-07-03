@@ -10,6 +10,7 @@ import {
   addMeasure,
   addNoteToScore,
   adjacentIndexAfterDelete,
+  connectNoteTo,
   createEmptyScore,
   createNote,
   moveChordInScore,
@@ -25,7 +26,7 @@ import {
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
 import { exportMidi } from './lib/exportMidi';
-import { downloadBlob, downloadScoreJson, loadAutosave, printScorePdf, readScoreFile, saveAutosave } from './lib/fileIO';
+import { downloadBlob, loadAutosave, printScorePdf, readScoreFile, saveAutosave, saveScoreJson } from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
@@ -201,6 +202,10 @@ function App() {
     setScore((prev) => toggleConnectToNext(prev, selected));
   }, [selected]);
 
+  const handleConnectNote = useCallback((source: NoteLocation, targetId: string) => {
+    setScore((prev) => connectNoteTo(prev, source, targetId));
+  }, []);
+
   const handleChordToolChange = useCallback((patch: Partial<ChordTool>) => {
     setChordTool((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -229,9 +234,12 @@ function App() {
     setLyricText('');
   }, [focusedMeasureIndex, lyricText]);
 
-  const handleMoveLyric = useCallback((measureIndex: number, lyricId: string, offset: number) => {
-    setScore((prev) => moveLyricInScore(prev, measureIndex, lyricId, offset));
-  }, []);
+  const handleMoveLyric = useCallback(
+    (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => {
+      setScore((prev) => moveLyricInScore(prev, fromMeasureIndex, lyricId, offset, toMeasureIndex));
+    },
+    [],
+  );
 
   const handleDeleteLyric = useCallback((measureIndex: number, lyricId: string) => {
     setScore((prev) => removeLyricFromScore(prev, measureIndex, lyricId));
@@ -276,7 +284,7 @@ function App() {
   const handleSaveConfirm = useCallback(
     (filename: string, format: SaveFormat) => {
       setSaveOpen(false);
-      if (format === 'json') downloadScoreJson(score, filename);
+      if (format === 'json') void saveScoreJson(score, filename);
       else printScorePdf(filename);
     },
     [score],
@@ -357,6 +365,7 @@ function App() {
         onMoveLyric={handleMoveLyric}
         onDeleteLyric={handleDeleteLyric}
         onDeselectNote={handleDeselectNote}
+        onConnectNote={handleConnectNote}
         playbackClock={playbackClock}
       />
       <div className="composer-row">

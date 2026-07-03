@@ -26,9 +26,54 @@ export function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function downloadScoreJson(score: Score, filename?: string): void {
-  const blob = new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' });
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+  types?: { description: string; accept: Record<string, string[]> }[];
+}
+interface FileSystemWritable {
+  write(data: Blob): Promise<void>;
+  close(): Promise<void>;
+}
+interface FileSystemFileHandleLike {
+  createWritable(): Promise<FileSystemWritable>;
+}
+type ShowSaveFilePicker = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandleLike>;
+
+/** Whether the browser supports the native "Save As" file picker (Chrome/Edge desktop). */
+export function hasNativeSavePicker(): boolean {
+  return typeof window !== 'undefined' && 'showSaveFilePicker' in window;
+}
+
+/**
+ * Saves the score as JSON via the OS-native "Save As" dialog when the browser
+ * supports the File System Access API — the user picks the exact folder and
+ * filename, like any desktop program. Falls back to a plain browser download
+ * (goes to the default Downloads folder; the browser doesn't allow JS to pick
+ * a location without that API) on browsers that don't support it (Safari,
+ * Firefox, iOS).
+ */
+export async function saveScoreJson(score: Score, filename?: string): Promise<void> {
   const base = (filename || score.title || 'score').replace(/\.json$/i, '');
+  const blob = new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' });
+
+  if (hasNativeSavePicker()) {
+    try {
+      const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
+      const handle = await showSaveFilePicker({
+        suggestedName: `${base}.json`,
+        types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (err) {
+      // AbortError = user cancelled the picker; don't fall back to a download in that case.
+      if (err instanceof Error && err.name === 'AbortError') return;
+      // Any other failure (e.g. picker unsupported at runtime): fall through to plain download.
+    }
+  }
+
   downloadBlob(blob, `${base}.json`);
 }
 

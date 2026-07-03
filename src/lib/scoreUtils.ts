@@ -344,13 +344,36 @@ export function addLyricsToScore(score: Score, measureIndex: number, text: strin
   return { ...score, measures };
 }
 
-export function moveLyricInScore(score: Score, measureIndex: number, lyricId: string, offset: number): Score {
+/**
+ * Repositions a lyric syllable, optionally moving it into a different measure
+ * (dragging past a measure's edge). When the target measure differs from the
+ * source, the syllable is spliced out of the source's list and appended to
+ * the target's.
+ */
+export function moveLyricInScore(
+  score: Score,
+  fromMeasureIndex: number,
+  lyricId: string,
+  offset: number,
+  toMeasureIndex: number = fromMeasureIndex,
+): Score {
   const clamped = Math.min(0.97, Math.max(0.03, offset));
-  const measures = score.measures.map((m, i) =>
-    i === measureIndex
-      ? { ...m, lyrics: (m.lyrics ?? []).map((l) => (l.id === lyricId ? { ...l, offset: clamped } : l)) }
-      : m,
-  );
+  if (toMeasureIndex === fromMeasureIndex) {
+    const measures = score.measures.map((m, i) =>
+      i === fromMeasureIndex
+        ? { ...m, lyrics: (m.lyrics ?? []).map((l) => (l.id === lyricId ? { ...l, offset: clamped } : l)) }
+        : m,
+    );
+    return { ...score, measures };
+  }
+  const source = score.measures[fromMeasureIndex]?.lyrics ?? [];
+  const syllable = source.find((l) => l.id === lyricId);
+  if (!syllable) return score;
+  const measures = score.measures.map((m, i) => {
+    if (i === fromMeasureIndex) return { ...m, lyrics: source.filter((l) => l.id !== lyricId) };
+    if (i === toMeasureIndex) return { ...m, lyrics: [...(m.lyrics ?? []), { ...syllable, offset: clamped }] };
+    return m;
+  });
   return { ...score, measures };
 }
 
@@ -493,6 +516,34 @@ export function toggleConnectToNext(score: Score, location: NoteLocation): Score
     connectToNext: !noteConnects(note),
     tieToNext: false,
     slurToNext: false,
+    connectToId: undefined,
+  }));
+}
+
+/**
+ * Connects a note to an arbitrary other note (by id) — set by dragging the
+ * connector handle onto a target, for chords or out-of-sequence notes where
+ * "the next note" isn't the one you want. Clears the sequential flag so the
+ * two mechanisms don't fight over rendering the same note.
+ */
+export function connectNoteTo(score: Score, source: NoteLocation, targetId: string): Score {
+  return updateNoteInScore(score, source, (note) => ({
+    ...note,
+    connectToId: targetId,
+    connectToNext: false,
+    tieToNext: false,
+    slurToNext: false,
+  }));
+}
+
+/** Removes any connection (sequential or arbitrary-target) from a note. */
+export function clearNoteConnection(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => ({
+    ...note,
+    connectToNext: false,
+    tieToNext: false,
+    slurToNext: false,
+    connectToId: undefined,
   }));
 }
 

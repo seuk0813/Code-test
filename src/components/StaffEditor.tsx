@@ -3,9 +3,12 @@ import type { Accidental, Clef, DurationValue, NoteLocation, Score } from '../ty
 import {
   findChordAt,
   findChordBandAt,
+  findConnectHandleAt,
   findInsertIndex,
   findLineBreakAt,
   findLyricAt,
+  findNoteAt,
+  findOverflowMarkAt,
   findStaffAt,
   lineAt,
   renderScore,
@@ -25,7 +28,17 @@ import {
   pitchToLine,
   stemPointsUp,
 } from '../lib/scoreUtils';
-import { clearGhost, clearPlayback, ledgerLinePositions, renderGhost, renderPlayback } from '../lib/ghostOverlay';
+import {
+  clearConnectPreview,
+  clearGhost,
+  clearPlayback,
+  clearTooltip,
+  ledgerLinePositions,
+  renderConnectPreview,
+  renderGhost,
+  renderPlayback,
+  renderTooltip,
+} from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
 const DRAG_THRESHOLD_PX = 4;
@@ -60,17 +73,26 @@ interface StaffEditorProps {
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
   onDeleteChord: (measureIndex: number, chordId: string) => void;
-  onMoveLyric: (measureIndex: number, lyricId: string, offset: number) => void;
+  onMoveLyric: (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => void;
   onDeleteLyric: (measureIndex: number, lyricId: string) => void;
   onDeselectNote: () => void;
+  /** Dragging the connector handle onto another note connects them with a tie/slur. */
+  onConnectNote: (source: NoteLocation, targetId: string) => void;
   /** When playing, a clock returning elapsed transport seconds (drives the playhead). */
   playbackClock: { get: () => number } | null;
 }
 
-/** A chord symbol or lyric syllable being dragged horizontally within its measure. */
+/**
+ * A chord symbol or lyric syllable being dragged horizontally. Chord symbols
+ * stay within their origin measure; lyric syllables can cross into an
+ * adjacent measure, so `measureIndex` tracks the currently-hovered measure
+ * while `originMeasureIndex` remembers where the drag started (needed to
+ * splice the syllable out of the right source array on commit).
+ */
 interface SymbolDrag {
   kind: 'chordSymbol' | 'lyric';
   measureIndex: number;
+  originMeasureIndex: number;
   id: string;
   measureX: number;
   measureWidth: number;
@@ -78,6 +100,14 @@ interface SymbolDrag {
   startX: number;
   moved: boolean;
   pendingOffset: number;
+}
+
+/** Dragging the small connector handle on a selected note onto another note to tie/slur them. */
+interface ConnectDrag {
+  kind: 'connectDrag';
+  source: NoteLocation;
+  x0: number;
+  y0: number;
 }
 
 /** Mouse press gesture in progress on the staff. */
@@ -99,6 +129,7 @@ type MouseGesture =
       cycleDuration: DurationValue;
     }
   | SymbolDrag
+  | ConnectDrag
   | null;
 
 /** A touch tap-to-preview placement waiting for a confirming second tap. */
@@ -137,6 +168,7 @@ type TouchGesture =
       cycleDuration: DurationValue;
     }
   | SymbolDrag
+  | ConnectDrag
   | null;
 
 export function StaffEditor({
@@ -156,6 +188,7 @@ export function StaffEditor({
   onMoveLyric,
   onDeleteLyric,
   onDeselectNote,
+  onConnectNote,
   playbackClock,
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -172,22 +205,33 @@ export function StaffEditor({
   const touchHoldRef = useRef<number | null>(null);
   const playbackRafRef = useRef<number | null>(null);
 
+  // The currently-sounding note per staff during playback (null when playing
+  // a rest, or when not playing at all). Recoloring the real VexFlow note via
+  // this — rather than a separately-computed overlay position — is what
+  // guarantees the highlight is always pixel-perfectly aligned with the note.
+  const [playingLocations, setPlayingLocations] = useState<{ treble: NoteLocation | null; bass: NoteLocation | null } | null>(
+    null,
+  );
+
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote);
+    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
       overlayRef.current.setAttribute('height', String(result.height));
       overlayRef.current.setAttribute('viewBox', `0 0 ${result.width} ${result.height}`);
     }
-  }, [score, selected, draggingNote]);
+  }, [score, selected, draggingNote, playingLocations]);
 
-  // Playback playhead: a red bar per staff sweeps across the notes in time, and
-  // the note currently sounding in each staff is highlighted red.
+  // Playback playhead: a red bar per staff, snapped exactly to the real X of
+  // the currently-sounding note (never interpolated — that's what previously
+  // let the bar drift out of alignment). The note-recolor state only updates
+  // when the sounding note actually changes, so this rAF loop stays cheap.
   useEffect(() => {
     if (!playbackClock) {
       clearPlayback(overlayRef.current);
+      setPlayingLocations(null);
       return;
     }
     const secondsPerBeat = 60 / score.tempo;
@@ -197,9 +241,9 @@ export function StaffEditor({
       startBeat: number;
       endBeat: number;
       x: number;
-      ys: number[];
       isRest: boolean;
       measureIndex: number;
+      noteIndex: number;
     }
     const buildTimeline = (clef: Clef): Seg[] => {
       const result = renderResultRef.current;
@@ -212,19 +256,22 @@ export function StaffEditor({
           const hb = result.noteHitboxes.find(
             (n) => n.measureIndex === measureIndex && n.clef === clef && n.noteIndex === noteIndex,
           );
-          if (hb) segs.push({ startBeat: beat, endBeat: beat + dur, x: hb.centerX, ys: hb.ys, isRest: note.isRest, measureIndex });
+          if (hb) segs.push({ startBeat: beat, endBeat: beat + dur, x: hb.centerX, isRest: note.isRest, measureIndex, noteIndex });
           beat += dur;
         });
       });
       return segs;
     };
     const timelines: Record<Clef, Seg[]> = { treble: buildTimeline('treble'), bass: buildTimeline('bass') };
+    const lastLocRef: { current: { treble: NoteLocation | null; bass: NoteLocation | null } } = {
+      current: { treble: null, bass: null },
+    };
 
     const tick = () => {
       const result = renderResultRef.current;
       const beats = playbackClock.get() / secondsPerBeat;
       const bars: { x: number; y0: number; y1: number }[] = [];
-      const highlights: { cx: number; cy: number }[] = [];
+      const nextLoc: { treble: NoteLocation | null; bass: NoteLocation | null } = { treble: null, bass: null };
       (['treble', 'bass'] as const).forEach((clef) => {
         const segs = timelines[clef];
         const idx = segs.findIndex((s) => beats >= s.startBeat && beats < s.endBeat);
@@ -232,14 +279,20 @@ export function StaffEditor({
         const seg = segs[idx];
         const staff = result.staffHitboxes.find((s) => s.measureIndex === seg.measureIndex && s.clef === clef);
         if (!staff) return;
-        const next = segs[idx + 1];
-        const progress = (beats - seg.startBeat) / Math.max(1e-6, seg.endBeat - seg.startBeat);
-        // Sweep toward the next note only when it sits to the right in the same row.
-        const barX = next && next.x > seg.x ? seg.x + (next.x - seg.x) * progress : seg.x;
-        bars.push({ x: barX, y0: staff.refY0 - staff.spacing * 5.4, y1: staff.refY0 - staff.spacing * 0.6 });
-        if (!seg.isRest) seg.ys.forEach((cy) => highlights.push({ cx: seg.x, cy }));
+        bars.push({ x: seg.x, y0: staff.refY0 - staff.spacing * 5.4, y1: staff.refY0 - staff.spacing * 0.6 });
+        if (!seg.isRest) nextLoc[clef] = { measureIndex: seg.measureIndex, clef, noteIndex: seg.noteIndex };
       });
-      renderPlayback(overlayRef.current, { bars, highlights });
+      renderPlayback(overlayRef.current, { bars });
+
+      const changed =
+        nextLoc.treble?.noteIndex !== lastLocRef.current.treble?.noteIndex ||
+        nextLoc.treble?.measureIndex !== lastLocRef.current.treble?.measureIndex ||
+        nextLoc.bass?.noteIndex !== lastLocRef.current.bass?.noteIndex ||
+        nextLoc.bass?.measureIndex !== lastLocRef.current.bass?.measureIndex;
+      if (changed) {
+        lastLocRef.current = nextLoc;
+        setPlayingLocations(nextLoc);
+      }
       playbackRafRef.current = requestAnimationFrame(tick);
     };
     playbackRafRef.current = requestAnimationFrame(tick);
@@ -248,6 +301,7 @@ export function StaffEditor({
       if (playbackRafRef.current !== null) cancelAnimationFrame(playbackRafRef.current);
       playbackRafRef.current = null;
       clearPlayback(overlayRef.current);
+      setPlayingLocations(null);
     };
   }, [playbackClock, score]);
 
@@ -280,6 +334,18 @@ export function StaffEditor({
     if (!hit) return null;
     const note = score.measures[measureIndex][clef].notes[hit.noteIndex];
     return note && !note.isRest ? hit.noteIndex : null;
+  };
+
+  /** Resolve a valid tie/slur drop target (a different, non-rest note) under a point, else null. */
+  const connectTargetAt = (result: RenderResult, source: NoteLocation, x: number, y: number) => {
+    const hit = findNoteAt(result, x, y);
+    if (!hit) return null;
+    if (hit.measureIndex === source.measureIndex && hit.clef === source.clef && hit.noteIndex === source.noteIndex) {
+      return null;
+    }
+    const note = score.measures[hit.measureIndex]?.[hit.clef]?.notes[hit.noteIndex];
+    if (!note || note.isRest) return null;
+    return { location: { measureIndex: hit.measureIndex, clef: hit.clef, noteIndex: hit.noteIndex } as NoteLocation, id: note.id };
   };
 
   const renderAddGhost = (staff: StaffHitbox, x: number, line: number, duration: DurationValue, isChord: boolean) => {
@@ -358,10 +424,23 @@ export function StaffEditor({
     return (measure.lyrics ?? []).find((l) => l.id === drag.id)?.text ?? '';
   };
 
-  const updateSymbolDrag = (drag: SymbolDrag, pointX: number) => {
-    if (!drag.moved && Math.abs(pointX - drag.startX) < DRAG_THRESHOLD_PX) return;
+  const updateSymbolDrag = (drag: SymbolDrag, point: { x: number; y: number }) => {
+    if (!drag.moved && Math.abs(point.x - drag.startX) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
-    const offset = Math.min(0.97, Math.max(0.03, (pointX - drag.measureX) / drag.measureWidth));
+
+    // Lyrics can cross into whichever measure the finger/cursor is currently
+    // over; chord symbols stay confined to their origin measure.
+    if (drag.kind === 'lyric') {
+      const result = renderResultRef.current;
+      const staff = result && findStaffAt(result, point.x, drag.y);
+      if (staff && staff.measureIndex !== drag.measureIndex) {
+        drag.measureIndex = staff.measureIndex;
+        drag.measureX = staff.x0;
+        drag.measureWidth = staff.x1 - staff.x0;
+      }
+    }
+
+    const offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
     drag.pendingOffset = offset;
     renderGhost(overlayRef.current, {
       kind: 'chord',
@@ -376,7 +455,7 @@ export function StaffEditor({
   const commitSymbolDrag = (drag: SymbolDrag) => {
     if (!drag.moved) return;
     if (drag.kind === 'chordSymbol') onMoveChord(drag.measureIndex, drag.id, drag.pendingOffset);
-    else onMoveLyric(drag.measureIndex, drag.id, drag.pendingOffset);
+    else onMoveLyric(drag.originMeasureIndex, drag.id, drag.pendingOffset, drag.measureIndex);
   };
 
   const chordDragFrom = (hit: { measureIndex: number; chordId: string; x: number; y: number }): SymbolDrag => {
@@ -385,6 +464,7 @@ export function StaffEditor({
     return {
       kind: 'chordSymbol',
       measureIndex: hit.measureIndex,
+      originMeasureIndex: hit.measureIndex,
       id: hit.chordId,
       measureX: band?.measureX ?? hit.x,
       measureWidth: band?.measureWidth ?? 200,
@@ -398,6 +478,7 @@ export function StaffEditor({
   const lyricDragFrom = (hit: LyricHitbox): SymbolDrag => ({
     kind: 'lyric',
     measureIndex: hit.measureIndex,
+    originMeasureIndex: hit.measureIndex,
     id: hit.lyricId,
     measureX: hit.measureX,
     measureWidth: hit.measureWidth,
@@ -417,7 +498,13 @@ export function StaffEditor({
     if (!point) return;
 
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
-      updateSymbolDrag(gesture, point.x);
+      updateSymbolDrag(gesture, point);
+      return;
+    }
+
+    if (gesture.kind === 'connectDrag') {
+      const target = connectTargetAt(result, gesture.source, point.x, point.y);
+      renderConnectPreview(overlayRef.current, { x0: gesture.x0, y0: gesture.y0, x1: point.x, y1: point.y, snapped: !!target });
       return;
     }
 
@@ -459,6 +546,16 @@ export function StaffEditor({
       commitSymbolDrag(gesture);
       suppressClickRef.current = gesture.moved;
       clearGhost(overlayRef.current);
+      return;
+    }
+
+    if (gesture.kind === 'connectDrag') {
+      clearConnectPreview(overlayRef.current);
+      suppressClickRef.current = true;
+      if (point) {
+        const target = connectTargetAt(result, gesture.source, point.x, point.y);
+        if (target) onConnectNote(gesture.source, target.id);
+      }
       return;
     }
 
@@ -528,6 +625,19 @@ export function StaffEditor({
     if (lineBreak) {
       onAddLineBreak(lineBreak.afterMeasureIndex);
       suppressClickRef.current = true;
+      return;
+    }
+
+    const connectHandle = findConnectHandleAt(result, point.x, point.y);
+    if (connectHandle) {
+      mouseGestureRef.current = {
+        kind: 'connectDrag',
+        source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
+        x0: connectHandle.x,
+        y0: connectHandle.y,
+      };
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
     }
 
@@ -609,8 +719,18 @@ export function StaffEditor({
     const point = eventPoint(event);
     if (!result || !point) {
       clearGhost(overlayRef.current);
+      clearTooltip(overlayRef.current);
       return;
     }
+
+    const overflowHit = findOverflowMarkAt(result, point.x, point.y);
+    if (overflowHit) {
+      clearGhost(overlayRef.current);
+      renderTooltip(overlayRef.current, { x: overflowHit.x, y: overflowHit.y, text: '마디가 가득 찼습니다' });
+      return;
+    }
+    clearTooltip(overlayRef.current);
+
     const click = resolveClick(result, point.x, point.y);
     if (click?.type === 'add') {
       const staff = findStaffAt(result, point.x, point.y);
@@ -627,7 +747,10 @@ export function StaffEditor({
   };
 
   const handleMouseLeave = () => {
-    if (!mouseGestureRef.current) clearGhost(overlayRef.current);
+    if (!mouseGestureRef.current) {
+      clearGhost(overlayRef.current);
+      clearTooltip(overlayRef.current);
+    }
   };
 
   const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -716,6 +839,26 @@ export function StaffEditor({
       pendingPreviewRef.current = null;
       clearGhost(overlayRef.current);
       onAddLineBreak(lineBreak.afterMeasureIndex);
+      return;
+    }
+
+    const overflowHit = findOverflowMarkAt(result, point.x, point.y);
+    if (overflowHit) {
+      event.preventDefault();
+      renderTooltip(overlayRef.current, { x: overflowHit.x, y: overflowHit.y, text: '마디가 가득 찼습니다' });
+      window.setTimeout(() => clearTooltip(overlayRef.current), 2000);
+      return;
+    }
+
+    const connectHandle = findConnectHandleAt(result, point.x, point.y);
+    if (connectHandle) {
+      event.preventDefault();
+      touchGestureRef.current = {
+        kind: 'connectDrag',
+        source: { measureIndex: connectHandle.measureIndex, clef: connectHandle.clef, noteIndex: connectHandle.noteIndex },
+        x0: connectHandle.x,
+        y0: connectHandle.y,
+      };
       return;
     }
 
@@ -814,7 +957,14 @@ export function StaffEditor({
 
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       event.preventDefault();
-      updateSymbolDrag(gesture, point.x);
+      updateSymbolDrag(gesture, point);
+      return;
+    }
+
+    if (gesture.kind === 'connectDrag') {
+      event.preventDefault();
+      const target = connectTargetAt(result, gesture.source, point.x, point.y);
+      renderConnectPreview(overlayRef.current, { x0: gesture.x0, y0: gesture.y0, x1: point.x, y1: point.y, snapped: !!target });
       return;
     }
 
@@ -879,6 +1029,15 @@ export function StaffEditor({
       commitSymbolDrag(gesture);
       if (!gesture.moved && gesture.kind === 'chordSymbol') onFocusMeasure(gesture.measureIndex);
       clearGhost(overlayRef.current);
+      return;
+    }
+
+    if (gesture.kind === 'connectDrag') {
+      clearConnectPreview(overlayRef.current);
+      if (point && result) {
+        const target = connectTargetAt(result, gesture.source, point.x, point.y);
+        if (target) onConnectNote(gesture.source, target.id);
+      }
       return;
     }
 
