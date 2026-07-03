@@ -6,18 +6,20 @@ import type { Clef, DurationValue, NoteLocation, Pitch, Score } from './types/sc
 import {
   addChordToScore,
   addLineBreak,
+  addLyricsToScore,
   addMeasure,
   addNoteToScore,
   adjacentIndexAfterDelete,
   createEmptyScore,
   createNote,
   moveChordInScore,
-  parseChordText,
+  moveLyricInScore,
+  noteConnects,
   removeChordFromScore,
+  removeLyricFromScore,
   removeNoteFromScore,
   togglePitchInNote,
-  toggleSlurToNext,
-  toggleTieToNext,
+  toggleConnectToNext,
   updateNoteInScore,
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
@@ -33,6 +35,7 @@ function App() {
   const [selected, setSelected] = useState<NoteLocation | null>(null);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
   const [chordTool, setChordTool] = useState<ChordTool>(DEFAULT_CHORD_TOOL);
+  const [lyricText, setLyricText] = useState('');
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
@@ -181,14 +184,9 @@ function App() {
     setScore((prev) => addMeasure(prev));
   }, []);
 
-  const handleToggleTie = useCallback(() => {
+  const handleToggleConnect = useCallback(() => {
     if (!selected) return;
-    setScore((prev) => toggleTieToNext(prev, selected));
-  }, [selected]);
-
-  const handleToggleSlur = useCallback(() => {
-    if (!selected) return;
-    setScore((prev) => toggleSlurToNext(prev, selected));
+    setScore((prev) => toggleConnectToNext(prev, selected));
   }, [selected]);
 
   const handleChordToolChange = useCallback((patch: Partial<ChordTool>) => {
@@ -196,13 +194,8 @@ function App() {
   }, []);
 
   const handleAddChord = useCallback(() => {
-    if (focusedMeasureIndex === null) return;
-    const parsed = parseChordText(chordTool.text);
-    if (!parsed) {
-      window.alert('코드를 알아볼 수 없습니다. 예: C, Am, G7, Fmaj7, Bm7b5');
-      return;
-    }
-    setScore((prev) => addChordToScore(prev, focusedMeasureIndex, parsed.root, parsed.accidental, parsed.quality));
+    if (focusedMeasureIndex === null || !chordTool.text.trim()) return;
+    setScore((prev) => addChordToScore(prev, focusedMeasureIndex, chordTool.text));
     setChordTool({ text: '' });
   }, [focusedMeasureIndex, chordTool]);
 
@@ -212,6 +205,24 @@ function App() {
 
   const handleDeleteChord = useCallback((measureIndex: number, chordId: string) => {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));
+  }, []);
+
+  const handleLyricToolChange = useCallback((text: string) => {
+    setLyricText(text);
+  }, []);
+
+  const handleAddLyrics = useCallback(() => {
+    if (focusedMeasureIndex === null || !lyricText.trim()) return;
+    setScore((prev) => addLyricsToScore(prev, focusedMeasureIndex, lyricText));
+    setLyricText('');
+  }, [focusedMeasureIndex, lyricText]);
+
+  const handleMoveLyric = useCallback((measureIndex: number, lyricId: string, offset: number) => {
+    setScore((prev) => moveLyricInScore(prev, measureIndex, lyricId, offset));
+  }, []);
+
+  const handleDeleteLyric = useCallback((measureIndex: number, lyricId: string) => {
+    setScore((prev) => removeLyricFromScore(prev, measureIndex, lyricId));
   }, []);
 
   const handlePlay = useCallback(async () => {
@@ -284,11 +295,9 @@ function App() {
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
         onAddMeasure={handleAddMeasure}
-        tieActive={selectedNote?.tieToNext ?? false}
-        slurActive={selectedNote?.slurToNext ?? false}
+        connectActive={selectedNote ? noteConnects(selectedNote) : false}
         canConnect={!!selected && !selectedNote?.isRest}
-        onToggleTie={handleToggleTie}
-        onToggleSlur={handleToggleSlur}
+        onToggleConnect={handleToggleConnect}
         isPlaying={isPlaying}
         onPlay={handlePlay}
         onStop={handleStop}
@@ -298,6 +307,9 @@ function App() {
         onLoadJson={handleLoadJson}
         chordTool={chordTool}
         onChordToolChange={handleChordToolChange}
+        lyricText={lyricText}
+        onLyricToolChange={handleLyricToolChange}
+        onAddLyrics={handleAddLyrics}
         focusedMeasureIndex={focusedMeasureIndex}
         focusedMeasureChordCount={focusedMeasureChordCount}
         onAddChord={handleAddChord}
@@ -321,6 +333,8 @@ function App() {
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
         onDeleteChord={handleDeleteChord}
+        onMoveLyric={handleMoveLyric}
+        onDeleteLyric={handleDeleteLyric}
         onDeselectNote={handleDeselectNote}
       />
     </div>

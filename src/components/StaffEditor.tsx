@@ -5,12 +5,14 @@ import {
   findChordBandAt,
   findInsertIndex,
   findLineBreakAt,
+  findLyricAt,
   findStaffAt,
   lineAt,
   renderScore,
   resolveClick,
   xFractionAt,
   type DraggingNote,
+  type LyricHitbox,
   type RenderResult,
   type StaffHitbox,
 } from '../lib/vexflowRenderer';
@@ -50,7 +52,22 @@ interface StaffEditorProps {
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
   onDeleteChord: (measureIndex: number, chordId: string) => void;
+  onMoveLyric: (measureIndex: number, lyricId: string, offset: number) => void;
+  onDeleteLyric: (measureIndex: number, lyricId: string) => void;
   onDeselectNote: () => void;
+}
+
+/** A chord symbol or lyric syllable being dragged horizontally within its measure. */
+interface SymbolDrag {
+  kind: 'chordSymbol' | 'lyric';
+  measureIndex: number;
+  id: string;
+  measureX: number;
+  measureWidth: number;
+  y: number;
+  startX: number;
+  moved: boolean;
+  pendingOffset: number;
 }
 
 /** Mouse press gesture in progress on the staff. */
@@ -71,14 +88,7 @@ type MouseGesture =
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
     }
-  | {
-      kind: 'chordSymbol';
-      measureIndex: number;
-      chordId: string;
-      startX: number;
-      moved: boolean;
-      pendingOffset: number;
-    }
+  | SymbolDrag
   | null;
 
 /** A touch tap-to-preview placement waiting for a confirming second tap. */
@@ -94,8 +104,20 @@ interface PendingPreview {
 }
 
 type TouchGesture =
-  | { kind: 'newPreview'; cycled: boolean }
-  | { kind: 'confirmPreview' }
+  // First tap on empty space: deferred until touchend so a horizontal swipe
+  // scrolls the score instead of dropping a preview. `scrolling` is set once
+  // the finger moves enough to be a pan.
+  | {
+      kind: 'tapAdd';
+      measureIndex: number;
+      clef: Clef;
+      line: number;
+      x: number;
+      startX: number;
+      startY: number;
+      scrolling: boolean;
+    }
+  | { kind: 'confirmPreview'; cycled: boolean }
   | {
       kind: 'note';
       location: NoteLocation;
@@ -104,6 +126,7 @@ type TouchGesture =
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
     }
+  | SymbolDrag
   | null;
 
 export function StaffEditor({
@@ -120,6 +143,8 @@ export function StaffEditor({
   onAddLineBreak,
   onMoveChord,
   onDeleteChord,
+  onMoveLyric,
+  onDeleteLyric,
   onDeselectNote,
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -242,6 +267,66 @@ export function StaffEditor({
     }
   };
 
+  // --- Chord / lyric symbol dragging (shared by mouse and touch) --------------
+
+  const symbolLabel = (drag: SymbolDrag): string => {
+    const measure = score.measures[drag.measureIndex];
+    if (drag.kind === 'chordSymbol') {
+      const chord = measure.chords.find((c) => c.id === drag.id);
+      return chord ? chordLabel(chord) : '';
+    }
+    return (measure.lyrics ?? []).find((l) => l.id === drag.id)?.text ?? '';
+  };
+
+  const updateSymbolDrag = (drag: SymbolDrag, pointX: number) => {
+    if (!drag.moved && Math.abs(pointX - drag.startX) < DRAG_THRESHOLD_PX) return;
+    drag.moved = true;
+    const offset = Math.min(0.97, Math.max(0.03, (pointX - drag.measureX) / drag.measureWidth));
+    drag.pendingOffset = offset;
+    renderGhost(overlayRef.current, {
+      kind: 'chord',
+      x: drag.measureX + offset * drag.measureWidth,
+      y: drag.y,
+      label: symbolLabel(drag),
+      opacity: 0.7,
+      color: drag.kind === 'chordSymbol' ? '#2f3a8f' : '#333',
+    });
+  };
+
+  const commitSymbolDrag = (drag: SymbolDrag) => {
+    if (!drag.moved) return;
+    if (drag.kind === 'chordSymbol') onMoveChord(drag.measureIndex, drag.id, drag.pendingOffset);
+    else onMoveLyric(drag.measureIndex, drag.id, drag.pendingOffset);
+  };
+
+  const chordDragFrom = (hit: { measureIndex: number; chordId: string; x: number; y: number }): SymbolDrag => {
+    const result = renderResultRef.current!;
+    const band = result.chordBandHitboxes.find((b) => b.measureIndex === hit.measureIndex);
+    return {
+      kind: 'chordSymbol',
+      measureIndex: hit.measureIndex,
+      id: hit.chordId,
+      measureX: band?.measureX ?? hit.x,
+      measureWidth: band?.measureWidth ?? 200,
+      y: hit.y,
+      startX: hit.x,
+      moved: false,
+      pendingOffset: 0,
+    };
+  };
+
+  const lyricDragFrom = (hit: LyricHitbox): SymbolDrag => ({
+    kind: 'lyric',
+    measureIndex: hit.measureIndex,
+    id: hit.lyricId,
+    measureX: hit.measureX,
+    measureWidth: hit.measureWidth,
+    y: hit.y,
+    startX: hit.x,
+    moved: false,
+    pendingOffset: 0,
+  });
+
   // --- Mouse (desktop) interactions -------------------------------------------
 
   const handleDocumentMouseMove = (event: MouseEvent) => {
@@ -251,27 +336,8 @@ export function StaffEditor({
     const point = eventPoint(event);
     if (!point) return;
 
-    if (gesture.kind === 'chordSymbol') {
-      const dx = point.x - gesture.startX;
-      if (!gesture.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
-      gesture.moved = true;
-      const band = result.chordBandHitboxes.find((b) => b.measureIndex === gesture.measureIndex);
-      const chordHitbox = result.chordHitboxes.find(
-        (c) => c.measureIndex === gesture.measureIndex && c.chordId === gesture.chordId,
-      );
-      if (!band) return;
-      const offset = Math.min(0.95, Math.max(0.05, (point.x - band.measureX) / band.measureWidth));
-      gesture.pendingOffset = offset;
-      const chord = score.measures[gesture.measureIndex].chords.find((c) => c.id === gesture.chordId);
-      if (!chord) return;
-      renderGhost(overlayRef.current, {
-        kind: 'chord',
-        x: band.measureX + offset * band.measureWidth,
-        y: chordHitbox?.y ?? band.y0 + 14,
-        label: chordLabel(chord),
-        opacity: 0.7,
-        color: '#2f3a8f',
-      });
+    if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
+      updateSymbolDrag(gesture, point.x);
       return;
     }
 
@@ -309,8 +375,8 @@ export function StaffEditor({
     if (!gesture || !result) return;
     const point = eventPoint(event);
 
-    if (gesture.kind === 'chordSymbol') {
-      if (gesture.moved) onMoveChord(gesture.measureIndex, gesture.chordId, gesture.pendingOffset);
+    if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
+      commitSymbolDrag(gesture);
       suppressClickRef.current = gesture.moved;
       clearGhost(overlayRef.current);
       return;
@@ -324,7 +390,7 @@ export function StaffEditor({
       return;
     }
 
-    // note gesture
+    if (gesture.kind !== 'note') return;
     if (gesture.mode === 'drag') {
       const staff = point
         ? result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef)
@@ -387,14 +453,15 @@ export function StaffEditor({
 
     const chordHit = findChordAt(result, point.x, point.y);
     if (chordHit) {
-      mouseGestureRef.current = {
-        kind: 'chordSymbol',
-        measureIndex: chordHit.measureIndex,
-        chordId: chordHit.chordId,
-        startX: point.x,
-        moved: false,
-        pendingOffset: 0,
-      };
+      mouseGestureRef.current = chordDragFrom(chordHit);
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
+      return;
+    }
+
+    const lyricHit = findLyricAt(result, point.x, point.y);
+    if (lyricHit) {
+      mouseGestureRef.current = lyricDragFrom(lyricHit);
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
@@ -501,6 +568,12 @@ export function StaffEditor({
       return;
     }
 
+    const lyricHit = findLyricAt(result, point.x, point.y);
+    if (lyricHit) {
+      onDeleteLyric(lyricHit.measureIndex, lyricHit.lyricId);
+      return;
+    }
+
     const click = resolveClick(result, point.x, point.y);
     if (click?.type === 'select') {
       onDeleteNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex });
@@ -543,7 +616,9 @@ export function StaffEditor({
       const preview = pendingPreviewRef.current;
       if (!preview) return;
       preview.duration = cycleDurationLonger(preview.duration);
-      if (touchGestureRef.current && touchGestureRef.current.kind === 'newPreview') touchGestureRef.current.cycled = true;
+      if (touchGestureRef.current && touchGestureRef.current.kind === 'confirmPreview') {
+        touchGestureRef.current.cycled = true;
+      }
       renderPendingGhost();
     }, HOLD_CYCLE_MS);
   };
@@ -564,10 +639,18 @@ export function StaffEditor({
       return;
     }
 
+    // Chord symbols and lyrics are grabbable: a stationary tap focuses/does
+    // nothing, a move drags them. Deliberate, so we claim the touch.
     const chordHit = findChordAt(result, point.x, point.y);
     if (chordHit) {
       event.preventDefault();
-      onFocusMeasure(chordHit.measureIndex);
+      touchGestureRef.current = chordDragFrom(chordHit);
+      return;
+    }
+    const lyricHit = findLyricAt(result, point.x, point.y);
+    if (lyricHit) {
+      event.preventDefault();
+      touchGestureRef.current = lyricDragFrom(lyricHit);
       return;
     }
 
@@ -578,15 +661,14 @@ export function StaffEditor({
       return;
     }
 
-    event.preventDefault();
-
-    // Second tap confirming a pending preview?
+    // Second tap confirming a pending preview? (deliberate — claim the touch)
     const preview = pendingPreviewRef.current;
     if (preview) {
       const near =
         Math.abs(point.x - preview.x) < TOUCH_PREVIEW_RADIUS && Math.abs(point.y - preview.y) < TOUCH_PREVIEW_RADIUS;
       if (near) {
-        touchGestureRef.current = { kind: 'confirmPreview' };
+        event.preventDefault();
+        touchGestureRef.current = { kind: 'confirmPreview', cycled: false };
         startPendingHoldCycle();
         return;
       }
@@ -596,6 +678,7 @@ export function StaffEditor({
 
     const click = resolveClick(result, point.x, point.y);
     if (click?.type === 'select') {
+      event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
@@ -612,34 +695,50 @@ export function StaffEditor({
     }
 
     if (click?.type === 'add') {
-      const staff = findStaffAt(result, point.x, point.y);
-      if (!staff) return;
+      // Do NOT preventDefault here: a horizontal swipe from empty space should
+      // scroll the score. We defer creating the preview until touchend, and
+      // cancel it if the finger moves (a pan) in handleTouchMove.
       const snappedLine = Math.round(click.line * 2) / 2;
-      pendingPreviewRef.current = {
+      touchGestureRef.current = {
+        kind: 'tapAdd',
         measureIndex: click.measureIndex,
         clef: click.clef,
-        x: point.x,
-        y: staff.refY0 - snappedLine * staff.spacing,
         line: snappedLine,
-        duration: editTool.duration,
-        chordTarget: chordMergeTargetAt(click.measureIndex, click.clef, point.x),
+        x: point.x,
+        startX: point.x,
+        startY: point.y,
+        scrolling: false,
       };
-      renderPendingGhost();
-      touchGestureRef.current = { kind: 'newPreview', cycled: false };
-      startPendingHoldCycle();
       return;
     }
 
-    onDeselectNote();
+    // Empty area (no staff): let the browser scroll; don't claim the touch.
   };
 
   const handleTouchMove = (event: TouchEvent) => {
     const gesture = touchGestureRef.current;
-    if (!gesture || gesture.kind !== 'note' || gesture.mode === 'durationCycle') return;
+    if (!gesture) return;
     const touch = event.touches[0];
     const point = touch && eventPoint(touch);
     const result = renderResultRef.current;
     if (!point || !result) return;
+
+    // Deferred add-tap: any real movement means the user is panning — release
+    // the touch to the browser so the score scrolls.
+    if (gesture.kind === 'tapAdd') {
+      if (Math.hypot(point.x - gesture.startX, point.y - gesture.startY) >= DRAG_THRESHOLD_PX) {
+        touchGestureRef.current = null;
+      }
+      return;
+    }
+
+    if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
+      event.preventDefault();
+      updateSymbolDrag(gesture, point.x);
+      return;
+    }
+
+    if (gesture.kind !== 'note' || gesture.mode === 'durationCycle') return;
 
     const dx = point.x - gesture.startX;
     const dy = point.y - gesture.startY;
@@ -667,12 +766,41 @@ export function StaffEditor({
     clearTouchHold();
     const gesture = touchGestureRef.current;
     if (!gesture) return;
-    event.preventDefault();
     touchGestureRef.current = null;
 
     const result = renderResultRef.current;
     const touch = event.changedTouches[0];
     const point = touch && eventPoint(touch);
+
+    if (gesture.kind === 'tapAdd') {
+      // A clean tap (no pan) drops the preview at the tapped spot.
+      event.preventDefault();
+      if (result) {
+        const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.measureIndex && s.clef === gesture.clef);
+        if (staff) {
+          pendingPreviewRef.current = {
+            measureIndex: gesture.measureIndex,
+            clef: gesture.clef,
+            x: gesture.x,
+            y: staff.refY0 - gesture.line * staff.spacing,
+            line: gesture.line,
+            duration: editTool.duration,
+            chordTarget: chordMergeTargetAt(gesture.measureIndex, gesture.clef, gesture.x),
+          };
+          renderPendingGhost();
+        }
+      }
+      return;
+    }
+
+    event.preventDefault();
+
+    if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
+      commitSymbolDrag(gesture);
+      if (!gesture.moved && gesture.kind === 'chordSymbol') onFocusMeasure(gesture.measureIndex);
+      clearGhost(overlayRef.current);
+      return;
+    }
 
     if (gesture.kind === 'note') {
       if (gesture.mode === 'drag') {
@@ -692,13 +820,6 @@ export function StaffEditor({
         onSelectNote(gesture.location);
         onFocusMeasure(gesture.location.measureIndex);
       }
-      return;
-    }
-
-    if (gesture.kind === 'newPreview') {
-      // A quick tap leaves the preview waiting for a confirming tap; a hold that
-      // cycled the duration places immediately on release.
-      if (gesture.cycled) commitPending();
       return;
     }
 

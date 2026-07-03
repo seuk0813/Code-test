@@ -11,12 +11,14 @@ import {
   StaveTie,
   Voice,
 } from 'vexflow';
-import type { ChordSymbol, Clef, NoteEvent, NoteLocation, Score } from '../types/score';
+import type { ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeRows,
   isStaffMeasureFull,
+  isStaffMeasureOverflow,
   measureCapacityBeats,
+  noteConnects,
   pitchToLine,
   pitchToVexKey,
   vexDurationString,
@@ -39,6 +41,8 @@ const STAVE_TOP_MARGIN = 40;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
 const LINE_BREAK_MARKER_WIDTH = 24;
+/** Vertical space reserved at the very top for the centered title/composer. */
+const TITLE_BAND = 48;
 
 export interface NoteHitbox {
   measureIndex: number;
@@ -96,12 +100,23 @@ export interface LineBreakHitbox {
   y1: number;
 }
 
+export interface LyricHitbox {
+  measureIndex: number;
+  lyricId: string;
+  x: number;
+  y: number;
+  halfWidth: number;
+  measureX: number;
+  measureWidth: number;
+}
+
 export interface RenderResult {
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
+  lyricHitboxes: LyricHitbox[];
   width: number;
   height: number;
 }
@@ -182,7 +197,9 @@ export function renderScore(
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
   );
   const width = Math.max(...rowWidths, FIRST_MEASURE_WIDTH + 20);
-  const height = rows.length * ROW_HEIGHT;
+  const hasHeading = Boolean(score.title?.trim() || score.composer?.trim());
+  const titleBand = hasHeading ? TITLE_BAND : 0;
+  const height = rows.length * ROW_HEIGHT + titleBand;
 
   const renderer = new Renderer(container, Renderer.Backends.SVG);
   renderer.resize(width, height);
@@ -193,6 +210,8 @@ export function renderScore(
   const chordHitboxes: ChordHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
+  const lyricHitboxes: LyricHitbox[] = [];
+  const overflowMarks: { x: number; y: number }[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -202,7 +221,7 @@ export function renderScore(
   const noteChain: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
 
   rows.forEach((row, rowIndex) => {
-    const rowY = rowIndex * ROW_HEIGHT;
+    const rowY = rowIndex * ROW_HEIGHT + titleBand;
     const chordY = rowY + CHORD_BAND_Y;
     const trebleY = rowY + TREBLE_Y;
     const bassY = rowY + BASS_Y;
@@ -355,6 +374,28 @@ export function renderScore(
         measureWidth,
       });
 
+      // Lyric syllables in the band between the two staves.
+      const lyricY = midY + 5;
+      (measure.lyrics ?? []).forEach((syllable: LyricSyllable) => {
+        lyricHitboxes.push({
+          measureIndex,
+          lyricId: syllable.id,
+          x: x + syllable.offset * measureWidth,
+          y: lyricY,
+          halfWidth: Math.max(9, syllable.text.length * 6),
+          measureX: x,
+          measureWidth,
+        });
+      });
+
+      // Beat-overflow warning marker for either staff of this measure.
+      if (
+        isStaffMeasureOverflow(measure.treble, score.timeSignature) ||
+        isStaffMeasureOverflow(measure.bass, score.timeSignature)
+      ) {
+        overflowMarks.push({ x: x + measureWidth - 12, y: trebleY - 14 });
+      }
+
       // Clickable "next line" marker after every 4th measure of a row.
       if (localIndex === MEASURES_PER_ROW - 1 && !score.lineBreaks.includes(measureIndex) && !isLastMeasure) {
         lineBreakHitboxes.push({
@@ -370,38 +411,115 @@ export function renderScore(
     });
   });
 
+  // A single "connect to next" flag becomes a tie when the pitches match, a
+  // slur when they differ — so one toolbar button covers both.
   (['treble', 'bass'] as const).forEach((clef) => {
     const chain = noteChain[clef];
     for (let i = 0; i < chain.length - 1; i++) {
       const cur = chain[i];
       const next = chain[i + 1];
-      if (cur.event.isRest || next.event.isRest) continue;
-      if (cur.event.tieToNext && pitchesMatch(cur.event, next.event)) {
-        try {
+      if (cur.event.isRest || next.event.isRest || !noteConnects(cur.event)) continue;
+      try {
+        if (pitchesMatch(cur.event, next.event)) {
           new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
-        } catch {
-          // Skip ties VexFlow can't render (e.g. mismatched key counts).
-        }
-      } else if (cur.event.slurToNext) {
-        try {
+        } else {
           new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
-        } catch {
-          // Skip slurs VexFlow can't render.
         }
+      } catch {
+        // Skip connections VexFlow can't render (e.g. mismatched key counts).
       }
     }
   });
 
   const svg = container.querySelector('svg');
   if (svg) {
+    if (hasHeading) drawHeading(svg, score, width);
     drawChordLabels(svg, score, chordHitboxes);
+    drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
+    drawOverflowMarks(svg, overflowMarks);
   }
 
-  return { noteHitboxes, staffHitboxes, chordHitboxes, chordBandHitboxes, lineBreakHitboxes, width, height };
+  return {
+    noteHitboxes,
+    staffHitboxes,
+    chordHitboxes,
+    chordBandHitboxes,
+    lineBreakHitboxes,
+    lyricHitboxes,
+    width,
+    height,
+  };
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function drawHeading(svg: SVGSVGElement, score: Score, width: number): void {
+  const title = score.title?.trim();
+  const composer = score.composer?.trim();
+  if (title) {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(width / 2));
+    text.setAttribute('y', '28');
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '22');
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('fill', '#1a1a1a');
+    text.textContent = title;
+    svg.appendChild(text);
+  }
+  if (composer) {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(width - 12));
+    text.setAttribute('y', '46');
+    text.setAttribute('text-anchor', 'end');
+    text.setAttribute('font-size', '14');
+    text.setAttribute('font-style', 'italic');
+    text.setAttribute('fill', '#444');
+    text.textContent = composer;
+    svg.appendChild(text);
+  }
+}
+
+function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[]): void {
+  lyricHitboxes.forEach((hb) => {
+    const syllable = (score.measures[hb.measureIndex].lyrics ?? []).find((l) => l.id === hb.lyricId);
+    if (!syllable) return;
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(hb.x));
+    text.setAttribute('y', String(hb.y));
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '14');
+    text.setAttribute('fill', '#333');
+    text.textContent = syllable.text;
+    svg.appendChild(text);
+  });
+}
+
+function drawOverflowMarks(svg: SVGSVGElement, marks: { x: number; y: number }[]): void {
+  marks.forEach((m) => {
+    const g = document.createElementNS(SVG_NS, 'g');
+    const title = document.createElementNS(SVG_NS, 'title');
+    title.textContent = '마디가 가득 찼습니다 (박자 초과)';
+    g.appendChild(title);
+    const circle = document.createElementNS(SVG_NS, 'circle');
+    circle.setAttribute('cx', String(m.x));
+    circle.setAttribute('cy', String(m.y));
+    circle.setAttribute('r', '7');
+    circle.setAttribute('fill', '#e03131');
+    g.appendChild(circle);
+    const bang = document.createElementNS(SVG_NS, 'text');
+    bang.setAttribute('x', String(m.x));
+    bang.setAttribute('y', String(m.y + 4));
+    bang.setAttribute('text-anchor', 'middle');
+    bang.setAttribute('font-size', '11');
+    bang.setAttribute('font-weight', '700');
+    bang.setAttribute('fill', '#fff');
+    bang.textContent = '!';
+    g.appendChild(bang);
+    svg.appendChild(g);
+  });
+}
 
 function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordHitbox[]): void {
   chordHitboxes.forEach((hb) => {
@@ -519,4 +637,8 @@ export function findChordBandAt(result: RenderResult, x: number, y: number): Cho
 
 export function findLineBreakAt(result: RenderResult, x: number, y: number): LineBreakHitbox | null {
   return result.lineBreakHitboxes.find((m) => x >= m.x0 && x <= m.x1 && y >= m.y0 && y <= m.y1) ?? null;
+}
+
+export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {
+  return result.lyricHitboxes.find((l) => Math.abs(l.x - x) < l.halfWidth && Math.abs(l.y - y) < 12) ?? null;
 }

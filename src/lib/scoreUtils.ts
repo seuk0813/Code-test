@@ -4,6 +4,7 @@ import type {
   ChordSymbol,
   Clef,
   DurationValue,
+  LyricSyllable,
   Measure,
   NoteEvent,
   NoteLocation,
@@ -66,6 +67,11 @@ export function isStaffMeasureFull(staffMeasure: StaffMeasure, timeSignature: Ti
   return staffMeasureBeats(staffMeasure) >= measureCapacityBeats(timeSignature) - 1e-6;
 }
 
+/** Whether a staff-measure holds more beats than the time signature allows. */
+export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature: TimeSignature): boolean {
+  return staffMeasureBeats(staffMeasure) > measureCapacityBeats(timeSignature) + 1e-6;
+}
+
 function emptyStaffMeasure(): StaffMeasure {
   return { notes: [] };
 }
@@ -76,6 +82,7 @@ export function createEmptyMeasure(): Measure {
     treble: emptyStaffMeasure(),
     bass: emptyStaffMeasure(),
     chords: [],
+    lyrics: [],
   };
 }
 
@@ -104,10 +111,14 @@ export function createNote(
     duration,
     dotted,
     isRest,
-    tieToNext: false,
-    slurToNext: false,
+    connectToNext: false,
     x,
   };
+}
+
+/** Whether a note connects to the next one (new flag or either legacy tie/slur flag). */
+export function noteConnects(note: NoteEvent): boolean {
+  return Boolean(note.connectToNext || note.tieToNext || note.slurToNext);
 }
 
 // --- Pitch <-> VexFlow key helpers -----------------------------------------
@@ -227,7 +238,8 @@ const ACCIDENTAL_SYMBOL: Record<Accidental, string> = {
   '': '',
 };
 
-export function chordLabel(chord: Pick<ChordSymbol, 'root' | 'accidental' | 'quality'>): string {
+export function chordLabel(chord: Pick<ChordSymbol, 'root' | 'accidental' | 'quality' | 'text'>): string {
+  if (chord.text !== undefined) return chord.text;
   return `${chord.root}${ACCIDENTAL_SYMBOL[chord.accidental]}${CHORD_QUALITY_SUFFIX[chord.quality]}`;
 }
 
@@ -268,19 +280,23 @@ function nextChordOffset(existingCount: number): number {
   return 0.1 + ((existingCount * 0.22) % 0.8);
 }
 
-export function addChordToScore(
-  score: Score,
-  measureIndex: number,
-  root: Pitch['letter'],
-  accidental: Accidental,
-  quality: ChordQuality,
-): Score {
+/**
+ * Adds a chord symbol from raw free-text. The exact text is stored and shown
+ * verbatim; if it happens to parse as a known chord we also keep the structured
+ * root/quality (handy for any future harmony features), otherwise sensible
+ * defaults are used.
+ */
+export function addChordToScore(score: Score, measureIndex: number, text: string): Score {
+  const trimmed = text.trim();
+  if (!trimmed) return score;
+  const parsed = parseChordText(trimmed);
   const chords = score.measures[measureIndex].chords;
   const chord: ChordSymbol = {
     id: nextId('c'),
-    root,
-    accidental,
-    quality,
+    root: parsed?.root ?? 'C',
+    accidental: parsed?.accidental ?? '',
+    quality: parsed?.quality ?? 'maj',
+    text: trimmed,
     offset: nextChordOffset(chords.length),
   };
   const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, chords: [...m.chords, chord] } : m));
@@ -300,6 +316,47 @@ export function moveChordInScore(score: Score, measureIndex: number, chordId: st
 export function removeChordFromScore(score: Score, measureIndex: number, chordId: string): Score {
   const measures = score.measures.map((m, i) =>
     i === measureIndex ? { ...m, chords: m.chords.filter((c) => c.id !== chordId) } : m,
+  );
+  return { ...score, measures };
+}
+
+// --- Lyrics (between-staff syllables) ---------------------------------------
+
+/**
+ * Adds a line of lyrics to a measure, split into one draggable syllable per
+ * character (spaces separate but are dropped) so each can be nudged into place
+ * under its note. New syllables are spread evenly across the measure width.
+ */
+export function addLyricsToScore(score: Score, measureIndex: number, text: string): Score {
+  const chars = Array.from(text.trim()).filter((c) => c.trim().length > 0);
+  if (chars.length === 0) return score;
+  const existing = score.measures[measureIndex].lyrics ?? [];
+  const startIndex = existing.length;
+  const total = startIndex + chars.length;
+  const newSyllables: LyricSyllable[] = chars.map((c, i) => ({
+    id: nextId('ly'),
+    text: c,
+    offset: Math.min(0.95, Math.max(0.05, (startIndex + i + 0.5) / total)),
+  }));
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...m, lyrics: [...existing, ...newSyllables] } : m,
+  );
+  return { ...score, measures };
+}
+
+export function moveLyricInScore(score: Score, measureIndex: number, lyricId: string, offset: number): Score {
+  const clamped = Math.min(0.97, Math.max(0.03, offset));
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex
+      ? { ...m, lyrics: (m.lyrics ?? []).map((l) => (l.id === lyricId ? { ...l, offset: clamped } : l)) }
+      : m,
+  );
+  return { ...score, measures };
+}
+
+export function removeLyricFromScore(score: Score, measureIndex: number, lyricId: string): Score {
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...m, lyrics: (m.lyrics ?? []).filter((l) => l.id !== lyricId) } : m,
   );
   return { ...score, measures };
 }
@@ -414,18 +471,18 @@ export function updateNoteInScore(
   }));
 }
 
-export function toggleTieToNext(score: Score, location: NoteLocation): Score {
-  return updateNoteInScore(score, location, (note) => {
-    const tieToNext = !note.tieToNext;
-    return { ...note, tieToNext, slurToNext: tieToNext ? false : note.slurToNext };
-  });
-}
-
-export function toggleSlurToNext(score: Score, location: NoteLocation): Score {
-  return updateNoteInScore(score, location, (note) => {
-    const slurToNext = !note.slurToNext;
-    return { ...note, slurToNext, tieToNext: slurToNext ? false : note.tieToNext };
-  });
+/**
+ * Toggles whether the note connects to the next one. A single flag now covers
+ * both tie and slur: the renderer picks a tie when the pitches match, a slur
+ * otherwise. Legacy tie/slur flags are cleared so old data doesn't conflict.
+ */
+export function toggleConnectToNext(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => ({
+    ...note,
+    connectToNext: !noteConnects(note),
+    tieToNext: false,
+    slurToNext: false,
+  }));
 }
 
 /**

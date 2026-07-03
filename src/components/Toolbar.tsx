@@ -95,11 +95,9 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onAddMeasure: () => void;
-  tieActive: boolean;
-  slurActive: boolean;
+  connectActive: boolean;
   canConnect: boolean;
-  onToggleTie: () => void;
-  onToggleSlur: () => void;
+  onToggleConnect: () => void;
   isPlaying: boolean;
   onPlay: () => void;
   onStop: () => void;
@@ -109,12 +107,16 @@ interface ToolbarProps {
   onLoadJson: (file: File) => void;
   chordTool: ChordTool;
   onChordToolChange: (patch: Partial<ChordTool>) => void;
+  lyricText: string;
+  onLyricToolChange: (text: string) => void;
+  onAddLyrics: () => void;
   focusedMeasureIndex: number | null;
   focusedMeasureChordCount: number;
   onAddChord: () => void;
 }
 
-const CHORD_PLACEHOLDER = '예: C, Am, G7, Fmaj7, Bm7b5';
+const CHORD_PLACEHOLDER = '자유 입력 (예: Cadd9, 아무 텍스트나)';
+const LYRIC_PLACEHOLDER = '가사 입력 후 추가 (글자별로 배치)';
 
 export function Toolbar({
   score,
@@ -124,11 +126,9 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onAddMeasure,
-  tieActive,
-  slurActive,
+  connectActive,
   canConnect,
-  onToggleTie,
-  onToggleSlur,
+  onToggleConnect,
   isPlaying,
   onPlay,
   onStop,
@@ -138,6 +138,9 @@ export function Toolbar({
   onLoadJson,
   chordTool,
   onChordToolChange,
+  lyricText,
+  onLyricToolChange,
+  onAddLyrics,
   focusedMeasureIndex,
   focusedMeasureChordCount,
   onAddChord,
@@ -281,11 +284,13 @@ export function Toolbar({
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
         </button>
-        <button className={`tool-compact ${tieActive ? 'active' : ''}`} onClick={onToggleTie} disabled={!canConnect} title="같은 음을 다음 음표와 타이로 연결">
-          타이
-        </button>
-        <button className={`tool-compact ${slurActive ? 'active' : ''}`} onClick={onToggleSlur} disabled={!canConnect} title="다음 음표와 슬러로 연결">
-          슬러
+        <button
+          className={`tool-compact ${connectActive ? 'active' : ''}`}
+          onClick={onToggleConnect}
+          disabled={!canConnect}
+          title="선택한 음표를 다음 음표와 연결 (같은 음=붙임줄, 다른 음=이음줄)"
+        >
+          이음줄/붙임줄
         </button>
         <button className="tool-compact" onClick={onAddMeasure} title="마디 추가">
           ＋마디
@@ -312,6 +317,24 @@ export function Toolbar({
             ? '악보에서 마디를 클릭해 선택하세요'
             : `${focusedMeasureIndex + 1}번 마디 (${focusedMeasureChordCount}개) — 추가 후 드래그로 위치 조정, 우클릭으로 삭제`}
         </span>
+      </div>
+
+      <div className="toolbar-row">
+        <span className="group-label">가사</span>
+        <input
+          className="chord-input"
+          value={lyricText}
+          placeholder={LYRIC_PLACEHOLDER}
+          onChange={(e) => onLyricToolChange(e.target.value)}
+          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+            if (e.key === 'Enter') onAddLyrics();
+          }}
+          disabled={focusedMeasureIndex === null}
+        />
+        <button onClick={onAddLyrics} disabled={focusedMeasureIndex === null || !lyricText.trim()}>
+          가사 추가
+        </button>
+        <span className="group-label">두 보표 사이에 표시 · 글자별 드래그 이동, 우클릭 삭제</span>
       </div>
 
       <div className="toolbar-row">

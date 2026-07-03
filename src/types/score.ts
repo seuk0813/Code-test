@@ -18,9 +18,17 @@ export interface NoteEvent {
   duration: DurationValue;
   dotted: boolean;
   isRest: boolean;
-  /** Curved line to the next note in this staff (same pitch = tie, different = slur). */
-  tieToNext: boolean;
-  slurToNext: boolean;
+  /**
+   * Connect to the next note in this staff with a curved line. The renderer
+   * draws a tie (붙임줄) when the next note has the same pitch, otherwise a
+   * slur (이음줄). Replaces the old separate tieToNext/slurToNext flags, which
+   * are still read from older saved files.
+   */
+  connectToNext?: boolean;
+  /** @deprecated Legacy tie flag, migrated to connectToNext on load. */
+  tieToNext?: boolean;
+  /** @deprecated Legacy slur flag, migrated to connectToNext on load. */
+  slurToNext?: boolean;
   /**
    * Free horizontal position within the measure's note area, 0 (start)..1 (end).
    * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
@@ -48,6 +56,16 @@ export interface ChordSymbol {
   root: Pitch['letter'];
   accidental: Accidental;
   quality: ChordQuality;
+  /** Raw free-text label as typed. When set, shown verbatim instead of the parsed root/quality. */
+  text?: string;
+  /** Horizontal position within the measure, 0 (start) .. 1 (end). Freely draggable. */
+  offset: number;
+}
+
+/** A single draggable lyric syllable placed in the band between the two staves. */
+export interface LyricSyllable {
+  id: string;
+  text: string;
   /** Horizontal position within the measure, 0 (start) .. 1 (end). Freely draggable. */
   offset: number;
 }
@@ -60,8 +78,10 @@ export interface Measure {
   id: string;
   treble: StaffMeasure;
   bass: StaffMeasure;
-  /** Chord symbols shown above the measure, max 4. */
+  /** Chord symbols shown above the measure. */
   chords: ChordSymbol[];
+  /** Lyric syllables shown in the band between the treble and bass staves. */
+  lyrics: LyricSyllable[];
 }
 
 export interface TimeSignature {

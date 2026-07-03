@@ -1,6 +1,21 @@
-import type { Score } from '../types/score';
+import type { Measure, Score } from '../types/score';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
+
+/** Backfills fields added in later versions so older saved scores load cleanly. */
+export function normalizeScore(score: Score): Score {
+  return {
+    ...score,
+    lineBreaks: score.lineBreaks ?? [],
+    measures: (score.measures ?? []).map(
+      (m): Measure => ({
+        ...m,
+        chords: m.chords ?? [],
+        lyrics: m.lyrics ?? [],
+      }),
+    ),
+  };
+}
 
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -17,7 +32,7 @@ export function downloadScoreJson(score: Score): void {
 }
 
 export function readScoreFile(file: File): Promise<Score> {
-  return file.text().then((text) => JSON.parse(text) as Score);
+  return file.text().then((text) => normalizeScore(JSON.parse(text) as Score));
 }
 
 export function saveAutosave(score: Score): void {
@@ -31,7 +46,7 @@ export function saveAutosave(score: Score): void {
 export function loadAutosave(): Score | null {
   try {
     const raw = localStorage.getItem(AUTOSAVE_KEY);
-    return raw ? (JSON.parse(raw) as Score) : null;
+    return raw ? normalizeScore(JSON.parse(raw) as Score) : null;
   } catch {
     return null;
   }
