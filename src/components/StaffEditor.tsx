@@ -61,6 +61,13 @@ const CONNECT_CANDIDATE_RADIUS = 55;
 /** In note-select mode (see noteSelectMode), a staff click within this radius of an existing note selects it instead of adding a new one. */
 const SELECT_MODE_RADIUS = 45;
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 3;
+/** The fixed level a double-tap zooms to (toggling back to ZOOM_MIN on the next double-tap). */
+const DOUBLE_TAP_ZOOM = 2;
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_PX = 30;
+
 const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
 const DRAG_COLOR = '#d6432b';
@@ -249,8 +256,49 @@ export function StaffEditor({
 }: StaffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
+  // .staff-stack (spacer, real layout size = logical size × zoom, so
+  // .staff-scroll's overflow-x scrollbar actually reaches the zoomed-in
+  // content) wraps .staff-zoom-layer (the thing actually visually scaled via
+  // CSS transform — a plain transform alone wouldn't grow the scrollable
+  // area, since it doesn't affect layout size).
+  const stackRef = useRef<HTMLDivElement>(null);
+  const zoomLayerRef = useRef<HTMLDivElement>(null);
   const renderResultRef = useRef<RenderResult | null>(null);
   const suppressClickRef = useRef(false);
+
+  // Mobile pinch/double-tap zoom, applied imperatively via the refs above —
+  // the same pattern already used for ghost/preview overlays — so a
+  // continuous pinch doesn't trigger a React re-render per touchmove.
+  // zoomRef is the single source of truth; eventPoint divides by it so all
+  // hit-testing keeps working in logical (unzoomed) SVG coordinates.
+  const zoomRef = useRef(1);
+  const pinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+
+  /** Resizes the .staff-stack spacer to the current logical size × zoom, so the scroll area actually covers the zoomed-in content. */
+  const syncZoomSpacerSize = () => {
+    const result = renderResultRef.current;
+    if (!stackRef.current || !result) return;
+    stackRef.current.style.width = `${result.width * zoomRef.current}px`;
+    stackRef.current.style.height = `${result.height * zoomRef.current}px`;
+  };
+
+  /** Scales to `zoom` (clamped) anchored at the given screen point — adjusts staff-scroll's scroll offset so that point stays under the finger. */
+  const applyZoomAt = (zoom: number, clientX: number, clientY: number) => {
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+    const scrollEl = stackRef.current?.parentElement;
+    const ratio = clamped / zoomRef.current;
+    zoomRef.current = clamped;
+    if (zoomLayerRef.current) zoomLayerRef.current.style.transform = `scale(${clamped})`;
+    syncZoomSpacerSize();
+    if (scrollEl && ratio !== 1) {
+      const rect = scrollEl.getBoundingClientRect();
+      const offsetX = clientX - rect.left + scrollEl.scrollLeft;
+      const offsetY = clientY - rect.top + scrollEl.scrollTop;
+      scrollEl.scrollLeft = offsetX * ratio - (clientX - rect.left);
+      scrollEl.scrollTop = offsetY * ratio - (clientY - rect.top);
+    }
+  };
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
   const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
   const inlineCancelledRef = useRef(false);
@@ -294,6 +342,10 @@ export function StaffEditor({
       overlayRef.current.setAttribute('height', String(result.height));
       overlayRef.current.setAttribute('viewBox', `0 0 ${result.width} ${result.height}`);
     }
+    // Keep the zoom spacer's real (scrollable) size matching the score's
+    // current content size at whatever zoom level is already active — e.g.
+    // adding a measure while zoomed in should widen the scrollable area too.
+    syncZoomSpacerSize();
   }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedConnection, activeConnectionSource]);
 
   // Playback playhead: a red bar per staff, snapped exactly to the real X of
@@ -381,7 +433,10 @@ export function StaffEditor({
     const svg = containerRef.current?.querySelector('svg');
     if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    // rect is the on-screen (already-scaled) box when zoomed in on mobile —
+    // divide back out so hit-testing keeps working in the logical SVG
+    // coordinates every hitbox/handler already assumes, at any zoom level.
+    return { x: (event.clientX - rect.left) / zoomRef.current, y: (event.clientY - rect.top) / zoomRef.current };
   };
 
   // --- Shared placement helpers -----------------------------------------------
@@ -1145,7 +1200,39 @@ export function StaffEditor({
   };
 
   const handleTouchStart = (event: TouchEvent) => {
+    // Two fingers: start a pinch-zoom gesture instead, canceling whatever
+    // single-touch gesture/preview was in flight from the first finger.
+    if (event.touches.length === 2) {
+      event.preventDefault();
+      clearTouchHold();
+      touchGestureRef.current = null;
+      pendingPreviewRef.current = null;
+      clearGhost(overlayRef.current);
+      lastTapRef.current = null;
+      const [t0, t1] = [event.touches[0], event.touches[1]];
+      pinchRef.current = { startDist: Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY), startZoom: zoomRef.current };
+      return;
+    }
     if (event.touches.length > 1) return;
+
+    // A quick second tap near the first (standard double-tap) toggles zoom
+    // instead of whatever a lone tap there would normally do — so it stays a
+    // simple, predictable rule rather than guessing intent from tap content.
+    const touchForTap = event.touches[0];
+    const now = Date.now();
+    const lastTap = lastTapRef.current;
+    if (lastTap && now - lastTap.time < DOUBLE_TAP_MS && Math.hypot(touchForTap.clientX - lastTap.x, touchForTap.clientY - lastTap.y) < DOUBLE_TAP_PX) {
+      event.preventDefault();
+      lastTapRef.current = null;
+      clearTouchHold();
+      touchGestureRef.current = null;
+      pendingPreviewRef.current = null;
+      clearGhost(overlayRef.current);
+      applyZoomAt(zoomRef.current > ZOOM_MIN + 0.01 ? ZOOM_MIN : DOUBLE_TAP_ZOOM, touchForTap.clientX, touchForTap.clientY);
+      return;
+    }
+    lastTapRef.current = { time: now, x: touchForTap.clientX, y: touchForTap.clientY };
+
     const result = renderResultRef.current;
     const touch = event.touches[0];
     const point = touch && eventPoint(touch);
@@ -1286,6 +1373,16 @@ export function StaffEditor({
   };
 
   const handleTouchMove = (event: TouchEvent) => {
+    if (event.touches.length === 2 && pinchRef.current) {
+      event.preventDefault();
+      const [t0, t1] = [event.touches[0], event.touches[1]];
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const midX = (t0.clientX + t1.clientX) / 2;
+      const midY = (t0.clientY + t1.clientY) / 2;
+      applyZoomAt((pinchRef.current.startZoom * dist) / pinchRef.current.startDist, midX, midY);
+      return;
+    }
+
     const gesture = touchGestureRef.current;
     if (!gesture) return;
     const touch = event.touches[0];
@@ -1341,6 +1438,8 @@ export function StaffEditor({
   };
 
   const handleTouchEnd = (event: TouchEvent) => {
+    if (event.touches.length < 2) pinchRef.current = null;
+    if (pinchRef.current) return;
     clearTouchHold();
     const gesture = touchGestureRef.current;
     if (!gesture) return;
@@ -1438,32 +1537,34 @@ export function StaffEditor({
 
   return (
     <div className="staff-scroll">
-      <div className="staff-stack">
-        <div
-          ref={containerRef}
-          className="staff-container"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-          onClick={handleClick}
-          onContextMenu={handleContextMenu}
-        />
-        <svg ref={overlayRef} className="staff-ghost-overlay" />
-        {inlineEditor && (
-          <div className="staff-input-layer">
-            <input
-              key={inlineEditor.kind}
-              className={`inline-score-input inline-score-input-${inlineEditor.kind} inline-score-input-${inlineEditor.align}`}
-              style={{ left: inlineEditor.left, top: inlineEditor.top, width: inlineEditor.width }}
-              value={inlineEditor.value}
-              autoFocus
-              onFocus={(e) => e.currentTarget.select()}
-              onChange={(e) => setInlineEditor((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
-              onKeyDown={handleInlineKeyDown}
-              onBlur={handleInlineBlur}
-            />
-          </div>
-        )}
+      <div className="staff-stack" ref={stackRef}>
+        <div className="staff-zoom-layer" ref={zoomLayerRef}>
+          <div
+            ref={containerRef}
+            className="staff-container"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+            onClick={handleClick}
+            onContextMenu={handleContextMenu}
+          />
+          <svg ref={overlayRef} className="staff-ghost-overlay" />
+          {inlineEditor && (
+            <div className="staff-input-layer">
+              <input
+                key={inlineEditor.kind}
+                className={`inline-score-input inline-score-input-${inlineEditor.kind} inline-score-input-${inlineEditor.align}`}
+                style={{ left: inlineEditor.left, top: inlineEditor.top, width: inlineEditor.width }}
+                value={inlineEditor.value}
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setInlineEditor((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+                onKeyDown={handleInlineKeyDown}
+                onBlur={handleInlineBlur}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
