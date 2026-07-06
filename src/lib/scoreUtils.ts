@@ -111,14 +111,8 @@ export function createNote(
     duration,
     dotted,
     isRest,
-    connectToNext: false,
     x,
   };
-}
-
-/** Whether a note connects to the next one (new flag or either legacy tie/slur flag). */
-export function noteConnects(note: NoteEvent): boolean {
-  return Boolean(note.connectToNext || note.tieToNext || note.slurToNext);
 }
 
 // --- Pitch <-> VexFlow key helpers -----------------------------------------
@@ -586,116 +580,6 @@ export function updateNoteInScore(
   return updateMeasure(score, location.measureIndex, location.clef, (sm) => ({
     notes: sm.notes.map((n, i) => (i === location.noteIndex ? updater(n) : n)),
   }));
-}
-
-/**
- * Toggles whether the note connects to the next one. A single flag now covers
- * both tie and slur: the renderer picks a tie when the pitches match, a slur
- * otherwise. Legacy tie/slur flags are cleared so old data doesn't conflict.
- */
-export function toggleConnectToNext(score: Score, location: NoteLocation): Score {
-  return updateNoteInScore(score, location, (note) => ({
-    ...note,
-    connectToNext: !noteConnects(note),
-    tieToNext: false,
-    slurToNext: false,
-    connectToId: undefined,
-  }));
-}
-
-/**
- * Connects a note to an arbitrary other note (by id) — set by dragging the
- * connector handle onto a target, for chords or out-of-sequence notes where
- * "the next note" isn't the one you want. Clears the sequential flag so the
- * two mechanisms don't fight over rendering the same note. `fromIndex`/
- * `toIndex` optionally pin the tie to a specific pitch on either end of a
- * chord (see NoteEvent.connectFromIndex/connectToIndex) — omitted means "all
- * pitches", the previous whole-chord behavior.
- */
-export function connectNoteTo(
-  score: Score,
-  source: NoteLocation,
-  targetId: string,
-  fromIndex?: number,
-  toIndex?: number,
-): Score {
-  return updateNoteInScore(score, source, (note) => ({
-    ...note,
-    connectToId: targetId,
-    connectToNext: false,
-    tieToNext: false,
-    slurToNext: false,
-    connectFromIndex: fromIndex,
-    connectToIndex: toIndex,
-  }));
-}
-
-/** Removes any connection (sequential or arbitrary-target) from a note. */
-export function clearNoteConnection(score: Score, location: NoteLocation): Score {
-  return updateNoteInScore(score, location, (note) => ({
-    ...note,
-    connectToNext: false,
-    tieToNext: false,
-    slurToNext: false,
-    connectToId: undefined,
-    connectFromIndex: undefined,
-    connectToIndex: undefined,
-  }));
-}
-
-/** The note (if any) that `source`'s connection points to — the sequential "next" note, or the connectToId target. */
-export function connectionTargetLocation(score: Score, source: NoteLocation): NoteLocation | null {
-  const notes = score.measures[source.measureIndex]?.[source.clef]?.notes;
-  const note = notes?.[source.noteIndex];
-  if (!note || note.isRest) return null;
-  if (note.connectToId) {
-    for (let mi = 0; mi < score.measures.length; mi++) {
-      for (const clef of ['treble', 'bass'] as const) {
-        const idx = score.measures[mi][clef].notes.findIndex((n) => n.id === note.connectToId);
-        if (idx >= 0) return { measureIndex: mi, clef, noteIndex: idx };
-      }
-    }
-    return null;
-  }
-  if (noteConnects(note) && notes) {
-    if (source.noteIndex + 1 < notes.length) {
-      return { measureIndex: source.measureIndex, clef: source.clef, noteIndex: source.noteIndex + 1 };
-    }
-    for (let mi = source.measureIndex + 1; mi < score.measures.length; mi++) {
-      if (score.measures[mi][source.clef].notes.length > 0) {
-        return { measureIndex: mi, clef: source.clef, noteIndex: 0 };
-      }
-    }
-  }
-  return null;
-}
-
-/** The note (if any) whose connection points at `target` — the reverse lookup, so clicking either end of a tie/slur reveals it. */
-export function connectionSourceLocation(score: Score, target: NoteLocation): NoteLocation | null {
-  for (let mi = 0; mi < score.measures.length; mi++) {
-    for (const clef of ['treble', 'bass'] as const) {
-      const notes = score.measures[mi][clef].notes;
-      for (let ni = 0; ni < notes.length; ni++) {
-        const loc: NoteLocation = { measureIndex: mi, clef, noteIndex: ni };
-        const t = connectionTargetLocation(score, loc);
-        if (t && t.measureIndex === target.measureIndex && t.clef === target.clef && t.noteIndex === target.noteIndex) {
-          return loc;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Resolves the owning source note of the connection touching `location`,
- * whichever end was clicked — `location` itself if it owns a (resolvable)
- * connection, otherwise whichever other note's connection points at it.
- * Null if `location` isn't part of any connection.
- */
-export function connectionOwnerAt(score: Score, location: NoteLocation): NoteLocation | null {
-  if (connectionTargetLocation(score, location)) return location;
-  return connectionSourceLocation(score, location);
 }
 
 /**

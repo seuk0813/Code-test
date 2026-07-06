@@ -151,9 +151,6 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
-  connectActive: boolean;
-  canConnect: boolean;
-  onToggleConnect: () => void;
   /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
   selectMode: boolean;
   onSetSelectMode: (value: boolean) => void;
@@ -167,9 +164,6 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
-  connectActive,
-  canConnect,
-  onToggleConnect,
   selectMode,
   onSetSelectMode,
 }: ToolbarProps) {
@@ -317,14 +311,6 @@ export function Toolbar({
         ))}
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
-        </button>
-        <button
-          className={`tool-compact ${connectActive ? 'active' : ''}`}
-          onClick={onToggleConnect}
-          disabled={!canConnect}
-          title="선택한 음표를 다음 음표와 연결 (같은 음=붙임줄, 다른 음=이음줄)"
-        >
-          이음줄/붙임줄
         </button>
       </div>
     </div>

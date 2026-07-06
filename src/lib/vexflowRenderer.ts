@@ -1,25 +1,21 @@
 import {
   Accidental as VexAccidental,
   Beam,
-  Curve,
   Dot,
   Formatter,
   Renderer,
   Stave,
   StaveConnector,
   StaveNote,
-  StaveTie,
   Voice,
 } from 'vexflow';
 import type { ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeRows,
-  connectionTargetLocation,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   measureCapacityBeats,
-  noteConnects,
   pitchToLine,
   pitchToVexKey,
   vexDurationString,
@@ -67,11 +63,6 @@ const COMPOSER_BAND = 22;
 const OVERFLOW_MARK_RADIUS = 8;
 /** Extra slack added to the overflow marker's hit-test so a small marker is still easy to hover/tap. */
 const OVERFLOW_HIT_SLACK = 8;
-const CONNECT_HANDLE_RADIUS = 7;
-const CONNECT_HANDLE_HIT_SLACK = 8;
-/** Offset of the connector handle from the selected note's topmost pitch. */
-const CONNECT_HANDLE_DX = 15;
-const CONNECT_HANDLE_DY = 16;
 
 /**
  * Font stacks for the printed-score text elements. Korean chord-sheet images
@@ -199,37 +190,6 @@ export interface OverflowHitbox {
   radius: number;
 }
 
-/** Clickable region over a rendered tie/slur curve — clicking it selects the connection itself (see `selectedConnectionSource`), not either note. */
-export interface ConnectionHitbox {
-  source: NoteLocation;
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
-/**
- * Small draggable green handle shown on a note that's part of the active
- * connection (see `selectedConnectionSource`) — one per pitch, on both the
- * "from" note and the resolved "to" note, so a chord-to-chord tie/slur shows
- * every possible start/end pitch as its own handle. Dragging any handle
- * reconnects the SAME underlying connection (`sourceLocation` always owns
- * the connectToNext/connectToId data): a "from" handle picks which of its
- * own pitches the tie starts at, a "to" handle picks which pitch/note it
- * ends at, while the other side stays put.
- */
-export interface ConnectHandle {
-  role: 'from' | 'to';
-  sourceLocation: NoteLocation;
-  measureIndex: number;
-  clef: Clef;
-  noteIndex: number;
-  pitchIndex: number;
-  x: number;
-  y: number;
-  radius: number;
-}
-
 export interface RenderResult {
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
@@ -239,8 +199,6 @@ export interface RenderResult {
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
   overflowHitboxes: OverflowHitbox[];
-  connectHandles: ConnectHandle[];
-  connectionHitboxes: ConnectionHitbox[];
   titleHitbox: TitleHitbox;
   composerHitbox: ComposerHitbox;
   width: number;
@@ -251,13 +209,6 @@ const REST_KEY: Record<Clef, string> = {
   treble: 'b/4',
   bass: 'd/3',
 };
-
-function pitchesMatch(a: NoteEvent, b: NoteEvent): boolean {
-  if (a.pitches.length !== b.pitches.length) return false;
-  const aKeys = a.pitches.map(pitchToVexKey).sort();
-  const bKeys = b.pitches.map(pitchToVexKey).sort();
-  return aKeys.every((k, i) => k === bKeys[i]);
-}
 
 function buildStaveNotes(
   clef: Clef,
@@ -336,8 +287,6 @@ export function renderScore(
   draggingNote: DraggingNote | null,
   playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
   selectedPitchIndex?: number | null,
-  /** The connection (by its owning "from" note) whose green from/to handles should be shown — see ConnectHandle. */
-  selectedConnectionSource?: NoteLocation | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -378,15 +327,6 @@ export function renderScore(
   const overflowHitboxes: OverflowHitbox[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
-
-  // Flat, in-order chain of every rendered note per staff (spanning measures
-  // and rows), used after the layout pass to connect ties/slurs between
-  // consecutive notes — including across a barline or a line break.
-  const noteChain: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
-  // Every note by id (any clef/measure), for connections dragged onto an
-  // arbitrary target rather than just "the next note".
-  const noteById = new Map<string, { event: NoteEvent; staveNote: StaveNote }>();
-  const noteHitboxById = new Map<string, NoteHitbox>();
 
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * ROW_HEIGHT + titleBand;
@@ -533,9 +473,6 @@ export function renderScore(
               ys,
             };
             noteHitboxes.push(hb);
-            noteHitboxById.set(note.id, hb);
-            noteChain[clef].push({ event: note, staveNote: sn });
-            noteById.set(note.id, { event: note, staveNote: sn });
           });
         }
 
@@ -611,173 +548,6 @@ export function renderScore(
     });
   });
 
-  const connectionHitboxes: ConnectionHitbox[] = [];
-
-  /**
-   * Click region spanning two connected notes, covering the curve's arc.
-   * Excluding overlap with each note's own notehead click region by shrinking
-   * the X range (an earlier approach) falls apart for closely-spaced notes —
-   * eighth notes ~25px apart left literally 0px of hitbox (silently skipped),
-   * and even a modest gap left only a couple of unclickable pixels. Curves
-   * are drawn arcing above the notes (see CONNECT_HANDLE_DY), so instead this
-   * keeps the FULL x-span (no margin needed) and excludes overlap by Y
-   * instead: the hitbox sits in a band well above the topmost pitch's own
-   * click radius (resolveClick's yRadius, ~staff.spacing*0.45), so it never
-   * competes with a click meant to (re-)select or narrow a notehead,
-   * regardless of how close the two notes are horizontally.
-   */
-  function pushConnectionHitbox(source: NoteLocation, a: NoteHitbox, b: NoteHitbox): void {
-    const allYs = [...a.ys, ...b.ys];
-    const topY = Math.min(...allYs);
-    connectionHitboxes.push({
-      source,
-      x0: Math.min(a.centerX, b.centerX) - 6,
-      x1: Math.max(a.centerX, b.centerX) + 6,
-      y0: topY - 26,
-      y1: topY - 9,
-    });
-  }
-
-  /** Whether the connection owned by `loc` is the one currently selected (curve click, or a note touching it) — see selectedConnectionSource. */
-  function isSelectedConnectionAt(loc: NoteLocation): boolean {
-    return (
-      !!selectedConnectionSource &&
-      selectedConnectionSource.measureIndex === loc.measureIndex &&
-      selectedConnectionSource.clef === loc.clef &&
-      selectedConnectionSource.noteIndex === loc.noteIndex
-    );
-  }
-
-  // A single "connect to next" flag becomes a tie when the pitches match, a
-  // slur when they differ — so one toolbar button covers both.
-  (['treble', 'bass'] as const).forEach((clef) => {
-    const chain = noteChain[clef];
-    for (let i = 0; i < chain.length - 1; i++) {
-      const cur = chain[i];
-      const next = chain[i + 1];
-      if (cur.event.isRest || next.event.isRest || !noteConnects(cur.event)) continue;
-      const curHb = noteHitboxById.get(cur.event.id);
-      const nextHb = noteHitboxById.get(next.event.id);
-      const curLoc = curHb && { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
-      const selectedStyle = curLoc && isSelectedConnectionAt(curLoc) ? { fillStyle: '#d6432b', strokeStyle: '#d6432b' } : null;
-      try {
-        if (pitchesMatch(cur.event, next.event)) {
-          const tie = new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote });
-          if (selectedStyle) tie.setStyle(selectedStyle);
-          // drawWithStyle (not draw) actually pushes the style to the
-          // context first — StaveTie/Curve.draw() ignores setStyle() otherwise.
-          tie.setContext(context).drawWithStyle();
-        } else {
-          const curve = new Curve(cur.staveNote, next.staveNote, {});
-          if (selectedStyle) curve.setStyle(selectedStyle);
-          curve.setContext(context).drawWithStyle();
-        }
-        if (curLoc && curHb && nextHb) pushConnectionHitbox(curLoc, curHb, nextHb);
-      } catch {
-        // Skip connections VexFlow can't render (e.g. mismatched key counts).
-      }
-    }
-  });
-
-  // Connections dragged onto an arbitrary target note (not necessarily "the
-  // next note") — see the on-staff connector handle in StaffEditor. When the
-  // note is a chord, connectFromIndex/connectToIndex (set by which per-pitch
-  // handle was dragged, and where it was dropped) pin the tie to those two
-  // specific noteheads instead of the whole chord.
-  (['treble', 'bass'] as const).forEach((clef) => {
-    noteChain[clef].forEach((cur) => {
-      const targetId = cur.event.connectToId;
-      if (!targetId || cur.event.isRest) return;
-      const target = noteById.get(targetId);
-      if (!target || target.event.isRest) return;
-      const fromIdx = cur.event.connectFromIndex;
-      const toIdx = cur.event.connectToIndex;
-      const fromPitch = fromIdx !== undefined ? cur.event.pitches[fromIdx] : undefined;
-      const toPitch = toIdx !== undefined ? target.event.pitches[toIdx] : undefined;
-      const specificPitchMatch = fromPitch && toPitch && pitchToVexKey(fromPitch) === pitchToVexKey(toPitch);
-      const curHb = noteHitboxById.get(cur.event.id);
-      const curLoc = curHb && { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
-      const selectedStyle = curLoc && isSelectedConnectionAt(curLoc) ? { fillStyle: '#d6432b', strokeStyle: '#d6432b' } : null;
-      try {
-        let el: InstanceType<typeof StaveTie> | InstanceType<typeof Curve>;
-        if (specificPitchMatch && fromIdx !== undefined && toIdx !== undefined) {
-          el = new StaveTie({
-            firstNote: cur.staveNote,
-            lastNote: target.staveNote,
-            firstIndexes: [fromIdx],
-            lastIndexes: [toIdx],
-          });
-        } else if (pitchesMatch(cur.event, target.event)) {
-          el = new StaveTie({ firstNote: cur.staveNote, lastNote: target.staveNote });
-        } else {
-          el = new Curve(cur.staveNote, target.staveNote, {});
-        }
-        if (selectedStyle) el.setStyle(selectedStyle);
-        el.setContext(context).drawWithStyle();
-        const targetHb = noteHitboxById.get(target.event.id);
-        if (curLoc && curHb && targetHb) {
-          pushConnectionHitbox(curLoc, curHb, targetHb);
-        }
-      } catch {
-        // Skip connections VexFlow can't render.
-      }
-    });
-  });
-
-  // Green handles for the active connection (hidden during playback, since
-  // effectiveSelected suppresses selectedConnectionSource too via the
-  // caller) — exactly ONE static handle on the "from" side and ONE on the
-  // "to" side, sitting at whichever pitch the connection currently uses
-  // (connectFromIndex/connectToIndex, defaulting to the first pitch).
-  // Showing every pitch of both chords at once was cluttered and mostly
-  // redundant; the other pitches instead appear as drop candidates while a
-  // handle is actively being dragged (see StaffEditor's
-  // renderNearbyConnectCandidates), which is when picking a different pitch
-  // is actually relevant. Dragging either handle re-targets the SAME
-  // connection; see ConnectHandle's doc comment.
-  const connectHandles: ConnectHandle[] = [];
-  const connSource = playingLocations ? null : selectedConnectionSource ?? null;
-  if (connSource) {
-    const fromHb = noteHitboxes.find(
-      (n) => n.measureIndex === connSource.measureIndex && n.clef === connSource.clef && n.noteIndex === connSource.noteIndex,
-    );
-    const fromNote = score.measures[connSource.measureIndex]?.[connSource.clef].notes[connSource.noteIndex];
-    if (fromHb && fromNote && !fromNote.isRest) {
-      const fromPitchIndex = Math.min(fromNote.connectFromIndex ?? 0, fromHb.ys.length - 1);
-      connectHandles.push({
-        role: 'from',
-        sourceLocation: connSource,
-        measureIndex: connSource.measureIndex,
-        clef: connSource.clef,
-        noteIndex: connSource.noteIndex,
-        pitchIndex: fromPitchIndex,
-        x: fromHb.centerX + CONNECT_HANDLE_DX,
-        y: fromHb.ys[fromPitchIndex] - CONNECT_HANDLE_DY,
-        radius: CONNECT_HANDLE_RADIUS,
-      });
-      const targetLoc = connectionTargetLocation(score, connSource);
-      const targetHb = targetLoc
-        ? noteHitboxes.find(
-            (n) => n.measureIndex === targetLoc.measureIndex && n.clef === targetLoc.clef && n.noteIndex === targetLoc.noteIndex,
-          )
-        : null;
-      if (targetLoc && targetHb) {
-        const toPitchIndex = Math.min(fromNote.connectToIndex ?? 0, targetHb.ys.length - 1);
-        connectHandles.push({
-          role: 'to',
-          sourceLocation: connSource,
-          measureIndex: targetLoc.measureIndex,
-          clef: targetLoc.clef,
-          noteIndex: targetLoc.noteIndex,
-          pitchIndex: toPitchIndex,
-          x: targetHb.centerX + CONNECT_HANDLE_DX,
-          y: targetHb.ys[toPitchIndex] - CONNECT_HANDLE_DY,
-          radius: CONNECT_HANDLE_RADIUS,
-        });
-      }
-    }
-  }
-
   const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 28 };
   // Right-aligned above the 4th measure's slot (computed above, fixed by
   // layout geometry regardless of how many measures actually exist yet) —
@@ -801,7 +571,6 @@ export function renderScore(
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawOverflowMarks(svg, overflowHitboxes);
-    connectHandles.forEach((h) => drawConnectHandle(svg, h));
   }
 
   return {
@@ -813,8 +582,6 @@ export function renderScore(
     overflowHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
-    connectHandles,
-    connectionHitboxes,
     titleHitbox,
     composerHitbox,
     width,
@@ -896,24 +663,6 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
     g.appendChild(bang);
     svg.appendChild(g);
   });
-}
-
-/** Small filled handle on the selected note — drag it onto another note to tie/slur the two. */
-function drawConnectHandle(svg: SVGSVGElement, handle: ConnectHandle): void {
-  const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('class', 'connect-handle');
-  const title = document.createElementNS(SVG_NS, 'title');
-  title.textContent = '드래그해서 다른 음표와 연결';
-  g.appendChild(title);
-  const circle = document.createElementNS(SVG_NS, 'circle');
-  circle.setAttribute('cx', String(handle.x));
-  circle.setAttribute('cy', String(handle.y));
-  circle.setAttribute('r', String(handle.radius));
-  circle.setAttribute('fill', '#2f9e44');
-  circle.setAttribute('stroke', '#fff');
-  circle.setAttribute('stroke-width', '1.5');
-  g.appendChild(circle);
-  svg.appendChild(g);
 }
 
 function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordHitbox[]): void {
@@ -1060,19 +809,7 @@ export function findOverflowMarkAt(result: RenderResult, x: number, y: number): 
   );
 }
 
-export function findConnectHandleAt(result: RenderResult, x: number, y: number): ConnectHandle | null {
-  return (
-    result.connectHandles.find((h) => Math.hypot(h.x - x, h.y - y) < h.radius + CONNECT_HANDLE_HIT_SLACK) ?? null
-  );
-}
-
-/** A click on a rendered tie/slur curve selects the connection itself (not either note) — returns the connection's owning "from" note, used as `selectedConnectionSource` to reveal its green from/to handles. */
-export function findConnectionAt(result: RenderResult, x: number, y: number): NoteLocation | null {
-  const hit = result.connectionHitboxes.find((c) => x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1);
-  return hit ? hit.source : null;
-}
-
-/** Index of the pitch (within a note's own `pitches`) nearest a Y position — used to pick which chord tone a connect-drag drop should end at. */
+/** Index of the pitch (within a note's own `pitches`) nearest a Y position — used to narrow a chord selection to a specific pitch. */
 export function nearestPitchIndexAt(hb: NoteHitbox, y: number): number {
   let best = 0;
   let bestDist = Infinity;
@@ -1086,19 +823,7 @@ export function nearestPitchIndexAt(hb: NoteHitbox, y: number): number {
   return best;
 }
 
-/** Hit-test any note (including chord members), used to resolve a connect-drag drop target. */
-export function findNoteAt(result: RenderResult, x: number, y: number): NoteHitbox | null {
-  return (
-    result.noteHitboxes.find((n) => Math.abs(n.centerX - x) < 14 && n.ys.some((ny) => Math.abs(ny - y) < 18)) ?? null
-  );
-}
-
-/**
- * All notes within a generous radius of a point, nearest first — used while
- * dragging the connect handle to show every candidate target nearby (not
- * just whichever one the cursor happens to sit exactly on), so the user can
- * see and choose which note to connect to.
- */
+/** All notes within a generous radius of a point, nearest first — used by note-select mode to pick the closest existing note to a tap. */
 export function findNearbyNotesAt(result: RenderResult, x: number, y: number, radius: number): NoteHitbox[] {
   return result.noteHitboxes
     .map((n) => ({ n, d: Math.min(...n.ys.map((ny) => Math.hypot(n.centerX - x, ny - y))) }))
