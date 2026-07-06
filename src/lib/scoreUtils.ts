@@ -174,16 +174,47 @@ export function stemPointsUp(line: number): boolean {
   return line < 3;
 }
 
+/**
+ * Sharps/flats a key signature implies for each diatonic letter (standard
+ * order-of-sharps/flats). A pitch with no explicit accidental of its own
+ * (accidental === '') sounds with whatever this table says; an explicit '#',
+ * 'b', or 'n' on the pitch always overrides it — see effectiveAccidental.
+ */
+const KEY_SIGNATURE_ACCIDENTALS: Record<string, Partial<Record<Pitch['letter'], '#' | 'b'>>> = {
+  C: {},
+  G: { F: '#' },
+  D: { F: '#', C: '#' },
+  A: { F: '#', C: '#', G: '#' },
+  E: { F: '#', C: '#', G: '#', D: '#' },
+  F: { B: 'b' },
+  Bb: { B: 'b', E: 'b' },
+  Eb: { B: 'b', E: 'b', A: 'b' },
+  Ab: { B: 'b', E: 'b', A: 'b', D: 'b' },
+};
+
+/**
+ * The accidental a pitch actually sounds with: an explicit accidental on the
+ * note ('#', 'b', or 'n' to cancel a key-signature sharp/flat) always wins;
+ * otherwise it falls back to the key signature's implied sharp/flat for that
+ * letter (or none, in a key that doesn't affect it).
+ */
+export function effectiveAccidental(pitch: Pitch, keySignature: string): Accidental {
+  if (pitch.accidental !== '') return pitch.accidental;
+  return KEY_SIGNATURE_ACCIDENTALS[keySignature]?.[pitch.letter] ?? '';
+}
+
 /** MIDI note number for a pitch, used for audio playback. */
-export function pitchToMidi(pitch: Pitch): number {
+export function pitchToMidi(pitch: Pitch, keySignature: string): number {
   const semitonesFromC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[pitch.letter];
-  const accidentalShift = pitch.accidental === '#' ? 1 : pitch.accidental === 'b' ? -1 : 0;
+  const acc = effectiveAccidental(pitch, keySignature);
+  const accidentalShift = acc === '#' ? 1 : acc === 'b' ? -1 : 0;
   return (pitch.octave + 1) * 12 + semitonesFromC + accidentalShift;
 }
 
-export function pitchToToneNote(pitch: Pitch): string {
-  const acc = pitch.accidental === '#' ? '#' : pitch.accidental === 'b' ? 'b' : '';
-  return `${pitch.letter}${acc}${pitch.octave}`;
+export function pitchToToneNote(pitch: Pitch, keySignature: string): string {
+  const acc = effectiveAccidental(pitch, keySignature);
+  const symbol = acc === '#' ? '#' : acc === 'b' ? 'b' : '';
+  return `${pitch.letter}${symbol}${pitch.octave}`;
 }
 
 export function accidentalCycle(current: Accidental): Accidental {

@@ -45,7 +45,7 @@ export async function playScore(
         events.push({
           timeBeats: trebleTime,
           durationSeconds: beats * secondsPerBeat * 0.92,
-          notes: note.pitches.map(pitchToToneNote),
+          notes: note.pitches.map((p) => pitchToToneNote(p, score.keySignature)),
           synth: trebleSynth,
         });
       }
@@ -59,7 +59,7 @@ export async function playScore(
         events.push({
           timeBeats: bassTime,
           durationSeconds: beats * secondsPerBeat * 0.92,
-          notes: note.pitches.map(pitchToToneNote),
+          notes: note.pitches.map((p) => pitchToToneNote(p, score.keySignature)),
           synth: bassSynth,
         });
       }

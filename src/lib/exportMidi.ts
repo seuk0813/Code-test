@@ -30,7 +30,7 @@ function buildTrack(score: Score, pickNotes: (measure: Measure) => NoteEvent[]) 
       }
       track.addEvent(
         new MidiWriter.NoteEvent({
-          pitch: note.pitches.map(pitchToToneNote),
+          pitch: note.pitches.map((p) => pitchToToneNote(p, score.keySignature)),
           duration,
           wait: pendingWait,
         }),

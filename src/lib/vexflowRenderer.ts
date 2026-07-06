@@ -582,6 +582,7 @@ export function renderScore(
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawOverflowMarks(svg, overflowHitboxes);
+    shrinkKeySignatures(svg);
   }
 
   return {
@@ -673,6 +674,21 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
     bang.textContent = '!';
     g.appendChild(bang);
     svg.appendChild(g);
+  });
+}
+
+/** VexFlow's default key-signature accidentals render at the same size as
+ * note glyphs, which reads as oversized next to the clef — shrink them in
+ * place (scaled around their own bounding-box center, so they stay anchored
+ * to the same stave line instead of drifting). */
+const KEY_SIGNATURE_SCALE = 0.72;
+
+function shrinkKeySignatures(svg: SVGSVGElement): void {
+  svg.querySelectorAll<SVGGElement>('.vf-keysignature').forEach((g) => {
+    const bbox = g.getBBox();
+    const cx = bbox.x + bbox.width / 2;
+    const cy = bbox.y + bbox.height / 2;
+    g.setAttribute('transform', `translate(${cx},${cy}) scale(${KEY_SIGNATURE_SCALE}) translate(${-cx},${-cy})`);
   });
 }
 

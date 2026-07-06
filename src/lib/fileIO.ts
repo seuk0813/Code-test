@@ -116,6 +116,71 @@ async function embedMusicFonts(svg: SVGSVGElement): Promise<SVGSVGElement> {
   return clone;
 }
 
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Fetches a Google Font subset covering exactly `text` (the CSS2 API's
+ * `text=` parameter returns a single already-subsetted @font-face — far
+ * smaller than the full Korean charset) and inlines it as a base64 data URL.
+ * Returns null (caller just skips embedding) if the text is empty or the
+ * fetch fails, e.g. offline — matches the on-screen fallback in that case.
+ */
+async function fetchGoogleFontFace(family: string, weight: number, text: string): Promise<string | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const cssUrl = `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}:wght@${weight}&text=${encodeURIComponent(trimmed)}&display=swap`;
+    const cssRes = await fetch(cssUrl);
+    if (!cssRes.ok) return null;
+    const css = await cssRes.text();
+    const match = css.match(/src:\s*url\(([^)]+)\)\s*format\('([^']+)'\)/);
+    if (!match) return null;
+    const [, fontUrl, format] = match;
+    const fontRes = await fetch(fontUrl);
+    if (!fontRes.ok) return null;
+    const base64 = arrayBufferToBase64(await fontRes.arrayBuffer());
+    return `@font-face { font-family: '${family}'; font-weight: ${weight}; src: url(data:font/${format};base64,${base64}) format('${format}'); }`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Embeds Nanum Myeongjo (title) and Nanum Gothic (composer/lyrics) as
+ * self-contained @font-face rules covering exactly this score's text —
+ * same reasoning as embedMusicFonts, but for regular Korean text: the live
+ * editor has these loaded via the page's Google Fonts <link>, invisible to
+ * the isolated <img> context used to rasterize the SVG for PDF export, so
+ * without this the title/composer/lyrics silently fall back to a generic
+ * system font instead of matching the on-screen editor.
+ */
+async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGElement> {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  const titleText = score.title?.trim() || '제목을 입력하려면 클릭하세요';
+  const composerText = score.composer?.trim() || '작곡가를 입력하려면 클릭하세요';
+  const lyricsText = score.measures.flatMap((m) => (m.lyrics ?? []).map((l) => l.text)).join('');
+
+  const [titleFace, gothicFace] = await Promise.all([
+    fetchGoogleFontFace('Nanum Myeongjo', 800, titleText),
+    fetchGoogleFontFace('Nanum Gothic', 400, `${composerText}${lyricsText}`),
+  ]);
+  const rules = [titleFace, gothicFace].filter((rule): rule is string => rule !== null);
+  if (rules.length > 0) {
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    style.textContent = rules.join('\n');
+    clone.insertBefore(style, clone.firstChild);
+  }
+  return clone;
+}
+
 /**
  * Renders the score to a PDF (via an offscreen canvas raster, so it doesn't
  * depend on the browser having the printed fonts installed) and saves it
@@ -140,7 +205,8 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
     if (!svg) return;
     const width = Number(svg.getAttribute('width')) || svg.clientWidth;
     const height = Number(svg.getAttribute('height')) || svg.clientHeight;
-    const embedded = await embedMusicFonts(svg);
+    const withMusicFonts = await embedMusicFonts(svg);
+    const embedded = await embedTextFonts(withMusicFonts, score);
     const svgString = new XMLSerializer().serializeToString(embedded);
     const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
     await saveRasterizedSvgAsPdf(svgUrl, width, height, filename);

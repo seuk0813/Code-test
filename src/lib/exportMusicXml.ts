@@ -1,4 +1,5 @@
 import type { Measure, NoteEvent, Pitch, Score } from '../types/score';
+import { effectiveAccidental } from './scoreUtils';
 
 const DIVISIONS = 4; // ticks per quarter note
 
@@ -38,8 +39,9 @@ function escapeXml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function pitchXml(pitch: Pitch): string {
-  const alter = pitch.accidental === '#' ? 1 : pitch.accidental === 'b' ? -1 : 0;
+function pitchXml(pitch: Pitch, keySignature: string): string {
+  const acc = effectiveAccidental(pitch, keySignature);
+  const alter = acc === '#' ? 1 : acc === 'b' ? -1 : 0;
   return `<pitch><step>${pitch.letter}</step>${alter !== 0 ? `<alter>${alter}</alter>` : ''}<octave>${pitch.octave}</octave></pitch>`;
 }
 
@@ -48,24 +50,24 @@ function noteTicks(note: NoteEvent): number {
   return note.dotted ? base * 1.5 : base;
 }
 
-function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean): string {
+function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean, keySignature: string): string {
   const duration = noteTicks(note);
   const type = NOTE_TYPE[note.duration];
   const dotXml = note.dotted ? '<dot/>' : '';
   const chordXml = !isFirstOfChord ? '<chord/>' : '';
-  const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(note.pitches[0]);
+  const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(note.pitches[0], keySignature);
   return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}<staff>${staff}</staff></note>`;
 }
 
-function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2): string {
+function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2, keySignature: string): string {
   return notes
     .flatMap((note) => {
       if (note.isRest || note.pitches.length <= 1) {
-        return [noteXml(note, staff, true)];
+        return [noteXml(note, staff, true, keySignature)];
       }
       // Chord: first pitch carries the duration, remaining pitches use <chord/>.
       return note.pitches.map((pitch, i) =>
-        noteXml({ ...note, pitches: [pitch] }, staff, i === 0),
+        noteXml({ ...note, pitches: [pitch] }, staff, i === 0, keySignature),
       );
     })
     .join('');
@@ -81,10 +83,10 @@ function measureXml(measure: Measure, index: number, score: Score): string {
       ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${KEY_FIFTHS[score.keySignature] ?? 0}</fifths></key><time><beats>${score.timeSignature.numerator}</beats><beat-type>${score.timeSignature.denominator}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`
       : '';
 
-  const trebleXml = staffMeasureXml(measure.treble.notes, 1);
+  const trebleXml = staffMeasureXml(measure.treble.notes, 1, score.keySignature);
   const trebleTicks = measureDurationTicks(measure.treble.notes);
   const backupXml = `<backup><duration>${trebleTicks}</duration></backup>`;
-  const bassXml = staffMeasureXml(measure.bass.notes, 2);
+  const bassXml = staffMeasureXml(measure.bass.notes, 2, score.keySignature);
 
   return `<measure number="${index + 1}">${attributes}${trebleXml}${backupXml}${bassXml}</measure>`;
 }
