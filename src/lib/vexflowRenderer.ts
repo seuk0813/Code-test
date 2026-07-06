@@ -613,6 +613,11 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   text.setAttribute('font-family', TITLE_FONT);
   text.setAttribute('font-size', '22');
   text.setAttribute('font-weight', '800');
+  // VexFlow sets stroke="black" stroke-width="1" on the root <svg> for the
+  // staff lines; text elements inherit it and get a 1px outline on top of the
+  // fill, rendering visibly heavier than the plain HTML input editor. Force
+  // fill-only so the committed text matches exactly what was typed.
+  text.setAttribute('stroke', 'none');
   text.setAttribute('fill', title ? '#1a1a1a' : PLACEHOLDER_COLOR);
   text.textContent = title || '제목을 입력하려면 클릭하세요';
   svg.appendChild(text);
@@ -628,6 +633,7 @@ function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): voi
   text.setAttribute('font-family', CREDIT_FONT);
   text.setAttribute('font-style', 'italic');
   text.setAttribute('font-size', '13');
+  text.setAttribute('stroke', 'none'); // fill-only, matching the input editor (see drawHeading)
   text.setAttribute('fill', composer ? '#333' : PLACEHOLDER_COLOR);
   text.textContent = composer || '작곡가를 입력하려면 클릭하세요';
   svg.appendChild(text);
@@ -643,6 +649,7 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.setAttribute('text-anchor', 'middle');
     text.setAttribute('font-family', LYRIC_FONT);
     text.setAttribute('font-size', '14');
+    text.setAttribute('stroke', 'none'); // fill-only, matching the input editor (see drawHeading)
     text.setAttribute('fill', '#333');
     text.textContent = syllable.text;
     svg.appendChild(text);
@@ -705,6 +712,7 @@ function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordH
     text.setAttribute('font-size', '15');
     text.setAttribute('font-weight', '700');
     text.setAttribute('font-style', 'italic');
+    text.setAttribute('stroke', 'none'); // fill-only, matching the input editor (see drawHeading)
     text.setAttribute('fill', '#2f3a8f');
     text.textContent = chordLabel(chord);
     svg.appendChild(text);
