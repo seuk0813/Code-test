@@ -611,7 +611,7 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   text.setAttribute('y', String(hb.y));
   text.setAttribute('text-anchor', 'middle');
   text.setAttribute('font-family', TITLE_FONT);
-  text.setAttribute('font-size', '24');
+  text.setAttribute('font-size', '22');
   text.setAttribute('font-weight', '800');
   text.setAttribute('fill', title ? '#1a1a1a' : PLACEHOLDER_COLOR);
   text.textContent = title || '제목을 입력하려면 클릭하세요';
@@ -681,7 +681,7 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
  * note glyphs, which reads as oversized next to the clef — shrink them in
  * place (scaled around their own bounding-box center, so they stay anchored
  * to the same stave line instead of drifting). */
-const KEY_SIGNATURE_SCALE = 0.72;
+const KEY_SIGNATURE_SCALE = 0.5;
 
 function shrinkKeySignatures(svg: SVGSVGElement): void {
   svg.querySelectorAll<SVGGElement>('.vf-keysignature').forEach((g) => {
@@ -702,7 +702,7 @@ function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordH
     text.setAttribute('y', String(hb.y));
     text.setAttribute('text-anchor', 'middle');
     text.setAttribute('font-family', CHORD_FONT);
-    text.setAttribute('font-size', '16');
+    text.setAttribute('font-size', '15');
     text.setAttribute('font-weight', '700');
     text.setAttribute('font-style', 'italic');
     text.setAttribute('fill', '#2f3a8f');

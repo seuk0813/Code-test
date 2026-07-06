@@ -271,7 +271,12 @@ function App() {
 
   const handleEditToolChange = useCallback(
     (patch: Partial<EditTool>) => {
-      setEditTool((prev) => ({ ...prev, ...patch }));
+      // Clicking an accidental button while a note is selected is a one-shot
+      // edit of that note, not a persistent "pen" like duration/dotted — the
+      // toolbar resets to no-accidental right after applying it, so the next
+      // unrelated new note placed elsewhere doesn't silently inherit it too.
+      const isOneShotAccidental = !!selected && patch.accidental !== undefined;
+      setEditTool((prev) => ({ ...prev, ...patch, ...(isOneShotAccidental ? { accidental: '' } : {}) }));
       if (!selected) return;
       setScore((prev) =>
         updateNoteInScore(prev, selected, (note) => {
