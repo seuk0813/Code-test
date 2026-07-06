@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Accidental, DurationValue, Score } from '../types/score';
-import { DURATION_LABELS } from '../lib/scoreUtils';
+import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
+import { CHORD_QUALITY_LABELS, DURATION_LABELS } from '../lib/scoreUtils';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
 const LONG_PRESS_STEP_MS = 1000;
@@ -136,6 +136,24 @@ const TIME_SIGNATURES: [number, number][] = [
   [2, 4],
 ];
 
+/** All 12 chromatic roots, sharp spelling (C through B), for the chord-builder root dropdown. */
+const CHORD_ROOTS: { letter: Pitch['letter']; accidental: Accidental; label: string }[] = [
+  { letter: 'C', accidental: '', label: 'C' },
+  { letter: 'C', accidental: '#', label: 'C♯' },
+  { letter: 'D', accidental: '', label: 'D' },
+  { letter: 'D', accidental: '#', label: 'D♯' },
+  { letter: 'E', accidental: '', label: 'E' },
+  { letter: 'F', accidental: '', label: 'F' },
+  { letter: 'F', accidental: '#', label: 'F♯' },
+  { letter: 'G', accidental: '', label: 'G' },
+  { letter: 'G', accidental: '#', label: 'G♯' },
+  { letter: 'A', accidental: '', label: 'A' },
+  { letter: 'A', accidental: '#', label: 'A♯' },
+  { letter: 'B', accidental: '', label: 'B' },
+];
+
+const CHORD_QUALITIES: ChordQuality[] = ['maj', 'min', '7', 'maj7', 'min7', 'dim', 'aug', 'sus2', 'sus4', 'm7b5', 'dim7'];
+
 export interface EditTool {
   duration: DurationValue;
   dotted: boolean;
@@ -154,6 +172,8 @@ interface ToolbarProps {
   /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
   selectMode: boolean;
   onSetSelectMode: (value: boolean) => void;
+  /** Builds a chord symbol from a root+quality pair and adds it to the current measure — the structured alternative to typing free text directly on the score. */
+  onAddChord: (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => void;
 }
 
 export function Toolbar({
@@ -166,7 +186,10 @@ export function Toolbar({
   onDeselectNote,
   selectMode,
   onSetSelectMode,
+  onAddChord,
 }: ToolbarProps) {
+  const [chordRootIndex, setChordRootIndex] = useState(0);
+  const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
   useEffect(() => {
@@ -311,6 +334,36 @@ export function Toolbar({
         ))}
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
+        </button>
+      </div>
+
+      <div className="toolbar-row toolbar-row-compact">
+        <span className="group-label tool-group-label" title="근음과 종류를 골라 코드 기호를 추가합니다">
+          🎸 코드 생성
+        </span>
+        <select value={chordRootIndex} onChange={(e) => setChordRootIndex(Number(e.target.value))} aria-label="코드 근음">
+          {CHORD_ROOTS.map((r, i) => (
+            <option key={r.label} value={i}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <select value={chordQuality} onChange={(e) => setChordQuality(e.target.value as ChordQuality)} aria-label="코드 종류">
+          {CHORD_QUALITIES.map((q) => (
+            <option key={q} value={q}>
+              {CHORD_QUALITY_LABELS[q]}
+            </option>
+          ))}
+        </select>
+        <button
+          className="tool-compact"
+          onClick={() => {
+            const root = CHORD_ROOTS[chordRootIndex];
+            onAddChord(root.letter, root.accidental, chordQuality);
+          }}
+          title="선택한 근음·종류로 코드 기호 추가"
+        >
+          + 코드 추가
         </button>
       </div>
     </div>

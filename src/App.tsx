@@ -3,14 +3,16 @@ import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor } from './components/StaffEditor';
 import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
-import type { Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordQuality, Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
 import {
+  addChordToScore,
   addChordToScoreAt,
   addLineBreak,
   addLyricsToScoreAt,
   addMeasure,
   addNoteToScore,
   adjacentIndexAfterDelete,
+  CHORD_QUALITY_SUFFIX,
   createEmptyScore,
   createNote,
   editChordText,
@@ -51,7 +53,7 @@ function App() {
   // whenever a note becomes selected or the duration actually changes.
   const [selectMode, setSelectMode] = useState(false);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
-  const [, setFocusedMeasureIndex] = useState<number | null>(null);
+  const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
@@ -260,6 +262,24 @@ function App() {
     setFocusedMeasureIndex(measureIndex);
   }, []);
 
+  /**
+   * Toolbar chord-builder ("+ 코드 추가"): adds a chord built from a root+
+   * quality pair to whichever measure was last focused (or the first one,
+   * initially). Builds plain-ASCII text (e.g. "D#m7") rather than a
+   * prettified label — addChordToScore re-derives the structured root/
+   * quality by parsing this text the same way free-text chord entry does,
+   * and parseChordText's patterns only match ASCII '#'/'b', not the ♯/♭
+   * display symbols.
+   */
+  const handleAddChordTool = useCallback(
+    (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => {
+      const measureIndex = focusedMeasureIndex ?? 0;
+      const text = `${root}${accidental}${CHORD_QUALITY_SUFFIX[quality]}`;
+      setScore((prev) => addChordToScore(prev, measureIndex, text));
+    },
+    [focusedMeasureIndex, setScore],
+  );
+
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
     setSelectedPitchIndex(null);
@@ -462,6 +482,7 @@ function App() {
         onDeselectNote={handleDeselectNote}
         selectMode={selectMode}
         onSetSelectMode={setSelectMode}
+        onAddChord={handleAddChordTool}
       />
       <div className="status-line">
         {isPlaying

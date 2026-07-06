@@ -308,7 +308,7 @@
 
 .inline-score-input-chordAdd,
 .inline-score-input-chordEdit {
-  font-family: 'Times New Roman', Times, serif;
+  font-family: 'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', sans-serif;
   font-weight: 700;
   font-style: italic;
   font-size: 15px;
@@ -317,7 +317,7 @@
 
 .inline-score-input-lyricAdd,
 .inline-score-input-lyricEdit {
-  font-family: Batang, '바탕', serif;
+  font-family: 'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', sans-serif;
   font-weight: 700;
   font-size: 14px;
 }

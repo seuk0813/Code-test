@@ -242,7 +242,8 @@ export const CHORD_QUALITY_LABELS: Record<ChordQuality, string> = {
   dim7: 'Diminished 7th',
 };
 
-const CHORD_QUALITY_SUFFIX: Record<ChordQuality, string> = {
+/** Plain-ASCII suffixes — every value here round-trips through parseChordText's QUALITY_PATTERNS (used to build free-text chord input from a structured root+quality pair, e.g. the toolbar chord builder). */
+export const CHORD_QUALITY_SUFFIX: Record<ChordQuality, string> = {
   maj: '',
   min: 'm',
   '7': '7',
@@ -252,7 +253,7 @@ const CHORD_QUALITY_SUFFIX: Record<ChordQuality, string> = {
   aug: 'aug',
   sus2: 'sus2',
   sus4: 'sus4',
-  m7b5: 'm7♭5',
+  m7b5: 'm7b5',
   dim7: 'dim7',
 };
 

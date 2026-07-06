@@ -74,8 +74,11 @@ const OVERFLOW_HIT_SLACK = 8;
  */
 const TITLE_FONT = "'Nanum Myeongjo', Batang, serif";
 const CREDIT_FONT = "'Nanum Gothic', 'Malgun Gothic', sans-serif";
-const CHORD_FONT = "'Times New Roman', Times, serif";
-const LYRIC_FONT = "Batang, '바탕', serif";
+// HY중고딕 is a commercial Hanyang font (not a free/embeddable webfont) — used
+// when installed locally; falls back to a similar Gothic if it isn't.
+const HY_JUNGGOTHIC_FONT = "'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', sans-serif";
+const CHORD_FONT = HY_JUNGGOTHIC_FONT;
+const LYRIC_FONT = HY_JUNGGOTHIC_FONT;
 const PLACEHOLDER_COLOR = '#b8b8c2';
 
 export interface NoteHitbox {

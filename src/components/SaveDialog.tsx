@@ -41,10 +41,10 @@ export function SaveDialog({ onCancel, onSave }: SaveDialogProps) {
         </div>
 
         <div className="modal-actions">
-          <button onClick={onCancel}>취소</button>
           <button className="modal-primary" onClick={() => onSave(format)}>
             저장
           </button>
+          <button onClick={onCancel}>취소</button>
         </div>
       </div>
     </div>

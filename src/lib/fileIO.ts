@@ -182,18 +182,36 @@ async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGE
   return clone;
 }
 
+/** Measures per PDF page — a new page starts every 16 measures (4 rows of the standard 4-per-row layout). */
+const MEASURES_PER_PDF_PAGE = 16;
+
 /**
- * Renders the score to a PDF (via an offscreen canvas raster, so it doesn't
- * depend on the browser having the printed fonts installed) and saves it
- * through the same native "Save As" dialog as JSON — falling back to a plain
- * download where the File System Access API isn't available.
- *
- * Renders its own clean, unselected copy of the score into a detached
- * container rather than reusing the live on-screen SVG — so whatever note
- * happens to be selected/highlighted red on screen doesn't leak into the
- * saved file.
+ * Splits a score into page-sized chunks of measures for PDF export. Manual
+ * line breaks are kept only where they fall inside their chunk and reindexed
+ * relative to it; each chunk otherwise keeps the score's title/composer/
+ * tempo/key/time signature so every page renders as a normal, complete score
+ * for just that slice of measures.
  */
-export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
+function chunkScoreForPdf(score: Score): Score[] {
+  const chunks: Score[] = [];
+  for (let start = 0; start < score.measures.length; start += MEASURES_PER_PDF_PAGE) {
+    const end = Math.min(start + MEASURES_PER_PDF_PAGE, score.measures.length);
+    const measures = score.measures.slice(start, end);
+    const lineBreaks = score.lineBreaks.filter((b) => b >= start && b < end - 1).map((b) => b - start);
+    chunks.push({ ...score, measures, lineBreaks });
+  }
+  return chunks.length > 0 ? chunks : [score];
+}
+
+/**
+ * Renders one score (or page-chunk of one) into a detached, offscreen
+ * container and rasterizes it to a PNG data URL — via canvas rather than
+ * depending on the browser having the printed fonts installed. Renders its
+ * own clean, unselected copy rather than reusing the live on-screen SVG, so
+ * whatever note happens to be selected/highlighted red on screen doesn't
+ * leak into the saved file.
+ */
+async function renderScoreToPng(score: Score): Promise<{ dataUrl: string; width: number; height: number }> {
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.left = '-99999px';
@@ -203,14 +221,28 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
   try {
     renderScore(container, score, null, null, null);
     const svg = container.querySelector<SVGSVGElement>('svg');
-    if (!svg) return;
+    if (!svg) return { dataUrl: '', width: 0, height: 0 };
     const width = Number(svg.getAttribute('width')) || svg.clientWidth;
     const height = Number(svg.getAttribute('height')) || svg.clientHeight;
     const withMusicFonts = await embedMusicFonts(svg);
     const embedded = await embedTextFonts(withMusicFonts, score);
     const svgString = new XMLSerializer().serializeToString(embedded);
     const svgUrl = URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' }));
-    await saveRasterizedSvgAsPdf(svgUrl, width, height, filename);
+    try {
+      const img = await loadImage(svgUrl);
+      const scale = 2; // rasterize at 2x for a crisper PDF
+      const canvas = document.createElement('canvas');
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return { dataUrl: '', width: 0, height: 0 };
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return { dataUrl: canvas.toDataURL('image/png'), width, height };
+    } finally {
+      URL.revokeObjectURL(svgUrl);
+    }
   } finally {
     document.body.removeChild(container);
   }
@@ -221,64 +253,68 @@ const A4_WIDTH_PT = 595.28;
 const A4_HEIGHT_PT = 841.89;
 const PDF_MARGIN_PT = 28;
 
-async function saveRasterizedSvgAsPdf(svgUrl: string, width: number, height: number, filename?: string): Promise<void> {
-  try {
-    const img = await loadImage(svgUrl);
-    const scale = 2; // rasterize at 2x for a crisper PDF
-    const canvas = document.createElement('canvas');
-    canvas.width = width * scale;
-    canvas.height = height * scale;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const pngDataUrl = canvas.toDataURL('image/png');
+/**
+ * Draws a rasterized page's PNG onto the current page of `doc`, scaled to
+ * fit within the A4 margins (keeping its aspect ratio) and pinned to the
+ * top, over an explicitly white-filled page — so a page with only a few
+ * measures still produces a full, clean A4 sheet instead of a page sized to
+ * the score's own odd landscape dimensions (which used to leave a black/
+ * clipped edge and a non-standard page size).
+ */
+function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: number, height: number): void {
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, A4_WIDTH_PT, A4_HEIGHT_PT, 'F');
+  if (!dataUrl) return;
 
-    const { jsPDF } = await import('jspdf');
-    // Always a single, portrait A4 page — the score is scaled to fit within
-    // the margins (keeping its aspect ratio) and pinned to the top, so a tiny
-    // score still produces a full A4 sheet and nothing spills off the bottom
-    // (which previously left a black/clipped edge when the page was sized to
-    // the score's own odd landscape dimensions instead of A4).
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-    doc.setFillColor(255, 255, 255);
-    doc.rect(0, 0, A4_WIDTH_PT, A4_HEIGHT_PT, 'F');
-
-    const availW = A4_WIDTH_PT - PDF_MARGIN_PT * 2;
-    const availH = A4_HEIGHT_PT - PDF_MARGIN_PT * 2;
-    const aspect = width / height;
-    let drawW = availW;
-    let drawH = availW / aspect;
-    if (drawH > availH) {
-      drawH = availH;
-      drawW = availH * aspect;
-    }
-    const offX = (A4_WIDTH_PT - drawW) / 2;
-    const offY = PDF_MARGIN_PT;
-    doc.addImage(pngDataUrl, 'PNG', offX, offY, drawW, drawH);
-    const blob = doc.output('blob');
-
-    const base = (filename || 'score').replace(/\.pdf$/i, '');
-    if (hasNativeSavePicker()) {
-      try {
-        const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
-        const handle = await showSaveFilePicker({
-          suggestedName: `${base}.pdf`,
-          types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return;
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') return;
-      }
-    }
-    downloadBlob(blob, `${base}.pdf`);
-  } finally {
-    URL.revokeObjectURL(svgUrl);
+  const availW = A4_WIDTH_PT - PDF_MARGIN_PT * 2;
+  const availH = A4_HEIGHT_PT - PDF_MARGIN_PT * 2;
+  const aspect = width / height;
+  let drawW = availW;
+  let drawH = availW / aspect;
+  if (drawH > availH) {
+    drawH = availH;
+    drawW = availH * aspect;
   }
+  const offX = (A4_WIDTH_PT - drawW) / 2;
+  const offY = PDF_MARGIN_PT;
+  doc.addImage(dataUrl, 'PNG', offX, offY, drawW, drawH);
+}
+
+/**
+ * Renders the score to a PDF and saves it through the same native "Save As"
+ * dialog as JSON — falling back to a plain download where the File System
+ * Access API isn't available. Long scores are split one page per 16
+ * measures (see MEASURES_PER_PDF_PAGE), each its own single A4 page.
+ */
+export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
+  const pages = chunkScoreForPdf(score);
+  const { jsPDF } = await import('jspdf');
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+
+  for (let i = 0; i < pages.length; i++) {
+    if (i > 0) doc.addPage();
+    const { dataUrl, width, height } = await renderScoreToPng(pages[i]);
+    drawPngFitToA4Page(doc, dataUrl, width, height);
+  }
+
+  const blob = doc.output('blob');
+  const base = (filename || 'score').replace(/\.pdf$/i, '');
+  if (hasNativeSavePicker()) {
+    try {
+      const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
+      const handle = await showSaveFilePicker({
+        suggestedName: `${base}.pdf`,
+        types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+    }
+  }
+  downloadBlob(blob, `${base}.pdf`);
 }
 
 export function readScoreFile(file: File): Promise<Score> {
