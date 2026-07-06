@@ -43,7 +43,7 @@ const ROW_HEIGHT = 320;
 // Kept clear of the staff's own clickable "add a ledger-line note" region
 // (which reaches STAVE_TOP_MARGIN above the top staff line) so the chord
 // band's hitbox doesn't swallow clicks meant to place a high note there.
-const CHORD_BAND_Y = 52;
+const CHORD_BAND_Y = 58;
 const TREBLE_Y = 60;
 const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
@@ -521,7 +521,7 @@ export function renderScore(
         // Kept just above the staff's ledger-line click region even though the
         // chord now sits lower (CHORD_BAND_Y), so tapping just above the staff
         // to place a high note isn't swallowed by the chord band.
-        y1: chordY + 4,
+        y1: chordY + 3,
         measureX: x,
         measureWidth,
       });
@@ -617,7 +617,7 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   text.setAttribute('y', String(hb.y));
   text.setAttribute('text-anchor', 'middle');
   text.setAttribute('font-family', TITLE_FONT);
-  text.setAttribute('font-size', '22');
+  text.setAttribute('font-size', '27');
   text.setAttribute('font-weight', '800');
   // VexFlow sets stroke="black" stroke-width="1" on the root <svg> for the
   // staff lines; text elements inherit it and get a 1px outline on top of the
@@ -695,7 +695,7 @@ function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
  * note glyphs, which reads as oversized next to the clef — shrink them in
  * place (scaled around their own bounding-box center, so they stay anchored
  * to the same stave line instead of drifting). */
-const KEY_SIGNATURE_SCALE = 0.5;
+const KEY_SIGNATURE_SCALE = 0.32;
 
 function shrinkKeySignatures(svg: SVGSVGElement): void {
   svg.querySelectorAll<SVGGElement>('.vf-keysignature').forEach((g) => {

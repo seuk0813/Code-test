@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type { ForwardedRef } from 'react';
 import type { Accidental, Clef, DurationValue, NoteLocation, Score } from '../types/score';
 import {
   findChordAt,
@@ -97,6 +98,12 @@ interface StaffEditorProps {
   onEditLyricText: (measureIndex: number, lyricId: string, text: string) => void;
 }
 
+/** Imperative API for the toolbar chord-builder: fill the currently-open chord text box in place, if one is open. */
+export interface StaffEditorHandle {
+  /** Replaces the value of the currently-open chord add/edit box with `text`. Returns false (no-op) if no chord editor is open. */
+  fillActiveChordEditor(text: string): boolean;
+}
+
 /** A floating text input overlaid on the score for in-place editing of title, composer, chords, and lyrics. */
 type InlineEditor =
   | { kind: 'title'; left: number; top: number; width: number; align: 'center'; value: string }
@@ -191,7 +198,7 @@ type TouchGesture =
   | SymbolDrag
   | null;
 
-export function StaffEditor({
+function StaffEditorInner({
   score,
   selected,
   selectedPitchIndex,
@@ -217,7 +224,7 @@ export function StaffEditor({
   onEditChordText,
   onAddLyricAt,
   onEditLyricText,
-}: StaffEditorProps) {
+}: StaffEditorProps, ref: ForwardedRef<StaffEditorHandle>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<SVGSVGElement>(null);
   // .staff-stack (spacer, real layout size = logical size × zoom, so
@@ -270,6 +277,18 @@ export function StaffEditor({
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
   const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
   const inlineCancelledRef = useRef(false);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      fillActiveChordEditor(text: string) {
+        if (!inlineEditor || (inlineEditor.kind !== 'chordAdd' && inlineEditor.kind !== 'chordEdit')) return false;
+        setInlineEditor({ ...inlineEditor, value: text });
+        return true;
+      },
+    }),
+    [inlineEditor],
+  );
 
   const mouseGestureRef = useRef<MouseGesture>(null);
   const mouseHoldRef = useRef<number | null>(null);
@@ -1361,3 +1380,5 @@ export function StaffEditor({
     </div>
   );
 }
+
+export const StaffEditor = forwardRef(StaffEditorInner);

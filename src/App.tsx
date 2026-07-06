@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import './App.css';
-import { StaffEditor } from './components/StaffEditor';
+import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
 import type { Accidental, ChordQuality, Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
 import {
@@ -58,6 +58,7 @@ function App() {
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
   const playbackRef = useRef<PlaybackHandle | null>(null);
+  const staffEditorRef = useRef<StaffEditorHandle>(null);
 
   // Undo/redo history. Every setScore call (the wrapper below, used
   // everywhere else in this file) pushes the pre-change score onto the undo
@@ -263,18 +264,22 @@ function App() {
   }, []);
 
   /**
-   * Toolbar chord-builder ("+ 코드 추가"): adds a chord built from a root+
-   * quality pair to whichever measure was last focused (or the first one,
-   * initially). Builds plain-ASCII text (e.g. "D#m7") rather than a
-   * prettified label — addChordToScore re-derives the structured root/
+   * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
+   * open on the score (the user clicked the chord band to add/edit one),
+   * fills that box in place instead of creating a separate chord elsewhere.
+   * Otherwise adds a chord built from the root+quality pair to whichever
+   * measure was last focused (or the first one, initially). Builds plain-
+   * ASCII text (e.g. "D#m7") rather than a prettified label — the add path
+   * (and the inline editor's own commit) re-derives the structured root/
    * quality by parsing this text the same way free-text chord entry does,
    * and parseChordText's patterns only match ASCII '#'/'b', not the ♯/♭
    * display symbols.
    */
   const handleAddChordTool = useCallback(
     (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => {
-      const measureIndex = focusedMeasureIndex ?? 0;
       const text = `${root}${accidental}${CHORD_QUALITY_SUFFIX[quality]}`;
+      if (staffEditorRef.current?.fillActiveChordEditor(text)) return;
+      const measureIndex = focusedMeasureIndex ?? 0;
       setScore((prev) => addChordToScore(prev, measureIndex, text));
     },
     [focusedMeasureIndex, setScore],
@@ -490,6 +495,7 @@ function App() {
           : '오선보 위의 제목·작곡가·코드·가사를 클릭해 직접 입력하세요. 음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제할 수 있습니다.'}
       </div>
       <StaffEditor
+        ref={staffEditorRef}
         score={score}
         selected={selected}
         selectedPitchIndex={selectedPitchIndex}

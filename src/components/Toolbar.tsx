@@ -357,6 +357,13 @@ export function Toolbar({
         </select>
         <button
           className="tool-compact"
+          // Clicking this button while a chord text box is open on the score
+          // would otherwise blur that input (committing/closing it) before
+          // this button's onClick even runs, since blur fires on mousedown,
+          // before click — losing the open editor a moment too early for
+          // onAddChord's "is one still open?" check. Preventing the default
+          // mousedown behavior keeps the input focused so it's still open.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             const root = CHORD_ROOTS[chordRootIndex];
             onAddChord(root.letter, root.accidental, chordQuality);
