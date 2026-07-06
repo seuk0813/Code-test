@@ -23,6 +23,7 @@ import {
   removeLyricFromScore,
   removeMeasure,
   removeNoteFromScore,
+  splitPitchFromNote,
   togglePitchInNote,
   updateNoteInScore,
 } from './lib/scoreUtils';
@@ -184,23 +185,43 @@ function App() {
    * chord selected), every pitch shifts by the same amount so dragging one
    * doesn't collapse the note down to a single pitch (which used to silently
    * drop the other chord tones). With a `pitchIndex` (one specific pitch
-   * narrowed via a second click — see handleSelectNote), only that pitch
-   * moves; the chord's other tones stay put.
+   * narrowed via a second click — see handleSelectNote), that pitch SPLITS
+   * OFF into its own note at the drop position — the chord is one note with
+   * one shared x, so merely repitching in place would still drag the whole
+   * chord sideways; the other tones must stay put at the original spot.
    */
   const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => {
+    const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+    if (!note) return;
+    if (pitchIndex !== undefined && pitchIndex !== null && note.pitches.length > 1) {
+      const p = note.pitches[pitchIndex];
+      if (!p) return;
+      const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
+      const { letter, octave } = lineToPitch(location.clef, line);
+      const result = splitPitchFromNote(
+        score,
+        location,
+        pitchIndex,
+        { ...p, letter: letter as Pitch['letter'], octave },
+        x ?? note.x,
+      );
+      setScore(result.score);
+      setSelected({ measureIndex: location.measureIndex, clef: location.clef, noteIndex: result.noteIndex });
+      setSelectedPitchIndex(null);
+      return;
+    }
     setScore((prev) =>
-      updateNoteInScore(prev, location, (note) => ({
-        ...note,
-        pitches: note.pitches.map((p, i) => {
-          if (pitchIndex !== undefined && pitchIndex !== null && i !== pitchIndex) return p;
-          const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
+      updateNoteInScore(prev, location, (n) => ({
+        ...n,
+        pitches: n.pitches.map((pitch) => {
+          const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
           const { letter, octave } = lineToPitch(location.clef, line);
-          return { ...p, letter: letter as Pitch['letter'], octave };
+          return { ...pitch, letter: letter as Pitch['letter'], octave };
         }),
-        x: x ?? note.x,
+        x: x ?? n.x,
       })),
     );
-  }, [setScore]);
+  }, [score, setScore]);
 
   const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
     setScore((prev) => updateNoteInScore(prev, location, (note) => ({ ...note, duration })));

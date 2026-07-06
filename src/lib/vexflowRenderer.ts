@@ -216,6 +216,7 @@ function buildStaveNotes(
   notes: NoteEvent[],
   selected: NoteLocation | null,
   hiddenNoteIndex: number | null,
+  hiddenPitchIndex: number | null,
   playingNoteIndex: number | null,
   selectedPitchIndex: number | null,
 ): StaveNote[] {
@@ -267,7 +268,14 @@ function buildStaveNotes(
       }
     }
     if (hiddenNoteIndex === noteIndex) {
-      staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
+      // Dragging one narrowed chord tone hides only that notehead (it splits
+      // off on drop — see App.tsx's handleMoveNote); the rest of the chord
+      // must stay visibly in place. A whole-note drag hides the whole note.
+      if (hiddenPitchIndex !== null && note.pitches.length > 1) {
+        staveNote.setKeyStyle(hiddenPitchIndex, { fillStyle: 'transparent', strokeStyle: 'transparent' });
+      } else {
+        staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
+      }
     }
 
     return staveNote;
@@ -278,6 +286,8 @@ export interface DraggingNote {
   measureIndex: number;
   clef: Clef;
   noteIndex: number;
+  /** When only one narrowed chord tone is being dragged, hide just that notehead instead of the whole note. */
+  pitchIndex?: number | null;
 }
 
 export function renderScore(
@@ -390,6 +400,7 @@ export function renderScore(
           notes,
           effectiveSelected,
           hiddenNoteIndex,
+          hiddenNoteIndex !== null ? draggingNote?.pitchIndex ?? null : null,
           playingNoteIndex,
           playingLocations ? null : selectedPitchIndex ?? null,
         );

@@ -583,6 +583,33 @@ export function updateNoteInScore(
 }
 
 /**
+ * Detaches one pitch of a chord into its own new note: the original note
+ * keeps its position and remaining pitches, and the detached pitch becomes
+ * an independent note (same duration/dot) inserted right after it, at the
+ * given pitch and free-x position. Used when a narrowed chord tone is
+ * dragged away — it splits off instead of hauling the whole chord along.
+ * Returns the new note's index so the caller can select it.
+ */
+export function splitPitchFromNote(
+  score: Score,
+  location: NoteLocation,
+  pitchIndex: number,
+  newPitch: Pitch,
+  x?: number,
+): { score: Score; noteIndex: number } {
+  const newIndex = location.noteIndex + 1;
+  const updated = updateMeasure(score, location.measureIndex, location.clef, (sm) => {
+    const note = sm.notes[location.noteIndex];
+    if (!note || note.pitches.length <= 1) return sm;
+    const notes = [...sm.notes];
+    notes[location.noteIndex] = { ...note, pitches: note.pitches.filter((_, i) => i !== pitchIndex) };
+    notes.splice(newIndex, 0, createNote([newPitch], note.duration, note.dotted, false, x));
+    return { notes };
+  });
+  return { score: updated, noteIndex: newIndex };
+}
+
+/**
  * After deleting the note at `deletedIndex` (list length was `oldLength`),
  * which index should become selected: the previous (left) note if one
  * exists, otherwise the note that shifted into its place (the old right

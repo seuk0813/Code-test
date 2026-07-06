@@ -731,7 +731,7 @@ export function StaffEditor({
         if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
         clearMouseHold();
         gesture.mode = 'drag';
-        setDraggingNote({ ...gesture.location });
+        setDraggingNote({ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null });
       }
       const staff = result.staffHitboxes.find(
         (s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef,
@@ -743,7 +743,7 @@ export function StaffEditor({
       const ghostX = staff.full ? result.noteHitboxes.find(
         (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
       )?.centerX ?? point.x : point.x;
-      renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[0]?.accidental ?? '') as Accidental);
+      renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[gesture.narrowedPitchIndex ?? 0]?.accidental ?? '') as Accidental);
     }
   };
 
@@ -1223,7 +1223,7 @@ export function StaffEditor({
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
       clearTouchHold();
       gesture.mode = 'drag';
-      setDraggingNote({ ...gesture.location });
+      setDraggingNote({ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null });
     }
 
     event.preventDefault();
@@ -1236,7 +1236,7 @@ export function StaffEditor({
           (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
         )?.centerX ?? point.x
       : point.x;
-    renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[0]?.accidental ?? '') as Accidental);
+    renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[gesture.narrowedPitchIndex ?? 0]?.accidental ?? '') as Accidental);
   };
 
   const handleTouchEnd = (event: TouchEvent) => {
