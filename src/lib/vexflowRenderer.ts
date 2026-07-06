@@ -43,7 +43,7 @@ const ROW_HEIGHT = 320;
 // Kept clear of the staff's own clickable "add a ledger-line note" region
 // (which reaches STAVE_TOP_MARGIN above the top staff line) so the chord
 // band's hitbox doesn't swallow clicks meant to place a high note there.
-const CHORD_BAND_Y = 46;
+const CHORD_BAND_Y = 52;
 const TREBLE_Y = 60;
 const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
@@ -75,7 +75,7 @@ const OVERFLOW_HIT_SLACK = 8;
 const TITLE_FONT = "'Nanum Myeongjo', Batang, serif";
 const CREDIT_FONT = "'Nanum Gothic', 'Malgun Gothic', sans-serif";
 const CHORD_FONT = "'Times New Roman', Times, serif";
-const LYRIC_FONT = "'Nanum Gothic', 'Malgun Gothic', sans-serif";
+const LYRIC_FONT = "Batang, '바탕', serif";
 const PLACEHOLDER_COLOR = '#b8b8c2';
 
 export interface NoteHitbox {
@@ -515,7 +515,10 @@ export function renderScore(
         x0: x,
         x1: x + measureWidth,
         y0: chordY - 14,
-        y1: chordY + 8,
+        // Kept just above the staff's ledger-line click region even though the
+        // chord now sits lower (CHORD_BAND_Y), so tapping just above the staff
+        // to place a high note isn't swallowed by the chord band.
+        y1: chordY + 4,
         measureX: x,
         measureWidth,
       });
@@ -649,6 +652,7 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.setAttribute('text-anchor', 'middle');
     text.setAttribute('font-family', LYRIC_FONT);
     text.setAttribute('font-size', '14');
+    text.setAttribute('font-weight', '700');
     text.setAttribute('stroke', 'none'); // fill-only, matching the input editor (see drawHeading)
     text.setAttribute('fill', '#333');
     text.textContent = syllable.text;

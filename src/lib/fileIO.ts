@@ -159,18 +159,19 @@ async function fetchGoogleFontFace(family: string, weight: number, text: string)
  * same reasoning as embedMusicFonts, but for regular Korean text: the live
  * editor has these loaded via the page's Google Fonts <link>, invisible to
  * the isolated <img> context used to rasterize the SVG for PDF export, so
- * without this the title/composer/lyrics silently fall back to a generic
- * system font instead of matching the on-screen editor.
+ * without this the title/composer silently fall back to a generic system
+ * font instead of matching the on-screen editor. (Lyrics use Batang, a
+ * system serif — not a webfont — so they render the same on screen and in
+ * the raster without needing to be embedded.)
  */
 async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGElement> {
   const clone = svg.cloneNode(true) as SVGSVGElement;
   const titleText = score.title?.trim() || '제목을 입력하려면 클릭하세요';
   const composerText = score.composer?.trim() || '작곡가를 입력하려면 클릭하세요';
-  const lyricsText = score.measures.flatMap((m) => (m.lyrics ?? []).map((l) => l.text)).join('');
 
   const [titleFace, gothicFace] = await Promise.all([
     fetchGoogleFontFace('Nanum Myeongjo', 800, titleText),
-    fetchGoogleFontFace('Nanum Gothic', 400, `${composerText}${lyricsText}`),
+    fetchGoogleFontFace('Nanum Gothic', 400, composerText),
   ]);
   const rules = [titleFace, gothicFace].filter((rule): rule is string => rule !== null);
   if (rules.length > 0) {
@@ -215,6 +216,11 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
   }
 }
 
+// A4 in points (72dpi) and the margin kept clear on every side.
+const A4_WIDTH_PT = 595.28;
+const A4_HEIGHT_PT = 841.89;
+const PDF_MARGIN_PT = 28;
+
 async function saveRasterizedSvgAsPdf(svgUrl: string, width: number, height: number, filename?: string): Promise<void> {
   try {
     const img = await loadImage(svgUrl);
@@ -230,12 +236,27 @@ async function saveRasterizedSvgAsPdf(svgUrl: string, width: number, height: num
     const pngDataUrl = canvas.toDataURL('image/png');
 
     const { jsPDF } = await import('jspdf');
-    const doc = new jsPDF({
-      orientation: width >= height ? 'landscape' : 'portrait',
-      unit: 'pt',
-      format: [width, height],
-    });
-    doc.addImage(pngDataUrl, 'PNG', 0, 0, width, height);
+    // Always a single, portrait A4 page — the score is scaled to fit within
+    // the margins (keeping its aspect ratio) and pinned to the top, so a tiny
+    // score still produces a full A4 sheet and nothing spills off the bottom
+    // (which previously left a black/clipped edge when the page was sized to
+    // the score's own odd landscape dimensions instead of A4).
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    doc.setFillColor(255, 255, 255);
+    doc.rect(0, 0, A4_WIDTH_PT, A4_HEIGHT_PT, 'F');
+
+    const availW = A4_WIDTH_PT - PDF_MARGIN_PT * 2;
+    const availH = A4_HEIGHT_PT - PDF_MARGIN_PT * 2;
+    const aspect = width / height;
+    let drawW = availW;
+    let drawH = availW / aspect;
+    if (drawH > availH) {
+      drawH = availH;
+      drawW = availH * aspect;
+    }
+    const offX = (A4_WIDTH_PT - drawW) / 2;
+    const offY = PDF_MARGIN_PT;
+    doc.addImage(pngDataUrl, 'PNG', offX, offY, drawW, drawH);
     const blob = doc.output('blob');
 
     const base = (filename || 'score').replace(/\.pdf$/i, '');

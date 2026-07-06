@@ -317,7 +317,8 @@
 
 .inline-score-input-lyricAdd,
 .inline-score-input-lyricEdit {
-  font-family: 'Nanum Gothic', 'Malgun Gothic', sans-serif;
+  font-family: Batang, '바탕', serif;
+  font-weight: 700;
   font-size: 14px;
 }
 
