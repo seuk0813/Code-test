@@ -63,10 +63,6 @@ const SELECT_MODE_RADIUS = 45;
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 3;
-/** The fixed level a double-tap zooms to (toggling back to ZOOM_MIN on the next double-tap). */
-const DOUBLE_TAP_ZOOM = 2;
-const DOUBLE_TAP_MS = 300;
-const DOUBLE_TAP_PX = 30;
 
 const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
@@ -266,14 +262,18 @@ export function StaffEditor({
   const renderResultRef = useRef<RenderResult | null>(null);
   const suppressClickRef = useRef(false);
 
-  // Mobile pinch/double-tap zoom, applied imperatively via the refs above —
-  // the same pattern already used for ghost/preview overlays — so a
-  // continuous pinch doesn't trigger a React re-render per touchmove.
-  // zoomRef is the single source of truth; eventPoint divides by it so all
-  // hit-testing keeps working in logical (unzoomed) SVG coordinates.
+  // Mobile pinch-zoom, applied imperatively via the refs above — the same
+  // pattern already used for ghost/preview overlays — so a continuous pinch
+  // doesn't trigger a React re-render per touchmove. zoomRef is the single
+  // source of truth; eventPoint divides by it so all hit-testing keeps
+  // working in logical (unzoomed) SVG coordinates.
+  //
+  // (Double-tap-to-zoom was tried too, but a quick double-tap at the same
+  // spot is indistinguishable from confirming a note preview or re-tapping
+  // a tie/slur curve to select it — it silently ate those taps instead, so
+  // it was removed. Pinch covers "확대/축소" without that conflict.)
   const zoomRef = useRef(1);
   const pinchRef = useRef<{ startDist: number; startZoom: number } | null>(null);
-  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
 
   /** Resizes the .staff-stack spacer to the current logical size × zoom, so the scroll area actually covers the zoomed-in content. */
   const syncZoomSpacerSize = () => {
@@ -1208,30 +1208,11 @@ export function StaffEditor({
       touchGestureRef.current = null;
       pendingPreviewRef.current = null;
       clearGhost(overlayRef.current);
-      lastTapRef.current = null;
       const [t0, t1] = [event.touches[0], event.touches[1]];
       pinchRef.current = { startDist: Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY), startZoom: zoomRef.current };
       return;
     }
     if (event.touches.length > 1) return;
-
-    // A quick second tap near the first (standard double-tap) toggles zoom
-    // instead of whatever a lone tap there would normally do — so it stays a
-    // simple, predictable rule rather than guessing intent from tap content.
-    const touchForTap = event.touches[0];
-    const now = Date.now();
-    const lastTap = lastTapRef.current;
-    if (lastTap && now - lastTap.time < DOUBLE_TAP_MS && Math.hypot(touchForTap.clientX - lastTap.x, touchForTap.clientY - lastTap.y) < DOUBLE_TAP_PX) {
-      event.preventDefault();
-      lastTapRef.current = null;
-      clearTouchHold();
-      touchGestureRef.current = null;
-      pendingPreviewRef.current = null;
-      clearGhost(overlayRef.current);
-      applyZoomAt(zoomRef.current > ZOOM_MIN + 0.01 ? ZOOM_MIN : DOUBLE_TAP_ZOOM, touchForTap.clientX, touchForTap.clientY);
-      return;
-    }
-    lastTapRef.current = { time: now, x: touchForTap.clientX, y: touchForTap.clientY };
 
     const result = renderResultRef.current;
     const touch = event.touches[0];

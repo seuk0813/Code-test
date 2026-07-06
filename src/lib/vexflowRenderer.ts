@@ -638,6 +638,16 @@ export function renderScore(
     });
   }
 
+  /** Whether the connection owned by `loc` is the one currently selected (curve click, or a note touching it) — see selectedConnectionSource. */
+  function isSelectedConnectionAt(loc: NoteLocation): boolean {
+    return (
+      !!selectedConnectionSource &&
+      selectedConnectionSource.measureIndex === loc.measureIndex &&
+      selectedConnectionSource.clef === loc.clef &&
+      selectedConnectionSource.noteIndex === loc.noteIndex
+    );
+  }
+
   // A single "connect to next" flag becomes a tie when the pitches match, a
   // slur when they differ — so one toolbar button covers both.
   (['treble', 'bass'] as const).forEach((clef) => {
@@ -646,18 +656,23 @@ export function renderScore(
       const cur = chain[i];
       const next = chain[i + 1];
       if (cur.event.isRest || next.event.isRest || !noteConnects(cur.event)) continue;
+      const curHb = noteHitboxById.get(cur.event.id);
+      const nextHb = noteHitboxById.get(next.event.id);
+      const curLoc = curHb && { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
+      const selectedStyle = curLoc && isSelectedConnectionAt(curLoc) ? { fillStyle: '#d6432b', strokeStyle: '#d6432b' } : null;
       try {
         if (pitchesMatch(cur.event, next.event)) {
-          new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
+          const tie = new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote });
+          if (selectedStyle) tie.setStyle(selectedStyle);
+          // drawWithStyle (not draw) actually pushes the style to the
+          // context first — StaveTie/Curve.draw() ignores setStyle() otherwise.
+          tie.setContext(context).drawWithStyle();
         } else {
-          new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+          const curve = new Curve(cur.staveNote, next.staveNote, {});
+          if (selectedStyle) curve.setStyle(selectedStyle);
+          curve.setContext(context).drawWithStyle();
         }
-        const curHb = noteHitboxById.get(cur.event.id);
-        const nextHb = noteHitboxById.get(next.event.id);
-        if (curHb && nextHb) {
-          const curLoc = { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
-          pushConnectionHitbox(curLoc, curHb, nextHb);
-        }
+        if (curLoc && curHb && nextHb) pushConnectionHitbox(curLoc, curHb, nextHb);
       } catch {
         // Skip connections VexFlow can't render (e.g. mismatched key counts).
       }
@@ -680,25 +695,27 @@ export function renderScore(
       const fromPitch = fromIdx !== undefined ? cur.event.pitches[fromIdx] : undefined;
       const toPitch = toIdx !== undefined ? target.event.pitches[toIdx] : undefined;
       const specificPitchMatch = fromPitch && toPitch && pitchToVexKey(fromPitch) === pitchToVexKey(toPitch);
+      const curHb = noteHitboxById.get(cur.event.id);
+      const curLoc = curHb && { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
+      const selectedStyle = curLoc && isSelectedConnectionAt(curLoc) ? { fillStyle: '#d6432b', strokeStyle: '#d6432b' } : null;
       try {
+        let el: InstanceType<typeof StaveTie> | InstanceType<typeof Curve>;
         if (specificPitchMatch && fromIdx !== undefined && toIdx !== undefined) {
-          new StaveTie({
+          el = new StaveTie({
             firstNote: cur.staveNote,
             lastNote: target.staveNote,
             firstIndexes: [fromIdx],
             lastIndexes: [toIdx],
-          })
-            .setContext(context)
-            .draw();
+          });
         } else if (pitchesMatch(cur.event, target.event)) {
-          new StaveTie({ firstNote: cur.staveNote, lastNote: target.staveNote }).setContext(context).draw();
+          el = new StaveTie({ firstNote: cur.staveNote, lastNote: target.staveNote });
         } else {
-          new Curve(cur.staveNote, target.staveNote, {}).setContext(context).draw();
+          el = new Curve(cur.staveNote, target.staveNote, {});
         }
-        const curHb = noteHitboxById.get(cur.event.id);
+        if (selectedStyle) el.setStyle(selectedStyle);
+        el.setContext(context).drawWithStyle();
         const targetHb = noteHitboxById.get(target.event.id);
-        if (curHb && targetHb) {
-          const curLoc = { measureIndex: curHb.measureIndex, clef: curHb.clef, noteIndex: curHb.noteIndex };
+        if (curLoc && curHb && targetHb) {
           pushConnectionHitbox(curLoc, curHb, targetHb);
         }
       } catch {
