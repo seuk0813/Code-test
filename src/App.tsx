@@ -100,13 +100,35 @@ function App() {
 
   const deleteNoteAndSelectAdjacent = useCallback(
     (location: NoteLocation) => {
+      const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      // A narrowed chord tone (selectedPitchIndex set — see handleSelectNote)
+      // deletes just that one pitch, leaving the rest of the chord in place,
+      // instead of removing the whole note.
+      if (
+        note &&
+        selected &&
+        selected.measureIndex === location.measureIndex &&
+        selected.clef === location.clef &&
+        selected.noteIndex === location.noteIndex &&
+        selectedPitchIndex !== null &&
+        note.pitches.length > 1
+      ) {
+        setScore((prev) =>
+          updateNoteInScore(prev, location, (n) => ({
+            ...n,
+            pitches: n.pitches.filter((_, i) => i !== selectedPitchIndex),
+          })),
+        );
+        setSelectedPitchIndex(null);
+        return;
+      }
       const oldLength = score.measures[location.measureIndex][location.clef].notes.length;
       const adjacent = adjacentIndexAfterDelete(location.noteIndex, oldLength);
       setScore((prev) => removeNoteFromScore(prev, location));
       setSelected(adjacent === null ? null : { measureIndex: location.measureIndex, clef: location.clef, noteIndex: adjacent });
       setSelectedPitchIndex(null);
     },
-    [score, setScore],
+    [score, selected, selectedPitchIndex, setScore],
   );
 
   useEffect(() => {

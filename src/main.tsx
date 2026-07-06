@@ -24,6 +24,13 @@ function checkForNewVersion() {
     })
 }
 checkForNewVersion()
+// Re-check whenever the tab regains focus/visibility — a long-lived open
+// tab (common on mobile, where users rarely do a hard refresh) would
+// otherwise never notice a new deploy after its first load.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkForNewVersion()
+})
+window.addEventListener('focus', checkForNewVersion)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
