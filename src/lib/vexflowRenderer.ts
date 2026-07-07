@@ -6,6 +6,7 @@ import {
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   measureCapacityBeats,
+  noteBeats,
   pitchToLine,
   pitchToVexKey,
   vexDurationString,
@@ -361,6 +362,38 @@ export interface DraggingNote {
   pitchIndex?: number | null;
 }
 
+/**
+ * Groups consecutive beamable notes (8th/16th/32nd, non-rest) that fall
+ * within the same beat "pulse" (a quarter note in simple meters, a dotted
+ * quarter in compound ones) into arrays ready for `new Beam(group)` — e.g. a
+ * 16th + 16th + 8th that together exactly fill one beat become ONE beam
+ * (with a partial secondary beam under just the two 16ths), matching
+ * standard notation. VexFlow's own `Beam.generateBeams` only reliably beams
+ * same-duration runs; mixed durations completing a beat were left with the
+ * odd note (like a trailing 8th) unbeamed, so groups are built manually here
+ * instead, purely from each note's actual beat duration.
+ */
+function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], pulseBeats: number): StaveNote[][] {
+  const groups: StaveNote[][] = [];
+  let current: StaveNote[] = [];
+  let currentPulse = -1;
+  let cumulative = 0;
+  notes.forEach((note, i) => {
+    const beamable = !note.isRest && (note.duration === '8' || note.duration === '16');
+    const pulseIndex = Math.floor((cumulative + 1e-6) / pulseBeats);
+    if (beamable && pulseIndex === currentPulse) {
+      current.push(staveNotes[i]);
+    } else {
+      if (current.length > 1) groups.push(current);
+      current = beamable ? [staveNotes[i]] : [];
+      currentPulse = pulseIndex;
+    }
+    cumulative += noteBeats(note);
+  });
+  if (current.length > 1) groups.push(current);
+  return groups;
+}
+
 export function renderScore(
   container: HTMLDivElement,
   score: Score,
@@ -501,21 +534,26 @@ export function renderScore(
           let beams: Beam[] = [];
           if (full) {
             try {
-              const beamable = staveNotes.filter((n) => !n.isRest());
-              // Group beams by the time signature's actual beat, not a fixed
-              // quarter-note assumption: simple meters (2/4, 3/4, 4/4, ...)
-              // beam 2 eighth notes per beat; compound/triple meters (6/8,
-              // 9/8, 12/8, ...) beam 3 per beat (the dotted-quarter pulse) —
-              // see Beam.getDefaultBeamGroups, VexFlow's own implementation
-              // of the standard notation convention.
-              const beamGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
-              beams = Beam.generateBeams(beamable, { groups: beamGroups });
+              // Beat "pulse" length, not a fixed quarter-note assumption:
+              // simple meters (2/4, 3/4, 4/4, ...) pulse every quarter note;
+              // compound/triple meters (6/8, 9/8, 12/8, ...) pulse every
+              // dotted quarter — see Beam.getDefaultBeamGroups, VexFlow's own
+              // implementation of the standard notation convention, whose
+              // first group fraction (of a whole note) converts to beats by ×4.
+              const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+              const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
+              const beamGroups = computeBeamNoteGroups(notes, staveNotes, pulseBeats);
+              beams = beamGroups.map((group) => new Beam(group));
             } catch {
               // Beaming is a visual nicety; ignore failures on unusual groupings.
             }
           }
 
-          new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 100 : 20));
+          // Trailing margin reserved after the last note's onset: a dotted
+          // note's dot is a modifier drawn to the notehead's right, and 20px
+          // left it sitting flush against (sometimes past) the barline —
+          // widen it slightly so the dot always has clear room.
+          new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 108 : 28));
 
           // getAbsoluteX() is only meaningful once each note knows its stave
           // (Voice.draw sets this internally, but we need the formatted X now to
