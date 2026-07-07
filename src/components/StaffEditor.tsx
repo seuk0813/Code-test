@@ -79,6 +79,8 @@ interface StaffEditorProps {
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
+  /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
+  onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
@@ -212,6 +214,7 @@ function StaffEditorInner({
   onAddNote,
   onDeleteNote,
   onMoveNote,
+  onMergeNoteIntoChord,
   onTogglePitch,
   onChangeDuration,
   onFocusMeasure,
@@ -430,9 +433,14 @@ function StaffEditorInner({
     const treble = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'treble');
     const bass = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'bass');
     if (!treble || !bass) return null;
+    const chordBand = result.chordBandHitboxes.find((c) => c.measureIndex === mi);
     const x = treble.noteStartX + frac * treble.noteAreaWidth;
-    const y0 = treble.refY0 - treble.spacing * 3;
-    const y1 = bass.refY0 + bass.spacing * 5;
+    // Top: right under the chord symbols, which also covers the full treble staff
+    // (the chord band's bottom edge sits right at the treble staff's top line).
+    const y0 = chordBand ? chordBand.y1 : treble.refY0 - treble.spacing * 5;
+    // Bottom: the bass staff's own bottom line, with no extra overhang, so the
+    // overhang above the treble staff and below the bass staff both stay ~0.
+    const y1 = bass.refY0 - bass.spacing * 1;
     return { x, y0, y1 };
   };
 
@@ -788,6 +796,35 @@ function StaffEditorInner({
       event.preventDefault();
       inlineCancelledRef.current = true;
       event.currentTarget.blur();
+    } else if (event.key === 'Tab' && inlineEditor && (inlineEditor.kind === 'chordAdd' || inlineEditor.kind === 'chordEdit')) {
+      // Commit the current chord and immediately open the next chord slot so
+      // a run of chords can be typed one after another without re-clicking.
+      event.preventDefault();
+      const ed = inlineEditor;
+      const currentOffset =
+        ed.kind === 'chordAdd' ? ed.offset : (score.measures[ed.measureIndex]?.chords.find((c) => c.id === ed.chordId)?.offset ?? 0);
+      commitInlineEditor();
+      const result = renderResultRef.current;
+      if (!result) return;
+      const step = 0.18;
+      let nextMeasureIndex = ed.measureIndex;
+      let nextOffset = currentOffset + step;
+      if (nextOffset > 0.95) {
+        nextMeasureIndex += 1;
+        nextOffset = 0.05;
+      }
+      const band = result.chordBandHitboxes.find((b) => b.measureIndex === nextMeasureIndex);
+      if (!band) return;
+      setInlineEditor({
+        kind: 'chordAdd',
+        measureIndex: nextMeasureIndex,
+        offset: nextOffset,
+        left: band.measureX + nextOffset * band.measureWidth - 45,
+        top: (band.y0 + band.y1) / 2 - 8,
+        width: 90,
+        align: 'center',
+        value: '',
+      });
     }
   };
 
@@ -876,8 +913,23 @@ function StaffEditorInner({
         : undefined;
       if (point && staff) {
         const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
-        const x = staff.full ? undefined : xFractionAt(staff, point.x);
-        onMoveNote(gesture.location, snappedLine - gesture.startLine, x, gesture.narrowedPitchIndex ?? null);
+        const deltaLine = snappedLine - gesture.startLine;
+        // Dragging a whole (not narrowed-to-one-pitch) note onto another
+        // existing note merges the two into a single chord instead of just
+        // repositioning — two separate NoteEvents landing at the same x
+        // would otherwise still play sequentially, not together.
+        const isNarrowed = gesture.narrowedPitchIndex !== undefined && gesture.narrowedPitchIndex !== null;
+        const sourceNote = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
+        const mergeTarget =
+          !isNarrowed && sourceNote && !sourceNote.isRest
+            ? chordMergeTargetAt(gesture.location.measureIndex, gesture.location.clef, point.x, gesture.location.noteIndex)
+            : null;
+        if (mergeTarget !== null) {
+          onMergeNoteIntoChord(gesture.location, mergeTarget, deltaLine);
+        } else {
+          const x = staff.full ? undefined : xFractionAt(staff, point.x);
+          onMoveNote(gesture.location, deltaLine, x, gesture.narrowedPitchIndex ?? null);
+        }
       }
       suppressClickRef.current = true;
       setDraggingNote(null);
@@ -1410,12 +1462,18 @@ function StaffEditorInner({
           const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
           if (staff) {
             const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
-            onMoveNote(
-              gesture.location,
-              snappedLine - gesture.startLine,
-              staff.full ? undefined : xFractionAt(staff, point.x),
-              gesture.narrowedPitchIndex ?? null,
-            );
+            const deltaLine = snappedLine - gesture.startLine;
+            const isNarrowed = gesture.narrowedPitchIndex !== undefined && gesture.narrowedPitchIndex !== null;
+            const sourceNote = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
+            const mergeTarget =
+              !isNarrowed && sourceNote && !sourceNote.isRest
+                ? chordMergeTargetAt(gesture.location.measureIndex, gesture.location.clef, point.x, gesture.location.noteIndex)
+                : null;
+            if (mergeTarget !== null) {
+              onMergeNoteIntoChord(gesture.location, mergeTarget, deltaLine);
+            } else {
+              onMoveNote(gesture.location, deltaLine, staff.full ? undefined : xFractionAt(staff, point.x), gesture.narrowedPitchIndex ?? null);
+            }
           }
         }
         setDraggingNote(null);

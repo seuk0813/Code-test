@@ -169,10 +169,12 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
-  /** Toggles a tie/slur from the selected note to the next note in its staff. */
-  onToggleTie: () => void;
-  /** Whether the currently selected note already connects to the next. */
-  tieActive: boolean;
+  /** Data the connect (tie/slur) button needs about the selected note; null when nothing eligible is selected. */
+  connectInfo: ConnectInfo | null;
+  /** Commits a tie/slur connection from the selected note to the next, anchored at the given pitch index. */
+  onSetConnection: (kind: 'tie' | 'slur', pitchIndex: number) => void;
+  /** Removes the selected note's connection to the next note. */
+  onClearConnection: () => void;
   /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
   selectMode: boolean;
   onSetSelectMode: (value: boolean) => void;
@@ -191,8 +193,9 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
-  onToggleTie,
-  tieActive,
+  connectInfo,
+  onSetConnection,
+  onClearConnection,
   selectMode,
   onSetSelectMode,
   onAddChord,
@@ -296,10 +299,10 @@ export function Toolbar({
           <button
             className={`tool-icon-btn ${cKeyBasedAccidentals ? 'active' : ''}`}
             onClick={onToggleCKeyBasedAccidentals}
-            aria-label="C키 기준 조표"
-            title="켜면 조표와 무관하게 항상 C키 기준으로 음표를 놓습니다 (자동으로 임시표가 붙지 않음)"
+            aria-label="C키 기준 임시표"
+            title="켜면 조표에 맞는 임시표가 자동으로 붙습니다 (예: F키에서는 시 음에 자동으로 플랫). 끄면 자동 임시표가 사라집니다 (직접 입력한 임시표는 유지)"
           >
-            C키 기준 조표
+            C키 기준 임시표
           </button>
         )}
         <label className="tempo-field">
@@ -366,14 +369,12 @@ export function Toolbar({
             <span className="tool-glyph">{a.label}</span>
           </button>
         ))}
-        <button
-          className={`tool-compact ${tieActive ? 'active' : ''}`}
-          onClick={onToggleTie}
+        <ConnectButton
+          info={connectInfo}
           disabled={!hasSelection}
-          title="선택한 음표를 다음 음표와 붙임줄/이음줄로 연결 (같은 음이면 붙임줄, 다른 음이면 이음줄)"
-        >
-          🎵⌣ 붙임/이음줄
-        </button>
+          onSetConnection={onSetConnection}
+          onClearConnection={onClearConnection}
+        />
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
         </button>
@@ -416,6 +417,132 @@ export function Toolbar({
           + 코드 추가
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Data the connect (tie/slur) button needs about the currently selected note. */
+export interface ConnectInfo {
+  /** Whether the selected note is already connected to the next one. */
+  active: boolean;
+  /** The selected note's pitches — a slur can anchor to any of them. */
+  pitches: Pitch[];
+  /** Indices into `pitches` that also appear in the next note — the only valid tie anchors. */
+  tieCandidates: number[];
+}
+
+const SOLFEGE: Record<Pitch['letter'], string> = { C: '도', D: '레', E: '미', F: '파', G: '솔', A: '라', B: '시' };
+const ACCIDENTAL_SYMBOL: Record<Accidental, string> = { '#': '♯', b: '♭', n: '♮', '': '' };
+
+function pitchLabel(p: Pitch): string {
+  return `${SOLFEGE[p.letter]}${ACCIDENTAL_SYMBOL[p.accidental]}${p.octave}`;
+}
+
+/**
+ * Tie/slur connect button: a clean single glyph that, on click, asks whether
+ * to add a tie (붙임줄 — always the same pitch, so no choice needed unless a
+ * chord has more than one matching pitch in the next note) or a slur (이음줄
+ * — always asks which pitch in the chord to anchor). Clicking while already
+ * connected clears the connection immediately instead of reopening the menu.
+ */
+function ConnectButton({
+  info,
+  disabled,
+  onSetConnection,
+  onClearConnection,
+}: {
+  info: ConnectInfo | null;
+  disabled: boolean;
+  onSetConnection: (kind: 'tie' | 'slur', pitchIndex: number) => void;
+  onClearConnection: () => void;
+}) {
+  const [step, setStep] = useState<'closed' | 'kind' | 'pitch'>('closed');
+  const [pendingKind, setPendingKind] = useState<'tie' | 'slur'>('tie');
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (step === 'closed') return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setStep('closed');
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [step]);
+
+  // The selection (or its connection state) changed from underneath an open menu — close it.
+  useEffect(() => {
+    setStep('closed');
+  }, [info]);
+
+  const chooseKind = (kind: 'tie' | 'slur') => {
+    if (!info) return;
+    if (kind === 'tie') {
+      if (info.tieCandidates.length === 0) {
+        window.alert('다음 음표에 같은 음이 없어 붙임줄로 연결할 수 없습니다.');
+        setStep('closed');
+        return;
+      }
+      if (info.tieCandidates.length === 1) {
+        onSetConnection('tie', info.tieCandidates[0]);
+        setStep('closed');
+        return;
+      }
+      setPendingKind('tie');
+      setStep('pitch');
+      return;
+    }
+    if (info.pitches.length === 1) {
+      onSetConnection('slur', 0);
+      setStep('closed');
+      return;
+    }
+    setPendingKind('slur');
+    setStep('pitch');
+  };
+
+  const candidateIndices = info ? (pendingKind === 'tie' ? info.tieCandidates : info.pitches.map((_, i) => i)) : [];
+
+  return (
+    <div className="connect-button" ref={rootRef}>
+      <button
+        className={`tool-compact ${info?.active ? 'active' : ''}`}
+        onClick={() => {
+          if (!info) return;
+          if (info.active) {
+            onClearConnection();
+            setStep('closed');
+          } else {
+            setStep('kind');
+          }
+        }}
+        disabled={disabled}
+        aria-label="붙임줄/이음줄 연결"
+        title={info?.active ? '연결 해제' : '붙임줄(같은 음) 또는 이음줄(다른 음)로 다음 음표와 연결'}
+      >
+        <span className="tool-glyph">⌣</span>
+      </button>
+      {step === 'kind' && info && (
+        <div className="connect-popover">
+          <button onClick={() => chooseKind('tie')}>붙임줄 (타이)</button>
+          <button onClick={() => chooseKind('slur')}>이음줄 (슬러)</button>
+        </div>
+      )}
+      {step === 'pitch' && info && (
+        <div className="connect-popover">
+          <div className="connect-popover-label">연결할 음 선택</div>
+          {candidateIndices.map((i) => (
+            <button
+              key={i}
+              onClick={() => {
+                onSetConnection(pendingKind, i);
+                setStep('closed');
+              }}
+            >
+              {pitchLabel(info.pitches[i])}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

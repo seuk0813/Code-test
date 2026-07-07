@@ -27,10 +27,21 @@ export interface NoteEvent {
    */
   x?: number;
   /**
-   * Connect to the next note in the same staff with a curved line — drawn as a
-   * tie (붙임줄) when the next note has the same pitch, otherwise a slur (이음줄).
+   * Connect to the next note in the same staff with a curved line — a tie
+   * (붙임줄, same pitch) or a slur (이음줄, phrase mark). When set without
+   * `connectKind` (older saved scores), the renderer falls back to
+   * auto-detecting tie-vs-slur by comparing the whole chord's pitches.
    */
   connectToNext?: boolean;
+  /** Which kind of curve `connectToNext` draws. See `connectToNext`. */
+  connectKind?: 'tie' | 'slur';
+  /**
+   * Index into this note's `pitches` that anchors the connection — lets the
+   * user pick which pitch in a chord to tie/slur instead of the renderer
+   * guessing. Ties re-derive the matching pitch index in the next note by
+   * key; slurs reuse this same index (clamped) on the next note's chord.
+   */
+  connectPitchIndex?: number | null;
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */

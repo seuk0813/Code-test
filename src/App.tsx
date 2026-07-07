@@ -20,9 +20,12 @@ import {
   insertMeasureAfter,
   keySignatureAccidentalFor,
   lineToPitch,
+  mergeNoteIntoChord,
   moveChordInScore,
   moveLyricInScore,
+  nextNoteLocation,
   pitchToLine,
+  pitchToVexKey,
   removeChordFromScore,
   removeLyricFromScore,
   removeMeasure,
@@ -77,11 +80,13 @@ function App() {
   // with nothing selected, it arms turning the next note it touches into a
   // rest of that note's own duration, then clears immediately after.
   const [restArmed, setRestArmed] = useState(false);
-  // When true, new notes never auto-inherit the key signature's implied
-  // accidental (as if the piece were in C major) — the user must always
-  // pick one explicitly. Default (false) auto-applies it, e.g. placing a
-  // plain B in F major automatically shows/sounds as Bb.
-  const [cKeyBasedAccidentals, setCKeyBasedAccidentals] = useState(false);
+  // "C키 기준 임시표": when true (default), new/moved notes auto-inherit the
+  // accidental the current key signature implies relative to C major — e.g.
+  // placing a plain B in F major automatically shows/sounds as Bb. An
+  // explicit accidental the user picks always overrides this, and turning
+  // the toggle off never touches accidentals already baked into existing
+  // notes — it only stops applying to notes placed/moved from then on.
+  const [cKeyBasedAccidentals, setCKeyBasedAccidentals] = useState(true);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
   const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
@@ -223,9 +228,15 @@ function App() {
       durationOverride?: DurationValue,
       x?: number,
     ) => {
+      // Only an explicitly-armed accidental (button pressed with nothing
+      // selected) counts as the user's choice for a brand-new note/tone —
+      // editTool.accidental also gets set just to reflect the CURRENTLY
+      // SELECTED note's own accidental for display, and reusing that stale
+      // value here used to leak it onto an unrelated new chord tone.
+      const explicitAccidental = accidentalArmed ? editTool.accidental : '';
       const accidental =
-        editTool.accidental || cKeyBasedAccidentals
-          ? editTool.accidental
+        explicitAccidental || !cKeyBasedAccidentals
+          ? explicitAccidental
           : keySignatureAccidentalFor(letter as Pitch['letter'], score.keySignature);
       const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave };
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
@@ -245,7 +256,7 @@ function App() {
       setAccidentalArmed(false);
       setRestArmed(false);
     },
-    [score, editTool, cKeyBasedAccidentals, setScore],
+    [score, editTool, cKeyBasedAccidentals, accidentalArmed, setScore],
   );
 
   /**
@@ -259,19 +270,44 @@ function App() {
    * one shared x, so merely repitching in place would still drag the whole
    * chord sideways; the other tones must stay put at the original spot.
    */
+  /** Recomputes the accidental for a pitch after a drag repositions it: a
+   * changed letter almost certainly invalidates whatever accidental it had
+   * (a C# dragged onto D shouldn't silently become a D#), so re-derive from
+   * the key signature (respecting "C키 기준 임시표") like a fresh placement.
+   * An octave-only move (same letter) keeps its existing accidental as-is. */
+  const accidentalAfterMove = useCallback(
+    (oldLetter: Pitch['letter'], oldAccidental: Accidental, newLetter: Pitch['letter']): Accidental => {
+      if (newLetter === oldLetter) return oldAccidental;
+      if (!cKeyBasedAccidentals) return '';
+      return keySignatureAccidentalFor(newLetter, score.keySignature);
+    },
+    [cKeyBasedAccidentals, score.keySignature],
+  );
+
   const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => {
     const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
     if (!note) return;
     if (pitchIndex !== undefined && pitchIndex !== null && note.pitches.length > 1) {
+      // A pure horizontal drag (no pitch change) just nudges that notehead's
+      // x within the chord — it must NOT detach into a new note, since that
+      // would silently add a whole extra beat to the measure (and can push
+      // it into overflow) for what the user meant as a cosmetic reposition.
+      // Splitting into an independent note only makes sense when the pitch
+      // itself actually changes (a real voice-separation move).
+      if (deltaLine === 0) {
+        setScore((prev) => updateNoteInScore(prev, location, (n) => ({ ...n, x: x ?? n.x })));
+        return;
+      }
       const p = note.pitches[pitchIndex];
       if (!p) return;
       const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
       const { letter, octave } = lineToPitch(location.clef, line);
+      const accidental = accidentalAfterMove(p.letter, p.accidental, letter as Pitch['letter']);
       const result = splitPitchFromNote(
         score,
         location,
         pitchIndex,
-        { ...p, letter: letter as Pitch['letter'], octave },
+        { ...p, letter: letter as Pitch['letter'], octave, accidental },
         x ?? note.x,
       );
       setScore(result.score);
@@ -285,12 +321,38 @@ function App() {
         pitches: n.pitches.map((pitch) => {
           const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
           const { letter, octave } = lineToPitch(location.clef, line);
-          return { ...pitch, letter: letter as Pitch['letter'], octave };
+          const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
+          return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
         }),
         x: x ?? n.x,
       })),
     );
-  }, [score, setScore]);
+  }, [score, setScore, accidentalAfterMove]);
+
+  /**
+   * Dragging one whole note onto another existing note in the same staff
+   * merges them into a single chord instead of leaving two notes visually
+   * overlapping but still rhythmically separate — the dragged note's pitches
+   * (shifted by the same deltaLine a normal move would apply) join the
+   * target's pitches, and the now-redundant source note is removed.
+   */
+  const handleMergeNoteIntoChord = useCallback(
+    (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => {
+      const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      if (!note) return;
+      const movedPitches = note.pitches.map((pitch) => {
+        const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
+        const { letter, octave } = lineToPitch(location.clef, line);
+        const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
+        return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
+      });
+      const result = mergeNoteIntoChord(score, location, targetNoteIndex, movedPitches);
+      setScore(result.score);
+      setSelected({ measureIndex: location.measureIndex, clef: location.clef, noteIndex: result.noteIndex });
+      setSelectedPitchIndex(null);
+    },
+    [score, setScore, accidentalAfterMove],
+  );
 
   const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
     setScore((prev) => updateNoteInScore(prev, location, (note) => ({ ...note, duration })));
@@ -298,10 +360,11 @@ function App() {
 
   const handleTogglePitch = useCallback(
     (location: NoteLocation, letter: string, octave: number) => {
+      const explicitAccidental = accidentalArmed ? editTool.accidental : '';
       setScore((prev) => {
         const accidental =
-          editTool.accidental || cKeyBasedAccidentals
-            ? editTool.accidental
+          explicitAccidental || !cKeyBasedAccidentals
+            ? explicitAccidental
             : keySignatureAccidentalFor(letter as Pitch['letter'], prev.keySignature);
         return togglePitchInNote(prev, location, letter as Pitch['letter'], accidental, octave);
       });
@@ -309,7 +372,7 @@ function App() {
       if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
       setAccidentalArmed(false);
     },
-    [editTool.accidental, cKeyBasedAccidentals, setScore],
+    [editTool.accidental, cKeyBasedAccidentals, accidentalArmed, setScore],
   );
 
   const handleFocusMeasure = useCallback((measureIndex: number) => {
@@ -428,14 +491,17 @@ function App() {
       // toolbar resets to no-accidental right after applying it, so the next
       // unrelated new note placed elsewhere doesn't silently inherit it too.
       const isOneShotAccidental = !!selected && patch.accidental !== undefined;
-      // Same one-shot treatment for the rest button: applying it to an
-      // already-selected note doesn't leave it "pressed" for future notes.
-      const isOneShotRest = !!selected && patch.isRest !== undefined;
+      // isRest is NOT force-reset here the way accidental is: while a note
+      // stays selected, editTool.isRest must keep faithfully mirroring that
+      // note's true current state (so pressing the button again correctly
+      // toggles it back) — resetting it immediately broke exactly that.
+      // The "don't leak into unrelated new notes" concern is handled
+      // separately in handleAddNote, which resets it right after a note is
+      // actually created.
       setEditTool((prev) => ({
         ...prev,
         ...patch,
         ...(isOneShotAccidental ? { accidental: '' } : {}),
-        ...(isOneShotRest ? { isRest: false } : {}),
       }));
       if (patch.accidental !== undefined) {
         // No note selected yet — arm it as a one-shot pen instead of applying
@@ -485,15 +551,57 @@ function App() {
     deleteNoteAndSelectAdjacent(selected);
   }, [selected, deleteNoteAndSelectAdjacent]);
 
-  /** Toggles a tie/slur from the selected note to the next note in its staff. */
-  const handleToggleTie = useCallback(() => {
-    if (!selected) return;
-    setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, connectToNext: !note.connectToNext })));
-  }, [selected, setScore]);
-
   const selectedNote =
     selected && score.measures[selected.measureIndex]?.[selected.clef].notes[selected.noteIndex];
-  const tieActive = !!selectedNote?.connectToNext;
+
+  /**
+   * Info the connect (tie/slur) button needs to offer a pitch choice: which
+   * of the selected note's pitches also appear in the next note (tie
+   * candidates — ties always join matching pitches, so no choice is needed
+   * when there's exactly one), plus the full pitch list (slurs let the user
+   * pick any of them, since a slur doesn't require a pitch match).
+   */
+  const connectInfo =
+    selected && selectedNote && !selectedNote.isRest
+      ? (() => {
+          const nextLoc = nextNoteLocation(score, selected);
+          const nextNote = nextLoc && score.measures[nextLoc.measureIndex][nextLoc.clef].notes[nextLoc.noteIndex];
+          const tieCandidates =
+            nextNote && !nextNote.isRest
+              ? selectedNote.pitches
+                  .map((p, i) => (nextNote.pitches.some((np) => pitchToVexKey(np) === pitchToVexKey(p)) ? i : -1))
+                  .filter((i) => i >= 0)
+              : [];
+          return { active: !!selectedNote.connectToNext, pitches: selectedNote.pitches, tieCandidates };
+        })()
+      : null;
+
+  const handleSetConnection = useCallback(
+    (kind: 'tie' | 'slur', pitchIndex: number) => {
+      if (!selected) return;
+      setScore((prev) =>
+        updateNoteInScore(prev, selected, (note) => ({
+          ...note,
+          connectToNext: true,
+          connectKind: kind,
+          connectPitchIndex: pitchIndex,
+        })),
+      );
+    },
+    [selected, setScore],
+  );
+
+  const handleClearConnection = useCallback(() => {
+    if (!selected) return;
+    setScore((prev) =>
+      updateNoteInScore(prev, selected, (note) => ({
+        ...note,
+        connectToNext: false,
+        connectKind: undefined,
+        connectPitchIndex: undefined,
+      })),
+    );
+  }, [selected, setScore]);
 
   const handleAddMeasure = useCallback(() => {
     setScore((prev) => addMeasure(prev));
@@ -585,6 +693,20 @@ function App() {
     setPlaybackClock({ get: handle.getSeconds });
   }, [score, isPlaying, playbackStartBeat]);
 
+  // Spacebar always starts playback from wherever the seek bar was last set
+  // (dragging it only moves playbackStartBeat — it never plays by itself).
+  useEffect(() => {
+    const onSpacePlay = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return;
+      if (e.code !== 'Space') return;
+      e.preventDefault();
+      void handlePlay();
+    };
+    document.addEventListener('keydown', onSpacePlay);
+    return () => document.removeEventListener('keydown', onSpacePlay);
+  }, [handlePlay]);
+
   const handleStop = useCallback(() => {
     playbackRef.current?.stop();
     playbackRef.current = null;
@@ -632,43 +754,46 @@ function App() {
 
   return (
     <div className="app">
-      <div className="app-header">
-        <div className="quick-actions">
-          {isPlaying ? (
-            <button className="play-button" onClick={handleStop} aria-label="정지" title="정지">
-              ⏹
+      <div className="sticky-controls">
+        <div className="app-header">
+          <div className="quick-actions">
+            {isPlaying ? (
+              <button className="play-button" onClick={handleStop} aria-label="일시정지" title="일시정지">
+                ⏸
+              </button>
+            ) : (
+              <button className="play-button" onClick={handlePlay} aria-label="재생" title="재생">
+                ▶
+              </button>
+            )}
+            <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
+              💾 저장
             </button>
-          ) : (
-            <button className="play-button" onClick={handlePlay} aria-label="재생" title="재생">
-              ▶
-            </button>
-          )}
-          <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
-            💾 저장
-          </button>
-          <label className="file-input-label quick-action-button" title="저장했던 악보 파일(.json)을 불러옵니다">
-            📂 불러오기
-            <input type="file" accept="application/json" onChange={handleLoadFile} />
-          </label>
-          <MoreMenu onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
+            <label className="file-input-label quick-action-button" title="저장했던 악보 파일(.json)을 불러옵니다">
+              📂 불러오기
+              <input type="file" accept="application/json" onChange={handleLoadFile} />
+            </label>
+            <MoreMenu onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
+          </div>
         </div>
+        <Toolbar
+          score={score}
+          onScoreMetaChange={handleScoreMetaChange}
+          editTool={editTool}
+          onEditToolChange={handleEditToolChange}
+          hasSelection={!!selected}
+          onDeleteSelected={handleDeleteSelected}
+          onDeselectNote={handleDeselectNote}
+          connectInfo={connectInfo}
+          onSetConnection={handleSetConnection}
+          onClearConnection={handleClearConnection}
+          selectMode={selectMode}
+          onSetSelectMode={setSelectMode}
+          onAddChord={handleAddChordTool}
+          cKeyBasedAccidentals={cKeyBasedAccidentals}
+          onToggleCKeyBasedAccidentals={() => setCKeyBasedAccidentals((v) => !v)}
+        />
       </div>
-      <Toolbar
-        score={score}
-        onScoreMetaChange={handleScoreMetaChange}
-        editTool={editTool}
-        onEditToolChange={handleEditToolChange}
-        hasSelection={!!selected}
-        onDeleteSelected={handleDeleteSelected}
-        onDeselectNote={handleDeselectNote}
-        onToggleTie={handleToggleTie}
-        tieActive={tieActive}
-        selectMode={selectMode}
-        onSetSelectMode={setSelectMode}
-        onAddChord={handleAddChordTool}
-        cKeyBasedAccidentals={cKeyBasedAccidentals}
-        onToggleCKeyBasedAccidentals={() => setCKeyBasedAccidentals((v) => !v)}
-      />
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
@@ -685,6 +810,7 @@ function App() {
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
         onMoveNote={handleMoveNote}
+        onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}
         onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}

@@ -642,6 +642,22 @@ export function updateNoteInScore(
 }
 
 /**
+ * Finds the note immediately following `location` in the same clef, crossing
+ * into the next measure(s) if the current one has no more notes. Used for
+ * tie/slur connections, which always join to "the next note in the staff"
+ * regardless of measure boundaries. Returns null at the end of the score.
+ */
+export function nextNoteLocation(score: Score, location: NoteLocation): NoteLocation | null {
+  const sameMeasureNext = score.measures[location.measureIndex]?.[location.clef].notes[location.noteIndex + 1];
+  if (sameMeasureNext) return { ...location, noteIndex: location.noteIndex + 1 };
+  for (let mi = location.measureIndex + 1; mi < score.measures.length; mi++) {
+    const notes = score.measures[mi][location.clef].notes;
+    if (notes.length > 0) return { measureIndex: mi, clef: location.clef, noteIndex: 0 };
+  }
+  return null;
+}
+
+/**
  * Detaches one pitch of a chord into its own new note: the original note
  * keeps its position and remaining pitches, and the detached pitch becomes
  * an independent note (same duration/dot) inserted right after it, at the
@@ -669,14 +685,43 @@ export function splitPitchFromNote(
 }
 
 /**
+ * Merges one note's pitches into another note in the same staff — dragging a
+ * separate note onto an existing one to form a chord — and removes the
+ * now-redundant source note. A pitch that would exactly duplicate one
+ * already in the target is skipped. Returns the merged note's new index
+ * (the array shifts by one once the source is removed, if it came first).
+ */
+export function mergeNoteIntoChord(
+  score: Score,
+  location: NoteLocation,
+  targetNoteIndex: number,
+  movedPitches: Pitch[],
+): { score: Score; noteIndex: number } {
+  const updated = updateMeasure(score, location.measureIndex, location.clef, (sm) => {
+    const target = sm.notes[targetNoteIndex];
+    if (!target) return sm;
+    const existingKeys = new Set(target.pitches.map(pitchToVexKey));
+    const mergedPitches = [...target.pitches, ...movedPitches.filter((p) => !existingKeys.has(pitchToVexKey(p)))];
+    const notes = sm.notes
+      .map((n, i) => (i === targetNoteIndex ? { ...n, pitches: mergedPitches } : n))
+      .filter((_, i) => i !== location.noteIndex);
+    return { notes };
+  });
+  const noteIndex = targetNoteIndex > location.noteIndex ? targetNoteIndex - 1 : targetNoteIndex;
+  return { score: updated, noteIndex };
+}
+
+/**
  * After deleting the note at `deletedIndex` (list length was `oldLength`),
  * which index should become selected: the previous (left) note if one
  * exists, otherwise the note that shifted into its place (the old right
  * neighbor), otherwise none.
  */
 export function adjacentIndexAfterDelete(deletedIndex: number, oldLength: number): number | null {
-  const left = deletedIndex - 1;
-  if (left >= 0) return left;
   const newLength = oldLength - 1;
-  return newLength > 0 ? 0 : null;
+  if (newLength <= 0) return null;
+  // The note that was to the right shifts into the deleted slot — prefer it;
+  // deleting the last note has none, so fall back to the new last (old left).
+  if (deletedIndex < newLength) return deletedIndex;
+  return deletedIndex - 1;
 }

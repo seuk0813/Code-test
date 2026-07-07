@@ -17,11 +17,11 @@ const NOTE_AREA_RIGHT_PAD = 16;
 /** Per-note accidentals (♯/♭/♮ on individual notes) default to the same
  * glyph size as the notehead itself, which reads as oversized — render them
  * smaller, independently of the notehead's own size. */
-const ACCIDENTAL_FONT_SIZE = 18;
+const ACCIDENTAL_FONT_SIZE = 21;
 /** Horizontal gap between a notehead's right edge and its accidental glyph's left edge. */
 const ACCIDENTAL_GAP = 2;
 /** Fingering numbers are drawn slightly larger than accidentals, to the right of them. */
-const FINGER_FONT_SIZE = 21;
+const FINGER_FONT_SIZE = 16;
 /** Gap before a fingering number, and the width reserved for an accidental glyph when one precedes it. */
 const FINGER_GAP = 4;
 const ACCIDENTAL_ADVANCE = 11;
@@ -680,8 +680,7 @@ export function renderScore(
   });
 
   // Tie/slur curves: a note's `connectToNext` joins it to the following note
-  // in the same staff — a tie (붙임줄) when the pitches match, else a slur
-  // (이음줄). Drawn last so every note already has its final position.
+  // in the same staff. Drawn last so every note already has its final position.
   (['treble', 'bass'] as const).forEach((clef) => {
     const chain = connectChains[clef];
     for (let i = 0; i < chain.length - 1; i++) {
@@ -689,13 +688,37 @@ export function renderScore(
       const next = chain[i + 1];
       if (cur.event.isRest || next.event.isRest || !cur.event.connectToNext) continue;
       try {
-        const sameKeys =
-          cur.event.pitches.length === next.event.pitches.length &&
-          cur.event.pitches.every((p, pi) => pitchToVexKey(p) === pitchToVexKey(next.event.pitches[pi]));
-        if (sameKeys) {
-          new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
+        if (cur.event.connectKind) {
+          // User-chosen anchor pitch (see ConnectButton in Toolbar.tsx): a
+          // tie re-finds the same pitch by key in the next note (falling
+          // back to the same index if none matches); a slur just reuses the
+          // same chord index on both ends, clamped to the next note's size.
+          const curIndex = Math.min(cur.event.connectPitchIndex ?? 0, cur.event.pitches.length - 1);
+          let nextIndex = Math.min(curIndex, next.event.pitches.length - 1);
+          if (cur.event.connectKind === 'tie') {
+            const curKey = pitchToVexKey(cur.event.pitches[curIndex]);
+            const matched = next.event.pitches.findIndex((p) => pitchToVexKey(p) === curKey);
+            if (matched >= 0) nextIndex = matched;
+          }
+          new StaveTie({
+            firstNote: cur.staveNote,
+            lastNote: next.staveNote,
+            firstIndexes: [curIndex],
+            lastIndexes: [nextIndex],
+          })
+            .setContext(context)
+            .draw();
         } else {
-          new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+          // Legacy data saved before connectKind existed: auto-detect by
+          // comparing the whole chord (tie only if every pitch matches).
+          const sameKeys =
+            cur.event.pitches.length === next.event.pitches.length &&
+            cur.event.pitches.every((p, pi) => pitchToVexKey(p) === pitchToVexKey(next.event.pitches[pi]));
+          if (sameKeys) {
+            new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
+          } else {
+            new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+          }
         }
       } catch {
         // Skip connections VexFlow can't render (e.g. mismatched key counts).
