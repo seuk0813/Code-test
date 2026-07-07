@@ -1,15 +1,5 @@
-import {
-  Accidental as VexAccidental,
-  Beam,
-  Dot,
-  Formatter,
-  Renderer,
-  Stave,
-  StaveConnector,
-  StaveNote,
-  Voice,
-} from 'vexflow';
-import type { ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
+import { Beam, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, Voice } from 'vexflow';
+import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeRows,
@@ -28,6 +18,52 @@ const NOTE_AREA_RIGHT_PAD = 16;
  * glyph size as the notehead itself, which reads as oversized — render them
  * smaller, independently of the notehead's own size. */
 const ACCIDENTAL_FONT_SIZE = 18;
+/** Horizontal gap between an accidental glyph's right edge and its notehead's left edge. */
+const ACCIDENTAL_GAP = 2;
+
+/**
+ * Accidentals are drawn as plain SVG text (like the chord/lyric/title labels
+ * below), NOT as VexFlow Accidental modifiers attached via addModifier().
+ * VexFlow's own Accidental.format() always adds a fixed padding/spacing
+ * overhead to its note's ModifierContext width whenever the note has any
+ * accidental at all (regardless of the glyph's own measured width — even
+ * forcing that to 0 didn't help). Formatter then sums every tick's modifier
+ * width to lay out the whole measure, so adding one accidental reflowed
+ * every other note's — and accidental's — X position too. Drawing them
+ * manually, entirely outside VexFlow's modifier/formatting system, keeps
+ * every other note's position unaffected by whether any given note happens
+ * to carry an accidental.
+ */
+// SMuFL codepoints (Bravura, already the score's music font) for the glyphs
+// VexFlow's own Accidental class would otherwise have drawn — see Tables
+// .accidentalCodes() in VexFlow's source, which resolves to these same values.
+const ACCIDENTAL_GLYPH: Record<Exclude<Accidental, ''>, string> = {
+  '#': '',
+  b: '',
+  n: '',
+};
+
+interface AccidentalMark {
+  x: number;
+  y: number;
+  type: Exclude<Accidental, ''>;
+  /** null = inherit the default (black) fill, same as the notehead. */
+  color: string | null;
+}
+
+function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void {
+  marks.forEach((mark) => {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(mark.x - ACCIDENTAL_GAP));
+    text.setAttribute('y', String(mark.y));
+    text.setAttribute('text-anchor', 'end');
+    text.setAttribute('font-size', String(ACCIDENTAL_FONT_SIZE));
+    text.setAttribute('stroke', 'none');
+    if (mark.color) text.setAttribute('fill', mark.color);
+    text.textContent = ACCIDENTAL_GLYPH[mark.type];
+    svg.appendChild(text);
+  });
+}
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -54,8 +90,8 @@ const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
-/** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the doubled title font (see TITLE_FONT_SIZE). */
-const TITLE_BAND = 96;
+/** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the title font size (see drawHeading's font-size). */
+const TITLE_BAND = 82;
 /**
  * Extra vertical space reserved right below the title for the composer
  * credit — a dedicated band of its own, not shared with the chord-symbol
@@ -241,18 +277,8 @@ function buildStaveNotes(
       Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
     }
 
-    if (!note.isRest) {
-      note.pitches.forEach((pitch, i) => {
-        if (pitch.accidental) {
-          const accidental = new VexAccidental(pitch.accidental);
-          // Note.addModifier() calls accidental.setNote(), which resets the
-          // font size back to VexFlow's default — so setFontSize must run
-          // after addModifier, not before, or it gets silently clobbered.
-          staveNote.addModifier(accidental, i);
-          accidental.setFontSize(ACCIDENTAL_FONT_SIZE);
-        }
-      });
-    }
+    // Accidentals are NOT attached as VexFlow modifiers here — see
+    // drawAccidentalMarks below for why, and how they're drawn instead.
 
     // During playback the currently-sounding note is recolored the same red
     // as a selection (real VexFlow styling, so it's pixel-perfectly aligned —
@@ -348,6 +374,7 @@ export function renderScore(
   const lyricHitboxes: LyricHitbox[] = [];
   const lyricBandHitboxes: LyricBandHitbox[] = [];
   const overflowHitboxes: OverflowHitbox[] = [];
+  const accidentalMarks: AccidentalMark[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -407,15 +434,17 @@ export function renderScore(
         const playingLoc = playingLocations?.[clef];
         const playingNoteIndex =
           playingLoc && playingLoc.measureIndex === measureIndex && playingLoc.clef === clef ? playingLoc.noteIndex : null;
+        const hiddenPitchIndex = hiddenNoteIndex !== null ? draggingNote?.pitchIndex ?? null : null;
+        const selectedPitchIndexForClef = playingLocations ? null : selectedPitchIndex ?? null;
         const staveNotes = buildStaveNotes(
           clef,
           measureIndex,
           notes,
           effectiveSelected,
           hiddenNoteIndex,
-          hiddenNoteIndex !== null ? draggingNote?.pitchIndex ?? null : null,
+          hiddenPitchIndex,
           playingNoteIndex,
-          playingLocations ? null : selectedPitchIndex ?? null,
+          selectedPitchIndexForClef,
         );
 
         const refY0 = stave.getYForNote(0);
@@ -497,6 +526,26 @@ export function renderScore(
               ys,
             };
             noteHitboxes.push(hb);
+
+            if (!note.isRest) {
+              const isSelected =
+                effectiveSelected &&
+                effectiveSelected.measureIndex === measureIndex &&
+                effectiveSelected.clef === clef &&
+                effectiveSelected.noteIndex === noteIndex;
+              const isPlaying = playingNoteIndex === noteIndex;
+              note.pitches.forEach((pitch, pitchIndex) => {
+                if (!pitch.accidental) return;
+                if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
+                let color: string | null = null;
+                if (isSelected || isPlaying) {
+                  const narrowed =
+                    isSelected && !isPlaying && selectedPitchIndexForClef !== null && note.pitches.length > 1;
+                  color = narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
+                }
+                accidentalMarks.push({ x: centerXs[noteIndex], y: ys[pitchIndex], type: pitch.accidental, color });
+              });
+            }
           });
         }
 
@@ -575,7 +624,7 @@ export function renderScore(
     });
   });
 
-  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 56 };
+  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 48 };
   // Right-aligned above the 4th measure's slot (computed above, fixed by
   // layout geometry regardless of how many measures actually exist yet) —
   // so it sits in its final resting spot from the very first empty measure
@@ -598,6 +647,7 @@ export function renderScore(
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawOverflowMarks(svg, overflowHitboxes);
+    drawAccidentalMarks(svg, accidentalMarks);
     shrinkKeySignatures(svg);
   }
 
@@ -627,7 +677,7 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   text.setAttribute('y', String(hb.y));
   text.setAttribute('text-anchor', 'middle');
   text.setAttribute('font-family', TITLE_FONT);
-  text.setAttribute('font-size', '54');
+  text.setAttribute('font-size', '46');
   text.setAttribute('font-weight', '800');
   // VexFlow sets stroke="black" stroke-width="1" on the root <svg> for the
   // staff lines; text elements inherit it and get a 1px outline on top of the
