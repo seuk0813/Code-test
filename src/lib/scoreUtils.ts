@@ -544,6 +544,28 @@ export function addMeasure(score: Score): Score {
   return { ...score, measures: [...score.measures, createEmptyMeasure()] };
 }
 
+/** Deep-clones a measure's musical content with fresh ids (so the copy is a
+ * fully independent measure, not sharing note/chord/lyric identities). */
+export function cloneMeasure(measure: Measure): Measure {
+  const cloneNotes = (notes: NoteEvent[]): NoteEvent[] =>
+    notes.map((n) => ({ ...n, id: nextId('n'), pitches: n.pitches.map((p) => ({ ...p })) }));
+  return {
+    id: nextId('m'),
+    treble: { notes: cloneNotes(measure.treble.notes) },
+    bass: { notes: cloneNotes(measure.bass.notes) },
+    chords: measure.chords.map((c) => ({ ...c, id: nextId('c') })),
+    lyrics: measure.lyrics.map((l) => ({ ...l, id: nextId('ly') })),
+  };
+}
+
+/** Inserts a (freshly-cloned) measure right after the given index, shifting any manual line breaks after it. */
+export function insertMeasureAfter(score: Score, measureIndex: number, measure: Measure): Score {
+  const measures = [...score.measures];
+  measures.splice(measureIndex + 1, 0, cloneMeasure(measure));
+  const lineBreaks = score.lineBreaks.map((b) => (b > measureIndex ? b + 1 : b));
+  return { ...score, measures, lineBreaks };
+}
+
 /** Removes a measure and reindexes any manual line breaks that referenced measures after it. Keeps at least one measure. */
 export function removeMeasure(score: Score, measureIndex: number): Score {
   if (score.measures.length <= 1) return score;

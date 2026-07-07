@@ -355,6 +355,12 @@
   background: #8a8a8a;
 }
 
+.measure-fab-copy,
+.measure-fab-paste {
+  background: #5a6acf;
+  font-size: 22px;
+}
+
 .measure-fab:hover:not(:disabled) {
   filter: brightness(1.08);
 }

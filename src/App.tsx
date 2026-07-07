@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordQuality, Clef, DurationValue, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordQuality, Clef, DurationValue, Measure, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScore,
   addChordToScoreAt,
@@ -17,6 +17,7 @@ import {
   createNote,
   editChordText,
   editLyricText,
+  insertMeasureAfter,
   keySignatureAccidentalFor,
   lineToPitch,
   moveChordInScore,
@@ -82,6 +83,8 @@ function App() {
   // plain B in F major automatically shows/sounds as Bb.
   const [cKeyBasedAccidentals, setCKeyBasedAccidentals] = useState(false);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
+  // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
+  const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
@@ -484,6 +487,21 @@ function App() {
     setScore((prev) => addMeasure(prev));
   }, [setScore]);
 
+  /** Copies the focused (or last) measure into an in-memory clipboard. */
+  const handleCopyMeasure = useCallback(() => {
+    const idx = focusedMeasureIndex ?? score.measures.length - 1;
+    const measure = score.measures[idx];
+    if (measure) setCopiedMeasure(measure);
+  }, [focusedMeasureIndex, score.measures]);
+
+  /** Pastes the clipboard measure as a new measure right after the focused (or last) one. */
+  const handlePasteMeasure = useCallback(() => {
+    if (!copiedMeasure) return;
+    const idx = focusedMeasureIndex ?? score.measures.length - 1;
+    setScore((prev) => insertMeasureAfter(prev, idx, copiedMeasure));
+    setFocusedMeasureIndex(idx + 1);
+  }, [copiedMeasure, focusedMeasureIndex, score.measures.length, setScore]);
+
   /** Always removes the last measure — the FAB's "－" is a fixed end-of-score action, not tied to selection. */
   const handleDeleteLastMeasure = useCallback(() => {
     if (score.measures.length <= 1) return;
@@ -670,6 +688,23 @@ function App() {
         playbackClock={playbackClock}
       />
       <div className="measure-fabs">
+        <button
+          className="measure-fab measure-fab-copy"
+          onClick={handleCopyMeasure}
+          title={`${(focusedMeasureIndex ?? score.measures.length - 1) + 1}번 마디 복사`}
+          aria-label="마디 복사"
+        >
+          ⎘
+        </button>
+        <button
+          className="measure-fab measure-fab-paste"
+          onClick={handlePasteMeasure}
+          disabled={!copiedMeasure}
+          title="복사한 마디를 뒤에 붙여넣기"
+          aria-label="마디 붙여넣기"
+        >
+          ▤
+        </button>
         <button
           className="measure-fab measure-fab-remove"
           onClick={handleDeleteLastMeasure}
