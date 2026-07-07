@@ -21,10 +21,12 @@ import {
   insertMeasureAfter,
   keySignatureAccidentalFor,
   lineToPitch,
+  measureCapacityBeats,
   mergeNoteIntoChord,
   moveChordInScore,
   moveLyricInScore,
   nextNoteLocation,
+  noteBeats,
   pitchToLine,
   pitchToVexKey,
   removeChordFromScore,
@@ -753,27 +755,60 @@ function App() {
     setPlaybackClock({ get: handle.getSeconds });
   }, [score, isPlaying, playbackStartBeat]);
 
-  // Spacebar always starts playback from wherever the seek bar was last set
-  // (dragging it only moves playbackStartBeat — it never plays by itself).
-  useEffect(() => {
-    const onSpacePlay = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return;
-      if (e.code !== 'Space') return;
-      e.preventDefault();
-      void handlePlay();
-    };
-    document.addEventListener('keydown', onSpacePlay);
-    return () => document.removeEventListener('keydown', onSpacePlay);
-  }, [handlePlay]);
+  /**
+   * Pause: stops the sound but parks the seek bar on the note that was
+   * playing (its onset), so pressing play/space resumes from there. Reads the
+   * elapsed transport time BEFORE stopping (stop resets it to 0), converts to
+   * beats, then snaps back to the most-recent note onset at or before it.
+   */
+  const handlePause = useCallback(() => {
+    const elapsedSeconds = playbackClock ? playbackClock.get() : 0;
+    const secondsPerBeat = 60 / score.tempo;
+    const currentBeat = elapsedSeconds / secondsPerBeat;
+    const measureBeats = measureCapacityBeats(score.timeSignature);
+    let onset = 0;
+    (['treble', 'bass'] as const).forEach((clef) => {
+      score.measures.forEach((measure, mi) => {
+        let t = mi * measureBeats;
+        measure[clef].notes.forEach((n) => {
+          if (t <= currentBeat + 1e-6 && t > onset) onset = t;
+          t += noteBeats(n);
+        });
+      });
+    });
+    playbackRef.current?.stop();
+    playbackRef.current = null;
+    setIsPlaying(false);
+    setPlayingMeasure(null);
+    setPlaybackClock(null);
+    setPlaybackStartBeat(onset);
+  }, [playbackClock, score]);
 
+  /** Stop: halts playback and rewinds the seek bar all the way to the start. */
   const handleStop = useCallback(() => {
     playbackRef.current?.stop();
     playbackRef.current = null;
     setIsPlaying(false);
     setPlayingMeasure(null);
     setPlaybackClock(null);
+    setPlaybackStartBeat(0);
   }, []);
+
+  // Spacebar toggles playback: plays from wherever the seek bar sits, and
+  // pressing it again while playing pauses (parking the bar on the current
+  // note — see handlePause). Ignored while typing in a field or on a button.
+  useEffect(() => {
+    const onSpace = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return;
+      if (e.code !== 'Space') return;
+      e.preventDefault();
+      if (isPlaying) handlePause();
+      else void handlePlay();
+    };
+    document.addEventListener('keydown', onSpace);
+    return () => document.removeEventListener('keydown', onSpace);
+  }, [isPlaying, handlePlay, handlePause]);
 
   const handleExportMusicXml = useCallback(() => {
     const xml = exportMusicXml(score);
@@ -818,7 +853,7 @@ function App() {
         <div className="app-header">
           <div className="quick-actions">
             {isPlaying ? (
-              <button className="play-button" onClick={handleStop} aria-label="일시정지" title="일시정지">
+              <button className="play-button" onClick={handlePause} aria-label="일시정지" title="일시정지 (연주하던 음표에서 멈춤)">
                 ⏸
               </button>
             ) : (
@@ -826,6 +861,15 @@ function App() {
                 ▶
               </button>
             )}
+            <button
+              className="play-button stop-button"
+              onClick={handleStop}
+              disabled={!isPlaying && playbackStartBeat === 0}
+              aria-label="정지"
+              title="정지 (처음으로 되감기)"
+            >
+              ⏹
+            </button>
             <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
               💾 저장
             </button>

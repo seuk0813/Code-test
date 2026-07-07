@@ -33,52 +33,74 @@ function flattenStaffNotes(score: Score, clef: Clef, measureBeats: number): Flat
   return flat;
 }
 
-/** Whether `cur`'s connection into `next` is a tie (same pitch ringing on) rather than a slur (phrasing only). */
-function isTieConnection(cur: NoteEvent, next: NoteEvent): boolean {
-  if (!cur.connectToNext) return false;
-  if (cur.connectKind === 'tie') return true;
-  if (cur.connectKind === 'slur') return false;
-  // Legacy data saved before connectKind existed: auto-detect like the renderer used to.
-  return (
+/**
+ * Which pitch index in `next` the pitch `cur.pitches[curPitchIdx]` ties into,
+ * or -1 if this pitch is not tied onward.
+ *
+ * A tie (붙임줄) joins the SAME pitch across two notes: the tied pitch keeps
+ * ringing (its duration extends) and must NOT be re-attacked in the next note.
+ * A slur (이음줄) is phrasing only — it re-articulates every note normally, so
+ * it never ties a pitch. Ties are anchored at one specific pitch (the user's
+ * chosen `connectPitchIndex`), so a chord tie only carries that one pitch over;
+ * the chord's other pitches still play (and re-attack) on their own.
+ */
+function tiedPitchIndex(cur: NoteEvent, curPitchIdx: number, next: NoteEvent): number {
+  if (!cur.connectToNext || next.isRest) return -1;
+  const curKey = pitchToVexKey(cur.pitches[curPitchIdx]);
+  const match = next.pitches.findIndex((p) => pitchToVexKey(p) === curKey);
+  if (match < 0) return -1;
+  if (cur.connectKind === 'slur') return -1;
+  if (cur.connectKind === 'tie') {
+    // Only the anchored pitch is tied; the rest of a chord re-attacks.
+    return (cur.connectPitchIndex ?? 0) === curPitchIdx ? match : -1;
+  }
+  // Legacy data (no connectKind): treat as a tie only when the whole chord
+  // matches, matching how the renderer used to auto-detect tie-vs-slur.
+  const sameChord =
     cur.pitches.length === next.pitches.length &&
-    cur.pitches.every((p, pi) => pitchToVexKey(p) === pitchToVexKey(next.pitches[pi]))
-  );
+    cur.pitches.every((p, pi) => pitchToVexKey(p) === pitchToVexKey(next.pitches[pi]));
+  return sameChord ? match : -1;
 }
 
 /**
- * Builds one Tone event per sounding note, merging a tied note into the note
- * it ties from — a tie means the same pitch keeps ringing, so the tied-into
- * note must not re-trigger a new attack, only extend the previous one's
- * duration to cover it. A slur doesn't merge: both notes still re-articulate.
+ * Builds one Tone event per SOUNDING PITCH (not per note): every pitch of a
+ * chord gets its own attack so a chord always plays in full. A pitch that is
+ * the continuation of a tie is suppressed (already ringing from the earlier
+ * note), and the earlier pitch's duration is extended to cover it — following
+ * the tie chain across notes and barlines. Slurs add no duration and suppress
+ * nothing, so both notes of a slur re-articulate as expected.
  */
 function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature: string, secondsPerBeat: number): ScheduledEvent[] {
   const events: ScheduledEvent[] = [];
-  let i = 0;
-  while (i < flat.length) {
-    const { note, timeBeats } = flat[i];
-    if (note.isRest || note.pitches.length === 0) {
-      i += 1;
-      continue;
-    }
-    let totalBeats = noteBeats(note);
-    let j = i;
-    while (
-      flat[j + 1] &&
-      !flat[j + 1].note.isRest &&
-      flat[j + 1].note.pitches.length > 0 &&
-      isTieConnection(flat[j].note, flat[j + 1].note)
-    ) {
-      totalBeats += noteBeats(flat[j + 1].note);
-      j += 1;
-    }
-    events.push({
-      timeBeats,
-      durationSeconds: totalBeats * secondsPerBeat * 0.92,
-      notes: note.pitches.map((p) => pitchToToneNote(p, keySignature)),
-      synth,
+  // suppressed[noteIndex] = set of pitch indices that are tie continuations and
+  // must not start their own attack (their sound already began earlier).
+  const suppressed: Set<number>[] = flat.map(() => new Set<number>());
+
+  flat.forEach(({ note, timeBeats }, i) => {
+    if (note.isRest || note.pitches.length === 0) return;
+    note.pitches.forEach((pitch, pi) => {
+      if (suppressed[i].has(pi)) return;
+      let totalBeats = noteBeats(note);
+      // Walk the tie chain forward, extending this pitch and muting each next
+      // note's matching pitch, until the chain (for this specific pitch) ends.
+      let chainNote = i;
+      let chainPitch = pi;
+      while (chainNote + 1 < flat.length) {
+        const nextIdx = tiedPitchIndex(flat[chainNote].note, chainPitch, flat[chainNote + 1].note);
+        if (nextIdx < 0) break;
+        totalBeats += noteBeats(flat[chainNote + 1].note);
+        suppressed[chainNote + 1].add(nextIdx);
+        chainNote += 1;
+        chainPitch = nextIdx;
+      }
+      events.push({
+        timeBeats,
+        durationSeconds: totalBeats * secondsPerBeat * 0.92,
+        notes: [pitchToToneNote(pitch, keySignature)],
+        synth,
+      });
     });
-    i = j + 1;
-  }
+  });
   return events;
 }
 

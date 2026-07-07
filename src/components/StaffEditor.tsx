@@ -475,14 +475,14 @@ function StaffEditorInner({
     const treble = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'treble');
     const bass = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'bass');
     if (!treble || !bass) return null;
-    const chordBand = result.chordBandHitboxes.find((c) => c.measureIndex === mi);
     const x = treble.noteStartX + frac * treble.noteAreaWidth;
-    // Top: right under the chord symbols, which also covers the full treble staff
-    // (the chord band's bottom edge sits right at the treble staff's top line).
-    const y0 = chordBand ? chordBand.y1 : treble.refY0 - treble.spacing * 5;
-    // Bottom: the bass staff's own bottom line, with no extra overhang, so the
-    // overhang above the treble staff and below the bass staff both stay ~0.
-    const y1 = bass.refY0 - bass.spacing * 1;
+    // The bar overhangs the treble's top line and the bass's bottom line by the
+    // SAME small amount, so it visually pokes out equally above and below the
+    // grand staff. (Both clefs' top line = refY0 - spacing*5, bottom = refY0 -
+    // spacing*1, verified against VexFlow's rendered lines.)
+    const overhang = treble.spacing * 1.2;
+    const y0 = treble.refY0 - treble.spacing * 5 - overhang;
+    const y1 = bass.refY0 - bass.spacing * 1 + overhang;
     return { x, y0, y1 };
   };
 

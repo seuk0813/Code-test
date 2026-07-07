@@ -7,7 +7,11 @@
 }
 
 /* Groups the header and toolbar into one sticky unit so they stack in
-   document order without needing to know each other's rendered height. */
+   document order without needing to know each other's rendered height.
+   A solid background (pulled out over the app's padding with negative
+   margins) makes the whole band opaque, so the score never shows through
+   the gap between the header and toolbar — or the strips beside the
+   right-aligned header — while it's pinned during scroll. */
 .sticky-controls {
   display: flex;
   flex-direction: column;
@@ -15,6 +19,10 @@
   position: sticky;
   top: 0;
   z-index: 21;
+  background: var(--bg);
+  margin: -16px -24px 0;
+  padding: 16px 24px 12px;
+  box-shadow: 0 6px 12px -6px rgba(0, 0, 0, 0.18);
 }
 
 .app-header {
@@ -103,6 +111,10 @@
 .play-button {
   font-size: 16px;
   line-height: 1;
+}
+
+.stop-button {
+  color: var(--text, #444);
 }
 
 .more-menu {
