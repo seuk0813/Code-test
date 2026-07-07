@@ -98,6 +98,9 @@ function App() {
   // batch copy (Ctrl+C) / paste (Ctrl+V) of those notes.
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
   const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent }[]>([]);
+  // True while StaffEditor holds a locked placement preview — App's own arrow
+  // and spacebar handlers yield to the preview's movement/commit when set.
+  const previewLockedRef = useRef(false);
   // Two separate "+/-" reveal toggles: one inline at the end of the score
   // (always operates on the very last measure), one floating bottom-right
   // that follows scroll (always operates on the currently focused measure,
@@ -533,6 +536,9 @@ function App() {
         deleteNoteAndSelectAdjacent(selected);
         return;
       }
+      // A locked placement preview owns the arrow keys (moves the preview) —
+      // yield to StaffEditor's own handler in that case.
+      if (previewLockedRef.current && e.key.startsWith('Arrow')) return;
       // Arrow keys edit the selected note (decoupled from the toolbar):
       // up/down change pitch, left/right change duration.
       if (selected && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -906,6 +912,8 @@ function App() {
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return;
       if (e.code !== 'Space') return;
+      // A locked placement preview claims spacebar to commit itself.
+      if (previewLockedRef.current) return;
       e.preventDefault();
       if (isPlaying) handlePause();
       else void handlePlay();
@@ -1014,6 +1022,9 @@ function App() {
         selectedPitchIndex={selectedPitchIndex}
         marquee={marquee}
         onMarqueeSelect={handleMarqueeSelect}
+        onPreviewLockChange={(v) => {
+          previewLockedRef.current = v;
+        }}
         noteSelectMode={selectMode}
         editTool={editTool}
         onSelectNote={handleSelectNote}

@@ -73,6 +73,9 @@ interface StaffEditorProps {
   marquee: NoteLocation[];
   /** Commits a rubber-band multi-selection (empty array clears it). */
   onMarqueeSelect: (locations: NoteLocation[]) => void;
+  /** Reports whether a placement preview is currently locked, so App's own
+   * keyboard handler yields arrow/space to the preview while it is. */
+  onPreviewLockChange: (locked: boolean) => void;
   /** Toggled by re-clicking the active duration button while nothing is selected (Toolbar). While true and nothing is selected, a staff click prefers selecting the nearest existing note over adding a new one. */
   noteSelectMode: boolean;
   editTool: EditTool;
@@ -227,6 +230,7 @@ function StaffEditorInner({
   selectedPitchIndex,
   marquee,
   onMarqueeSelect,
+  onPreviewLockChange,
   noteSelectMode,
   editTool,
   onSelectNote,
@@ -335,6 +339,14 @@ function StaffEditorInner({
     null,
   );
 
+  // Click-to-lock placement: the first click on empty staff LOCKS a preview
+  // here (instead of placing immediately); arrow keys nudge it, and a second
+  // click or spacebar commits it. Held in a ref too so the keydown listener and
+  // mouse handlers read the current value without stale closures.
+  const [lockedPreview, setLockedPreview] = useState<{ measureIndex: number; clef: Clef; line: number; x: number } | null>(null);
+  const lockedPreviewRef = useRef<typeof lockedPreview>(null);
+  lockedPreviewRef.current = lockedPreview;
+
   useEffect(() => {
     if (!containerRef.current) return;
     const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex);
@@ -406,6 +418,48 @@ function StaffEditorInner({
     }
     renderMarqueeHighlights(overlayRef.current, spots);
   }, [marquee, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+
+  // Keep the locked-preview ghost drawn (and tell App the lock state so it
+  // yields arrow/space to the preview) whenever it or the active tool changes.
+  useEffect(() => {
+    onPreviewLockChange(lockedPreview !== null);
+    if (lockedPreview) renderLockedGhost(lockedPreview);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockedPreview, editTool, score]);
+
+  // While a preview is locked, arrow keys nudge it (↑↓ pitch, ←→ horizontal),
+  // spacebar/Enter commits it, and Escape cancels — see the click-to-lock model.
+  useEffect(() => {
+    if (!lockedPreview) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      const lp = lockedPreviewRef.current;
+      const result = renderResultRef.current;
+      if (!lp || !result) return;
+      const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+      if (!staff) return;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setLockedPreview({ ...lp, line: lp.line + (e.key === 'ArrowUp' ? 0.5 : -0.5) });
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        const step = staff.noteAreaWidth / 8;
+        const nx = lp.x + (e.key === 'ArrowRight' ? step : -step);
+        setLockedPreview({ ...lp, x: Math.min(staff.noteStartX + staff.noteAreaWidth, Math.max(staff.noteStartX, nx)) });
+      } else if (e.code === 'Space' || e.key === 'Enter') {
+        e.preventDefault();
+        commitLockedPreview();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setLockedPreview(null);
+        clearGhost(overlayRef.current);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockedPreview]);
 
   // Playback playhead: a red bar per staff, snapped exactly to the real X of
   // the currently-sounding note (never interpolated — that's what previously
@@ -670,6 +724,42 @@ function StaffEditorInner({
       onAddNote(measureIndex, clef, letter, octave, insertIndex, duration, xFractionAt(staff, x));
     }
     onFocusMeasure(measureIndex);
+  };
+
+  /** Draws the locked placement preview (a stronger, more opaque ghost than the
+   * hover preview) at a locked position. */
+  const renderLockedGhost = (lp: { measureIndex: number; clef: Clef; line: number; x: number }) => {
+    const result = renderResultRef.current;
+    if (!result) return;
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+    if (!staff) return;
+    const isChord = chordMergeTargetAt(lp.measureIndex, lp.clef, lp.x) !== null;
+    renderGhost(overlayRef.current, {
+      kind: 'note',
+      x: lp.x,
+      y: staff.refY0 - lp.line * staff.spacing,
+      duration: editTool.duration,
+      isRest: editTool.isRest && !isChord,
+      stemUp: stemPointsUp(lp.line),
+      accidental: editTool.accidental,
+      ledgerLineYs: ledgerLinePositions(lp.line).map((l) => staff.refY0 - l * staff.spacing),
+      opacity: 0.85,
+      color: '#7a5cff',
+    });
+  };
+
+  /** Commits the locked preview into a real note using the active toolbar tool. */
+  const commitLockedPreview = () => {
+    const lp = lockedPreviewRef.current;
+    const result = renderResultRef.current;
+    if (!lp || !result) {
+      setLockedPreview(null);
+      return;
+    }
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, editTool.duration);
+    setLockedPreview(null);
+    clearGhost(overlayRef.current);
   };
 
   const clearMouseHold = () => {
@@ -1000,10 +1090,14 @@ function StaffEditorInner({
     }
 
     if (gesture.kind === 'add') {
-      const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.measureIndex && s.clef === gesture.clef);
-      if (staff) commitAdd(gesture.measureIndex, gesture.clef, staff, gesture.line, gesture.x, gesture.duration);
+      // Click-to-lock: the first click on empty staff locks a preview here; the
+      // second click commits it (spacebar/arrow keys handle it in between).
+      if (lockedPreviewRef.current) {
+        commitLockedPreview();
+      } else {
+        setLockedPreview({ measureIndex: gesture.measureIndex, clef: gesture.clef, line: gesture.line, x: gesture.x });
+      }
       suppressClickRef.current = true;
-      clearGhost(overlayRef.current);
       return;
     }
 
@@ -1146,11 +1240,20 @@ function StaffEditorInner({
 
     const click = resolveClickPreferSelect(result, point.x, point.y);
     if (!click) {
+      if (lockedPreviewRef.current) {
+        setLockedPreview(null);
+        clearGhost(overlayRef.current);
+      }
       onDeselectNote();
       return;
     }
 
     if (click.type === 'select') {
+      // Selecting an existing note cancels any locked placement preview.
+      if (lockedPreviewRef.current) {
+        setLockedPreview(null);
+        clearGhost(overlayRef.current);
+      }
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.y);
@@ -1185,20 +1288,26 @@ function StaffEditorInner({
       x: point.x,
       duration: editTool.duration,
     };
-    renderAddGhost(staff, point.x, snappedLine, editTool.duration, isChord);
-    mouseHoldRef.current = window.setInterval(() => {
-      const g = mouseGestureRef.current;
-      if (!g || g.kind !== 'add') return;
-      g.duration = cycleDurationLonger(g.duration);
-      const chord = chordMergeTargetAt(g.measureIndex, g.clef, g.x) !== null;
-      renderAddGhost(staff, g.x, g.line, g.duration, chord);
-    }, HOLD_CYCLE_MS);
+    // When a preview is already locked, this click is the "commit" press — keep
+    // the locked ghost on screen (don't overwrite it with a fresh hover ghost or
+    // start a duration long-press). Otherwise show the normal hover preview.
+    if (!lockedPreviewRef.current) {
+      renderAddGhost(staff, point.x, snappedLine, editTool.duration, isChord);
+      mouseHoldRef.current = window.setInterval(() => {
+        const g = mouseGestureRef.current;
+        if (!g || g.kind !== 'add') return;
+        g.duration = cycleDurationLonger(g.duration);
+        const chord = chordMergeTargetAt(g.measureIndex, g.clef, g.x) !== null;
+        renderAddGhost(staff, g.x, g.line, g.duration, chord);
+      }, HOLD_CYCLE_MS);
+    }
     document.addEventListener('mousemove', handleDocumentMouseMove);
     document.addEventListener('mouseup', handleDocumentMouseUp);
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
     if (mouseGestureRef.current) return; // active press handled by document listeners
+    if (lockedPreviewRef.current) return; // a locked preview owns the ghost; don't hover-draw over it
     const result = renderResultRef.current;
     const point = eventPoint(event);
     if (!result || !point) {
