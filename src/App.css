@@ -65,6 +65,11 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
+  /* Measures push the score taller as they're added; keep the note/chord
+     tools reachable at the top of the viewport instead of scrolling away. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .toolbar-row {

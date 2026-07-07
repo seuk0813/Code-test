@@ -174,6 +174,9 @@ interface ToolbarProps {
   onSetSelectMode: (value: boolean) => void;
   /** Builds a chord symbol from a root+quality pair and adds it to the current measure — the structured alternative to typing free text directly on the score. */
   onAddChord: (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => void;
+  /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
+  cKeyBasedAccidentals: boolean;
+  onToggleCKeyBasedAccidentals: () => void;
 }
 
 export function Toolbar({
@@ -187,9 +190,12 @@ export function Toolbar({
   selectMode,
   onSetSelectMode,
   onAddChord,
+  cKeyBasedAccidentals,
+  onToggleCKeyBasedAccidentals,
 }: ToolbarProps) {
   const [chordRootIndex, setChordRootIndex] = useState(0);
   const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
+  const [showKeyOptions, setShowKeyOptions] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
   useEffect(() => {
@@ -272,6 +278,24 @@ export function Toolbar({
             ))}
           </select>
         </label>
+        <button
+          className={`tool-compact ${showKeyOptions ? 'active' : ''}`}
+          onClick={() => setShowKeyOptions((v) => !v)}
+          aria-label="조표 옵션 더보기"
+          title="조표 관련 옵션 더보기"
+        >
+          +
+        </button>
+        {showKeyOptions && (
+          <button
+            className={`tool-icon-btn ${cKeyBasedAccidentals ? 'active' : ''}`}
+            onClick={onToggleCKeyBasedAccidentals}
+            aria-label="C키 기준 조표"
+            title="켜면 조표와 무관하게 항상 C키 기준으로 음표를 놓습니다 (자동으로 임시표가 붙지 않음)"
+          >
+            C키 기준 조표
+          </button>
+        )}
         <label className="tempo-field">
           템포
           <input

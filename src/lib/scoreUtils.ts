@@ -203,6 +203,11 @@ export function effectiveAccidental(pitch: Pitch, keySignature: string): Acciden
   return KEY_SIGNATURE_ACCIDENTALS[keySignature]?.[pitch.letter] ?? '';
 }
 
+/** The sharp/flat a given letter carries in a key signature (e.g. 'B' in F major -> 'b'), or '' if unaffected. */
+export function keySignatureAccidentalFor(letter: Pitch['letter'], keySignature: string): Accidental {
+  return KEY_SIGNATURE_ACCIDENTALS[keySignature]?.[letter] ?? '';
+}
+
 /** MIDI note number for a pitch, used for audio playback. */
 export function pitchToMidi(pitch: Pitch, keySignature: string): number {
   const semitonesFromC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[pitch.letter];

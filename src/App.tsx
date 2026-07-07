@@ -17,6 +17,7 @@ import {
   createNote,
   editChordText,
   editLyricText,
+  keySignatureAccidentalFor,
   lineToPitch,
   moveChordInScore,
   moveLyricInScore,
@@ -62,6 +63,11 @@ function App() {
   // with nothing selected, it arms turning the next note it touches into a
   // rest of that note's own duration, then clears immediately after.
   const [restArmed, setRestArmed] = useState(false);
+  // When true, new notes never auto-inherit the key signature's implied
+  // accidental (as if the piece were in C major) — the user must always
+  // pick one explicitly. Default (false) auto-applies it, e.g. placing a
+  // plain B in F major automatically shows/sounds as Bb.
+  const [cKeyBasedAccidentals, setCKeyBasedAccidentals] = useState(false);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
@@ -223,7 +229,11 @@ function App() {
       durationOverride?: DurationValue,
       x?: number,
     ) => {
-      const pitch: Pitch = { letter: letter as Pitch['letter'], accidental: editTool.accidental, octave };
+      const accidental =
+        editTool.accidental || cKeyBasedAccidentals
+          ? editTool.accidental
+          : keySignatureAccidentalFor(letter as Pitch['letter'], score.keySignature);
+      const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave };
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
@@ -241,7 +251,7 @@ function App() {
       setAccidentalArmed(false);
       setRestArmed(false);
     },
-    [score, editTool, setScore],
+    [score, editTool, cKeyBasedAccidentals, setScore],
   );
 
   /**
@@ -294,12 +304,18 @@ function App() {
 
   const handleTogglePitch = useCallback(
     (location: NoteLocation, letter: string, octave: number) => {
-      setScore((prev) => togglePitchInNote(prev, location, letter as Pitch['letter'], editTool.accidental, octave));
+      setScore((prev) => {
+        const accidental =
+          editTool.accidental || cKeyBasedAccidentals
+            ? editTool.accidental
+            : keySignatureAccidentalFor(letter as Pitch['letter'], prev.keySignature);
+        return togglePitchInNote(prev, location, letter as Pitch['letter'], accidental, octave);
+      });
       // One-shot: this added/toggled chord tone consumes the armed accidental.
       if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
       setAccidentalArmed(false);
     },
-    [editTool.accidental, setScore],
+    [editTool.accidental, cKeyBasedAccidentals, setScore],
   );
 
   const handleFocusMeasure = useCallback((measureIndex: number) => {
@@ -554,6 +570,8 @@ function App() {
         selectMode={selectMode}
         onSetSelectMode={setSelectMode}
         onAddChord={handleAddChordTool}
+        cKeyBasedAccidentals={cKeyBasedAccidentals}
+        onToggleCKeyBasedAccidentals={() => setCKeyBasedAccidentals((v) => !v)}
       />
       <div className="status-line">
         {isPlaying
