@@ -621,7 +621,7 @@ function StaffEditorInner({
     if (!result) return;
     const hb = result.titleHitbox;
     const width = Math.min(480, result.width * 0.9);
-    setInlineEditor({ kind: 'title', left: hb.x - width / 2, top: 4, width, align: 'center', value: score.title });
+    setInlineEditor({ kind: 'title', left: hb.x - width / 2, top: 12, width, align: 'center', value: score.title });
   };
 
   const openComposerEditor = () => {

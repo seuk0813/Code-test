@@ -364,6 +364,7 @@ export function Toolbar({
           // onAddChord's "is one still open?" check. Preventing the default
           // mousedown behavior keeps the input focused so it's still open.
           onMouseDown={(e) => e.preventDefault()}
+          onTouchStart={(e) => e.preventDefault()}
           onClick={() => {
             const root = CHORD_ROOTS[chordRootIndex];
             onAddChord(root.letter, root.accidental, chordQuality);

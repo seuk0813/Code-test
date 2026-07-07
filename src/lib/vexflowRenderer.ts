@@ -24,6 +24,11 @@ import {
 /** Right-hand padding kept clear of notes inside a measure, for free-X mapping. */
 const NOTE_AREA_RIGHT_PAD = 16;
 
+/** Per-note accidentals (♯/♭/♮ on individual notes) default to the same
+ * glyph size as the notehead itself, which reads as oversized — render them
+ * smaller, independently of the notehead's own size. */
+const ACCIDENTAL_FONT_SIZE = 18;
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -49,8 +54,8 @@ const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
-/** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). */
-const TITLE_BAND = 48;
+/** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the doubled title font (see TITLE_FONT_SIZE). */
+const TITLE_BAND = 96;
 /**
  * Extra vertical space reserved right below the title for the composer
  * credit — a dedicated band of its own, not shared with the chord-symbol
@@ -239,7 +244,12 @@ function buildStaveNotes(
     if (!note.isRest) {
       note.pitches.forEach((pitch, i) => {
         if (pitch.accidental) {
-          staveNote.addModifier(new VexAccidental(pitch.accidental), i);
+          const accidental = new VexAccidental(pitch.accidental);
+          // Note.addModifier() calls accidental.setNote(), which resets the
+          // font size back to VexFlow's default — so setFontSize must run
+          // after addModifier, not before, or it gets silently clobbered.
+          staveNote.addModifier(accidental, i);
+          accidental.setFontSize(ACCIDENTAL_FONT_SIZE);
         }
       });
     }
@@ -565,7 +575,7 @@ export function renderScore(
     });
   });
 
-  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 28 };
+  const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 56 };
   // Right-aligned above the 4th measure's slot (computed above, fixed by
   // layout geometry regardless of how many measures actually exist yet) —
   // so it sits in its final resting spot from the very first empty measure
@@ -617,7 +627,7 @@ function drawHeading(svg: SVGSVGElement, score: Score, hb: TitleHitbox): void {
   text.setAttribute('y', String(hb.y));
   text.setAttribute('text-anchor', 'middle');
   text.setAttribute('font-family', TITLE_FONT);
-  text.setAttribute('font-size', '27');
+  text.setAttribute('font-size', '54');
   text.setAttribute('font-weight', '800');
   // VexFlow sets stroke="black" stroke-width="1" on the root <svg> for the
   // staff lines; text elements inherit it and get a 1px outline on top of the
