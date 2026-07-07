@@ -265,6 +265,55 @@ export function clearSeekBar(svg: SVGSVGElement | null): void {
   renderSeekBar(svg, null);
 }
 
+const MARQUEE_BOX_GROUP_ID = 'marquee-box-group';
+const MARQUEE_HL_GROUP_ID = 'marquee-hl-group';
+
+/** The dashed rectangle drawn live while shift-dragging a multi-note selection. */
+export function renderMarqueeBox(svg: SVGSVGElement | null, box: { x0: number; y0: number; x1: number; y1: number } | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${MARQUEE_BOX_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', MARQUEE_BOX_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!box) return;
+  const x = Math.min(box.x0, box.x1);
+  const y = Math.min(box.y0, box.y1);
+  const w = Math.abs(box.x1 - box.x0);
+  const h = Math.abs(box.y1 - box.y0);
+  group.appendChild(
+    el('rect', {
+      x,
+      y,
+      width: w,
+      height: h,
+      fill: 'rgba(47, 111, 237, 0.10)',
+      stroke: '#2f6fed',
+      'stroke-width': 1,
+      'stroke-dasharray': '4 3',
+    }),
+  );
+}
+
+/** Persistent blue highlight blobs over each marquee-selected notehead. */
+export function renderMarqueeHighlights(svg: SVGSVGElement | null, spots: { x: number; y: number }[]): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${MARQUEE_HL_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', MARQUEE_HL_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  spots.forEach((s) => {
+    group!.appendChild(el('ellipse', { cx: s.x, cy: s.y, rx: 9, ry: 7, fill: 'rgba(47, 111, 237, 0.35)' }));
+  });
+}
+
 const MEASURE_FLASH_GROUP_ID = 'measure-flash-group';
 
 export interface MeasureFlashSpec {

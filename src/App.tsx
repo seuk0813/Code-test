@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordQuality, Clef, DurationValue, Measure, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordQuality, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScore,
   addChordToScoreAt,
@@ -25,6 +25,7 @@ import {
   mergeNoteIntoChord,
   moveChordInScore,
   moveLyricInScore,
+  nextId,
   nextNoteLocation,
   noteBeats,
   pitchToLine,
@@ -93,6 +94,10 @@ function App() {
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
   const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
+  // Notes multi-selected via shift+drag rubber-band, and a note clipboard for
+  // batch copy (Ctrl+C) / paste (Ctrl+V) of those notes.
+  const [marquee, setMarquee] = useState<NoteLocation[]>([]);
+  const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent }[]>([]);
   // Two separate "+/-" reveal toggles: one inline at the end of the score
   // (always operates on the very last measure), one floating bottom-right
   // that follows scroll (always operates on the currently focused measure,
@@ -189,6 +194,7 @@ function App() {
     (location: NoteLocation, pitchIndex?: number) => {
       setSelected(location);
       setSelectedPitchIndex(pitchIndex ?? null);
+      setMarquee([]);
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
         if (accidentalArmed) {
@@ -257,6 +263,7 @@ function App() {
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
+      setMarquee([]);
       // One-shot: a newly placed note consumes the armed accidental/rest, so
       // it doesn't silently keep applying to every note placed after it.
       if (editTool.accidental || editTool.isRest) {
@@ -453,6 +460,48 @@ function App() {
     [selected, selectedPitchIndex, setScore, accidentalAfterMove],
   );
 
+  /** Ctrl+C: copy the marquee-selected notes (in reading order) to the note clipboard. */
+  const handleCopyNotes = useCallback(() => {
+    if (marquee.length === 0) return;
+    const ordered = [...marquee].sort(
+      (a, b) => a.measureIndex - b.measureIndex || (a.clef === b.clef ? a.noteIndex - b.noteIndex : a.clef === 'treble' ? -1 : 1),
+    );
+    const copied = ordered
+      .map((loc) => {
+        const note = score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex];
+        return note ? { clef: loc.clef, note } : null;
+      })
+      .filter((x): x is { clef: Clef; note: NoteEvent } => x !== null);
+    setNoteClipboard(copied);
+  }, [marquee, score]);
+
+  /** Ctrl+V: append the copied notes to the focused (or last) measure, each into
+   * its original clef, in order. Connections and free-x are dropped so the
+   * pasted run lays out cleanly. */
+  const handlePasteNotes = useCallback(() => {
+    if (noteClipboard.length === 0) return;
+    const target = focusedMeasureIndex ?? score.measures.length - 1;
+    setScore((prev) => {
+      const measures = prev.measures.map((m, i) => {
+        if (i !== target) return m;
+        const treble = [...m.treble.notes];
+        const bass = [...m.bass.notes];
+        noteClipboard.forEach(({ clef, note }) => {
+          const clone: NoteEvent = {
+            id: nextId('note'),
+            pitches: note.pitches.map((p) => ({ ...p })),
+            duration: note.duration,
+            dotted: note.dotted,
+            isRest: note.isRest,
+          };
+          (clef === 'treble' ? treble : bass).push(clone);
+        });
+        return { ...m, treble: { notes: treble }, bass: { notes: bass } };
+      });
+      return { ...prev, measures };
+    });
+  }, [noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -466,6 +515,17 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         handleRedo();
+        return;
+      }
+      // Batch copy/paste of marquee-selected notes.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && marquee.length > 0) {
+        e.preventDefault();
+        handleCopyNotes();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && noteClipboard.length > 0) {
+        e.preventDefault();
+        handlePasteNotes();
         return;
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
@@ -494,7 +554,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger]);
+  }, [selected, marquee, noteClipboard, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -521,6 +581,16 @@ function App() {
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
     setSelectedPitchIndex(null);
+    setMarquee([]);
+  }, []);
+
+  /** Commits a rubber-band multi-selection; a non-empty one supersedes the single selection. */
+  const handleMarqueeSelect = useCallback((locations: NoteLocation[]) => {
+    setMarquee(locations);
+    if (locations.length > 0) {
+      setSelected(null);
+      setSelectedPitchIndex(null);
+    }
   }, []);
 
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
@@ -935,13 +1005,15 @@ function App() {
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
-          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이)합니다. 위 단추는 다음에 입력할 음표를 정합니다.'}
+          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이). Shift+드래그로 여러 음표 선택 후 Ctrl+C·V로 복사/붙여넣기. 위 단추는 다음에 입력할 음표를 정합니다.'}
       </div>
       <StaffEditor
         ref={staffEditorRef}
         score={score}
         selected={selected}
         selectedPitchIndex={selectedPitchIndex}
+        marquee={marquee}
+        onMarqueeSelect={handleMarqueeSelect}
         noteSelectMode={selectMode}
         editTool={editTool}
         onSelectNote={handleSelectNote}

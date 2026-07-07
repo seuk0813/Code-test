@@ -40,6 +40,8 @@ import {
   clearTooltip,
   ledgerLinePositions,
   renderGhost,
+  renderMarqueeBox,
+  renderMarqueeHighlights,
   renderMeasureCompleteFlashes,
   renderPlayback,
   renderSeekBar,
@@ -67,6 +69,10 @@ interface StaffEditorProps {
   selected: NoteLocation | null;
   /** When the selected note is a chord, narrows the selection to one specific pitch (see App.tsx's handleSelectNote). */
   selectedPitchIndex: number | null;
+  /** Notes multi-selected via a shift+drag rubber-band (for batch copy/paste). */
+  marquee: NoteLocation[];
+  /** Commits a rubber-band multi-selection (empty array clears it). */
+  onMarqueeSelect: (locations: NoteLocation[]) => void;
   /** Toggled by re-clicking the active duration button while nothing is selected (Toolbar). While true and nothing is selected, a staff click prefers selecting the nearest existing note over adding a new one. */
   noteSelectMode: boolean;
   editTool: EditTool;
@@ -164,6 +170,14 @@ type MouseGesture =
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
     }
+  | {
+      /** Shift+drag rubber-band that multi-selects every notehead inside it. */
+      kind: 'marquee';
+      startX: number;
+      startY: number;
+      curX: number;
+      curY: number;
+    }
   | SymbolDrag
   | null;
 
@@ -211,6 +225,8 @@ function StaffEditorInner({
   score,
   selected,
   selectedPitchIndex,
+  marquee,
+  onMarqueeSelect,
   noteSelectMode,
   editTool,
   onSelectNote,
@@ -372,6 +388,24 @@ function StaffEditorInner({
       .filter((s): s is { id: number; x: number; y: number } => s !== null);
     renderMeasureCompleteFlashes(overlayRef.current, specs);
   }, [measureFlashes, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+
+  // Blue highlight blobs over each marquee-selected notehead. Redrawn whenever
+  // the selection or the score layout changes (the overlay group persists by
+  // id, so it survives the score's own re-renders).
+  useEffect(() => {
+    const result = renderResultRef.current;
+    if (!overlayRef.current) return;
+    const spots: { x: number; y: number }[] = [];
+    if (result) {
+      marquee.forEach((loc) => {
+        const hb = result.noteHitboxes.find(
+          (n) => n.measureIndex === loc.measureIndex && n.clef === loc.clef && n.noteIndex === loc.noteIndex,
+        );
+        if (hb) hb.ys.forEach((y) => spots.push({ x: hb.centerX, y }));
+      });
+    }
+    renderMarqueeHighlights(overlayRef.current, spots);
+  }, [marquee, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
 
   // Playback playhead: a red bar per staff, snapped exactly to the real X of
   // the currently-sounding note (never interpolated — that's what previously
@@ -893,6 +927,13 @@ function StaffEditorInner({
     const point = eventPoint(event);
     if (!point) return;
 
+    if (gesture.kind === 'marquee') {
+      gesture.curX = point.x;
+      gesture.curY = point.y;
+      renderMarqueeBox(overlayRef.current, { x0: gesture.startX, y0: gesture.startY, x1: point.x, y1: point.y });
+      return;
+    }
+
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       updateSymbolDrag(gesture, point);
       return;
@@ -931,6 +972,24 @@ function StaffEditorInner({
     document.removeEventListener('mouseup', handleDocumentMouseUp);
     if (!gesture || !result) return;
     const point = eventPoint(event);
+
+    if (gesture.kind === 'marquee') {
+      renderMarqueeBox(overlayRef.current, null);
+      const x0 = Math.min(gesture.startX, gesture.curX);
+      const x1 = Math.max(gesture.startX, gesture.curX);
+      const y0 = Math.min(gesture.startY, gesture.curY);
+      const y1 = Math.max(gesture.startY, gesture.curY);
+      const picked: NoteLocation[] = [];
+      // A notehead counts as selected when any of its noteheads falls in the box.
+      result.noteHitboxes.forEach((hb) => {
+        if (hb.centerX < x0 || hb.centerX > x1) return;
+        if (!hb.ys.some((y) => y >= y0 && y <= y1)) return;
+        picked.push({ measureIndex: hb.measureIndex, clef: hb.clef, noteIndex: hb.noteIndex });
+      });
+      onMarqueeSelect(picked);
+      suppressClickRef.current = true;
+      return;
+    }
 
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       commitSymbolDrag(gesture);
@@ -1017,6 +1076,16 @@ function StaffEditorInner({
     event.preventDefault();
     clearGhost(overlayRef.current);
     if (inlineEditor) commitInlineEditor();
+
+    // Shift+drag anywhere on the staff draws a rubber-band that multi-selects
+    // every notehead inside it (for batch copy/paste). Takes priority over
+    // note placement/selection so it works even when starting over a note.
+    if (event.shiftKey) {
+      mouseGestureRef.current = { kind: 'marquee', startX: point.x, startY: point.y, curX: point.x, curY: point.y };
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
+      return;
+    }
 
     if (nearSeekHandle(point)) {
       seekDraggingRef.current = true;
