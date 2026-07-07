@@ -18,7 +18,7 @@ const NOTE_AREA_RIGHT_PAD = 16;
  * glyph size as the notehead itself, which reads as oversized — render them
  * smaller, independently of the notehead's own size. */
 const ACCIDENTAL_FONT_SIZE = 18;
-/** Horizontal gap between an accidental glyph's right edge and its notehead's left edge. */
+/** Horizontal gap between a notehead's right edge and its accidental glyph's left edge. */
 const ACCIDENTAL_GAP = 2;
 
 /**
@@ -54,9 +54,9 @@ interface AccidentalMark {
 function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void {
   marks.forEach((mark) => {
     const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', String(mark.x - ACCIDENTAL_GAP));
+    text.setAttribute('x', String(mark.x + ACCIDENTAL_GAP));
     text.setAttribute('y', String(mark.y));
-    text.setAttribute('text-anchor', 'end');
+    text.setAttribute('text-anchor', 'start');
     text.setAttribute('font-size', String(ACCIDENTAL_FONT_SIZE));
     text.setAttribute('stroke', 'none');
     if (mark.color) text.setAttribute('fill', mark.color);
@@ -534,6 +534,12 @@ export function renderScore(
                 effectiveSelected.clef === clef &&
                 effectiveSelected.noteIndex === noteIndex;
               const isPlaying = playingNoteIndex === noteIndex;
+              let noteheadRightX = centerXs[noteIndex];
+              try {
+                noteheadRightX = centerXs[noteIndex] + sn.getGlyphWidth();
+              } catch {
+                // Some note shapes have no measurable glyph width; fall back to centerX.
+              }
               note.pitches.forEach((pitch, pitchIndex) => {
                 if (!pitch.accidental) return;
                 if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
@@ -543,7 +549,7 @@ export function renderScore(
                     isSelected && !isPlaying && selectedPitchIndexForClef !== null && note.pitches.length > 1;
                   color = narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
                 }
-                accidentalMarks.push({ x: centerXs[noteIndex], y: ys[pitchIndex], type: pitch.accidental, color });
+                accidentalMarks.push({ x: noteheadRightX, y: ys[pitchIndex], type: pitch.accidental, color });
               });
             }
           });
