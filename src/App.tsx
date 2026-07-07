@@ -53,6 +53,11 @@ function App() {
   // whenever a note becomes selected or the duration actually changes.
   const [selectMode, setSelectMode] = useState(false);
   const [editTool, setEditTool] = useState<EditTool>(DEFAULT_EDIT_TOOL);
+  // True while an accidental button was pressed with nothing selected — a
+  // "one-shot" pen, not a persistent toggle: the very next note it touches
+  // (existing note clicked, chord tone toggled, or brand-new note placed)
+  // consumes it and it clears back to false/'' immediately after.
+  const [accidentalArmed, setAccidentalArmed] = useState(false);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
@@ -168,16 +173,34 @@ function App() {
       setSelectedPitchIndex(pitchIndex ?? null);
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
+        if (accidentalArmed) {
+          // A one-shot accidental was armed (button pressed with nothing
+          // selected) — this click consumes it on the note (or its narrowed
+          // pitch) instead of just selecting it, then the arming clears.
+          const armedAccidental = editTool.accidental;
+          setScore((prev) =>
+            updateNoteInScore(prev, location, (n) => {
+              const narrowedIndex = n.pitches.length > 1 ? pitchIndex ?? null : null;
+              return {
+                ...n,
+                pitches: n.pitches.map((p, i) =>
+                  narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: armedAccidental } : p,
+                ),
+              };
+            }),
+          );
+          setAccidentalArmed(false);
+        }
         const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
         setEditTool({
           duration: note.duration,
           dotted: note.dotted,
           isRest: note.isRest,
-          accidental: pitch?.accidental ?? '',
+          accidental: accidentalArmed ? '' : pitch?.accidental ?? '',
         });
       }
     },
-    [score],
+    [score, accidentalArmed, editTool.accidental, setScore],
   );
 
   const handleAddNote = useCallback(
@@ -200,6 +223,10 @@ function App() {
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
+      // One-shot: a newly placed note consumes the armed accidental, so it
+      // doesn't silently keep sharping/flatting every note placed after it.
+      if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
+      setAccidentalArmed(false);
     },
     [score, editTool, setScore],
   );
@@ -255,6 +282,9 @@ function App() {
   const handleTogglePitch = useCallback(
     (location: NoteLocation, letter: string, octave: number) => {
       setScore((prev) => togglePitchInNote(prev, location, letter as Pitch['letter'], editTool.accidental, octave));
+      // One-shot: this added/toggled chord tone consumes the armed accidental.
+      if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
+      setAccidentalArmed(false);
     },
     [editTool.accidental, setScore],
   );
@@ -302,6 +332,12 @@ function App() {
       // unrelated new note placed elsewhere doesn't silently inherit it too.
       const isOneShotAccidental = !!selected && patch.accidental !== undefined;
       setEditTool((prev) => ({ ...prev, ...patch, ...(isOneShotAccidental ? { accidental: '' } : {}) }));
+      if (patch.accidental !== undefined) {
+        // No note selected yet — arm it as a one-shot pen instead of applying
+        // immediately; the next note it touches (see handleSelectNote,
+        // handleAddNote, handleTogglePitch) consumes and clears it.
+        setAccidentalArmed(!selected && patch.accidental !== '');
+      }
       if (!selected) return;
       setScore((prev) =>
         updateNoteInScore(prev, selected, (note) => {
