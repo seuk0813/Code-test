@@ -9,6 +9,8 @@ export interface Pitch {
   letter: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
   accidental: Accidental;
   octave: number;
+  /** Optional fingering number (1-5) shown to the right of the notehead (and its accidental). */
+  finger?: number;
 }
 
 export interface NoteEvent {

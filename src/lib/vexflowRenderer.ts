@@ -20,6 +20,11 @@ const NOTE_AREA_RIGHT_PAD = 16;
 const ACCIDENTAL_FONT_SIZE = 18;
 /** Horizontal gap between a notehead's right edge and its accidental glyph's left edge. */
 const ACCIDENTAL_GAP = 2;
+/** Fingering numbers are drawn slightly larger than accidentals, to the right of them. */
+const FINGER_FONT_SIZE = 21;
+/** Gap before a fingering number, and the width reserved for an accidental glyph when one precedes it. */
+const FINGER_GAP = 4;
+const ACCIDENTAL_ADVANCE = 11;
 
 /**
  * Accidentals are drawn as plain SVG text (like the chord/lyric/title labels
@@ -61,6 +66,33 @@ function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void 
     text.setAttribute('stroke', 'none');
     if (mark.color) text.setAttribute('fill', mark.color);
     text.textContent = ACCIDENTAL_GLYPH[mark.type];
+    svg.appendChild(text);
+  });
+}
+
+interface FingeringMark {
+  x: number;
+  y: number;
+  finger: number;
+  color: string | null;
+}
+
+/** Fingering numbers, drawn (like accidentals) as plain SVG text to the right
+ * of the notehead — and to the right of the accidental glyph when one is
+ * present, so it never overlaps. Rendered in a plain sans-serif, not the
+ * music font, so the digit shows as an actual numeral. */
+function drawFingeringMarks(svg: SVGSVGElement, marks: FingeringMark[]): void {
+  marks.forEach((mark) => {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(mark.x));
+    text.setAttribute('y', String(mark.y + 5));
+    text.setAttribute('text-anchor', 'start');
+    text.setAttribute('font-size', String(FINGER_FONT_SIZE));
+    text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('stroke', 'none');
+    text.setAttribute('fill', mark.color ?? '#333');
+    text.textContent = String(mark.finger);
     svg.appendChild(text);
   });
 }
@@ -375,6 +407,7 @@ export function renderScore(
   const lyricBandHitboxes: LyricBandHitbox[] = [];
   const overflowHitboxes: OverflowHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
+  const fingeringMarks: FingeringMark[] = [];
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -541,15 +574,24 @@ export function renderScore(
                 // Some note shapes have no measurable glyph width; fall back to centerX.
               }
               note.pitches.forEach((pitch, pitchIndex) => {
-                if (!pitch.accidental) return;
                 if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
+                if (!pitch.accidental && pitch.finger === undefined) return;
                 let color: string | null = null;
                 if (isSelected || isPlaying) {
                   const narrowed =
                     isSelected && !isPlaying && selectedPitchIndexForClef !== null && note.pitches.length > 1;
                   color = narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
                 }
-                accidentalMarks.push({ x: noteheadRightX, y: ys[pitchIndex], type: pitch.accidental, color });
+                if (pitch.accidental) {
+                  accidentalMarks.push({ x: noteheadRightX, y: ys[pitchIndex], type: pitch.accidental, color });
+                }
+                if (pitch.finger !== undefined) {
+                  // Fingering sits to the right of the notehead — and to the
+                  // right of the accidental glyph, if this pitch has one.
+                  const fingerX =
+                    noteheadRightX + ACCIDENTAL_GAP + (pitch.accidental ? ACCIDENTAL_ADVANCE : 0) + FINGER_GAP;
+                  fingeringMarks.push({ x: fingerX, y: ys[pitchIndex], finger: pitch.finger, color });
+                }
               });
             }
           });
@@ -654,6 +696,7 @@ export function renderScore(
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawOverflowMarks(svg, overflowHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
+    drawFingeringMarks(svg, fingeringMarks);
   }
 
   return {

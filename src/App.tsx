@@ -38,6 +38,19 @@ import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
 
+/** Ordered shortest -> longest, interleaving dotted values, for arrow-key duration stepping. */
+const DURATION_LADDER: { duration: DurationValue; dotted: boolean }[] = [
+  { duration: '16', dotted: false },
+  { duration: '16', dotted: true },
+  { duration: '8', dotted: false },
+  { duration: '8', dotted: true },
+  { duration: 'q', dotted: false },
+  { duration: 'q', dotted: true },
+  { duration: 'h', dotted: false },
+  { duration: 'h', dotted: true },
+  { duration: 'w', dotted: false },
+];
+
 const UNDO_HISTORY_LIMIT = 100;
 
 function App() {
@@ -148,30 +161,6 @@ function App() {
     },
     [score, selected, selectedPitchIndex, setScore],
   );
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) handleRedo();
-        else handleUndo();
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        e.preventDefault();
-        handleRedo();
-        return;
-      }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
-        e.preventDefault();
-        deleteNoteAndSelectAdjacent(selected);
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, setScore]);
 
   const handleScoreMetaChange = useCallback((patch: Partial<Score>) => {
     setScore((prev) => ({ ...prev, ...patch }));
@@ -321,6 +310,80 @@ function App() {
   const handleFocusMeasure = useCallback((measureIndex: number) => {
     setFocusedMeasureIndex(measureIndex);
   }, []);
+
+  /** Sets (or clears, when finger is null) the fingering number on the selected
+   * note's pitch — the narrowed pitch if one is picked out, else the primary. */
+  const handleSetFinger = useCallback(
+    (finger: number | null) => {
+      if (!selected) return;
+      setScore((prev) =>
+        updateNoteInScore(prev, selected, (note) => {
+          if (note.isRest || note.pitches.length === 0) return note;
+          const targetIndex = selectedPitchIndex !== null && note.pitches.length > 1 ? selectedPitchIndex : 0;
+          return {
+            ...note,
+            pitches: note.pitches.map((p, i) =>
+              i === targetIndex ? { ...p, finger: finger ?? undefined } : p,
+            ),
+          };
+        }),
+      );
+    },
+    [selected, selectedPitchIndex, setScore],
+  );
+
+  /** Step the selected note's duration one notch longer (dir=+1) or shorter
+   * (dir=-1) through the full dotted+plain ladder (16 -> 16. -> 8 -> 8. -> …). */
+  const handleStepDuration = useCallback(
+    (dir: 1 | -1) => {
+      if (!selected) return;
+      setScore((prev) =>
+        updateNoteInScore(prev, selected, (note) => {
+          const idx = DURATION_LADDER.findIndex((s) => s.duration === note.duration && s.dotted === note.dotted);
+          if (idx < 0) return note;
+          const next = DURATION_LADDER[Math.min(DURATION_LADDER.length - 1, Math.max(0, idx + dir))];
+          return { ...note, duration: next.duration, dotted: next.dotted };
+        }),
+      );
+    },
+    [selected, setScore],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+        e.preventDefault();
+        deleteNoteAndSelectAdjacent(selected);
+        return;
+      }
+      if (selected && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        handleStepDuration(e.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+      // Fingering: with a note selected, a digit sets its fingering (0 clears).
+      if (selected && /^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        handleSetFinger(e.key === '0' ? null : Number(e.key));
+        return;
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleSetFinger]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
