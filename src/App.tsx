@@ -426,6 +426,33 @@ function App() {
     [selected, setScore],
   );
 
+  /** Nudge the selected note's pitch one diatonic step up (dir=+1) or down
+   * (dir=-1) in place — arrow-key editing of a placed note, decoupled from the
+   * toolbar. A chord narrowed to one pitch re-pitches only that pitch (without
+   * detaching it, unlike a drag); otherwise the whole note moves together. A
+   * changed letter re-derives its accidental from the key signature. */
+  const handleStepPitch = useCallback(
+    (dir: 1 | -1) => {
+      if (!selected) return;
+      const delta = dir * 0.5;
+      setScore((prev) =>
+        updateNoteInScore(prev, selected, (note) => {
+          if (note.isRest) return note;
+          const narrowed = note.pitches.length > 1 ? selectedPitchIndex : null;
+          const pitches = note.pitches.map((pitch, i) => {
+            if (narrowed !== null && i !== narrowed) return pitch;
+            const line = pitchToLine(selected.clef, pitch.letter, pitch.octave) + delta;
+            const { letter, octave } = lineToPitch(selected.clef, line);
+            const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
+            return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
+          });
+          return { ...note, pitches };
+        }),
+      );
+    },
+    [selected, selectedPitchIndex, setScore, accidentalAfterMove],
+  );
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -446,9 +473,16 @@ function App() {
         deleteNoteAndSelectAdjacent(selected);
         return;
       }
+      // Arrow keys edit the selected note (decoupled from the toolbar):
+      // up/down change pitch, left/right change duration.
       if (selected && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        handleStepDuration(e.key === 'ArrowUp' ? 1 : -1);
+        handleStepPitch(e.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+      if (selected && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        handleStepDuration(e.key === 'ArrowRight' ? 1 : -1);
         return;
       }
       // Fingering: with a note selected, a digit sets its fingering (0 clears).
@@ -460,7 +494,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleSetFinger]);
+  }, [selected, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -522,6 +556,11 @@ function App() {
         setRestArmed(!selected && patch.isRest);
       }
       if (!selected) return;
+      // Duration and dotted are pen-only: pressing them sets what the NEXT
+      // mouse click inserts and must NOT change the currently-selected note
+      // (edit a placed note's length with ←/→ instead). Only rest and
+      // accidental still apply to the selection.
+      if (patch.isRest === undefined && patch.accidental === undefined) return;
       setScore((prev) =>
         updateNoteInScore(prev, selected, (note) => {
           const isRest = patch.isRest ?? note.isRest;
@@ -542,13 +581,8 @@ function App() {
                 : { letter: 'D', accidental: '', octave: 3 },
             ];
           }
-          return {
-            ...note,
-            duration: patch.duration ?? note.duration,
-            dotted: patch.dotted ?? note.dotted,
-            isRest,
-            pitches,
-          };
+          // duration/dotted deliberately left unchanged (pen-only).
+          return { ...note, isRest, pitches };
         }),
       );
     },
@@ -901,7 +935,7 @@ function App() {
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
-          : '오선보 위의 제목·작곡가·코드·가사를 클릭해 직접 입력하세요. 음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제할 수 있습니다.'}
+          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이)합니다. 위 단추는 다음에 입력할 음표를 정합니다.'}
       </div>
       <StaffEditor
         ref={staffEditorRef}
