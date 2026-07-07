@@ -169,6 +169,10 @@ interface ToolbarProps {
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
+  /** Toggles a tie/slur from the selected note to the next note in its staff. */
+  onToggleTie: () => void;
+  /** Whether the currently selected note already connects to the next. */
+  tieActive: boolean;
   /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
   selectMode: boolean;
   onSetSelectMode: (value: boolean) => void;
@@ -187,6 +191,8 @@ export function Toolbar({
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
+  onToggleTie,
+  tieActive,
   selectMode,
   onSetSelectMode,
   onAddChord,
@@ -360,6 +366,14 @@ export function Toolbar({
             <span className="tool-glyph">{a.label}</span>
           </button>
         ))}
+        <button
+          className={`tool-compact ${tieActive ? 'active' : ''}`}
+          onClick={onToggleTie}
+          disabled={!hasSelection}
+          title="선택한 음표를 다음 음표와 붙임줄/이음줄로 연결 (같은 음이면 붙임줄, 다른 음이면 이음줄)"
+        >
+          🎵⌣ 붙임/이음줄
+        </button>
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
         </button>

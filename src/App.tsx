@@ -485,6 +485,16 @@ function App() {
     deleteNoteAndSelectAdjacent(selected);
   }, [selected, deleteNoteAndSelectAdjacent]);
 
+  /** Toggles a tie/slur from the selected note to the next note in its staff. */
+  const handleToggleTie = useCallback(() => {
+    if (!selected) return;
+    setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, connectToNext: !note.connectToNext })));
+  }, [selected, setScore]);
+
+  const selectedNote =
+    selected && score.measures[selected.measureIndex]?.[selected.clef].notes[selected.noteIndex];
+  const tieActive = !!selectedNote?.connectToNext;
+
   const handleAddMeasure = useCallback(() => {
     setScore((prev) => addMeasure(prev));
   }, [setScore]);
@@ -651,6 +661,8 @@ function App() {
         hasSelection={!!selected}
         onDeleteSelected={handleDeleteSelected}
         onDeselectNote={handleDeselectNote}
+        onToggleTie={handleToggleTie}
+        tieActive={tieActive}
         selectMode={selectMode}
         onSetSelectMode={setSelectMode}
         onAddChord={handleAddChordTool}

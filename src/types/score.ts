@@ -26,6 +26,11 @@ export interface NoteEvent {
    * measure is filled to the time signature's capacity. Undefined = auto layout.
    */
   x?: number;
+  /**
+   * Connect to the next note in the same staff with a curved line — drawn as a
+   * tie (붙임줄) when the next note has the same pitch, otherwise a slur (이음줄).
+   */
+  connectToNext?: boolean;
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */

@@ -1,4 +1,4 @@
-import { Beam, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, Voice } from 'vexflow';
+import { Beam, Curve, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, StaveTie, Voice } from 'vexflow';
 import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
@@ -408,6 +408,7 @@ export function renderScore(
   const overflowHitboxes: OverflowHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
+  const connectChains: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -536,6 +537,12 @@ export function renderScore(
 
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
+
+          // Collect (event, staveNote) in play order per clef so tie/slur
+          // curves — drawn once at the very end, after every measure has its
+          // note positions — can connect a note to the next one in the staff,
+          // even across a measure boundary.
+          staveNotes.forEach((sn, i) => connectChains[clef].push({ event: notes[i], staveNote: sn }));
 
           staveNotes.forEach((sn, noteIndex) => {
             const note = notes[noteIndex];
@@ -670,6 +677,30 @@ export function renderScore(
 
       x += measureWidth;
     });
+  });
+
+  // Tie/slur curves: a note's `connectToNext` joins it to the following note
+  // in the same staff — a tie (붙임줄) when the pitches match, else a slur
+  // (이음줄). Drawn last so every note already has its final position.
+  (['treble', 'bass'] as const).forEach((clef) => {
+    const chain = connectChains[clef];
+    for (let i = 0; i < chain.length - 1; i++) {
+      const cur = chain[i];
+      const next = chain[i + 1];
+      if (cur.event.isRest || next.event.isRest || !cur.event.connectToNext) continue;
+      try {
+        const sameKeys =
+          cur.event.pitches.length === next.event.pitches.length &&
+          cur.event.pitches.every((p, pi) => pitchToVexKey(p) === pitchToVexKey(next.event.pitches[pi]));
+        if (sameKeys) {
+          new StaveTie({ firstNote: cur.staveNote, lastNote: next.staveNote }).setContext(context).draw();
+        } else {
+          new Curve(cur.staveNote, next.staveNote, {}).setContext(context).draw();
+        }
+      } catch {
+        // Skip connections VexFlow can't render (e.g. mismatched key counts).
+      }
+    }
   });
 
   const titleHitbox: TitleHitbox = { x0: 0, x1: width, y0: 0, y1: TITLE_BAND, x: width / 2, y: 48 };
