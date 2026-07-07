@@ -308,7 +308,13 @@ function App() {
           const isRest = patch.isRest ?? note.isRest;
           let pitches = note.pitches;
           if (patch.accidental !== undefined && pitches.length > 0) {
-            pitches = pitches.map((p) => ({ ...p, accidental: patch.accidental! }));
+            // A chord narrowed to one specific pitch (selectedPitchIndex set —
+            // see handleSelectNote) should only have THAT pitch's accidental
+            // changed, not every tone in the chord.
+            const narrowedIndex = pitches.length > 1 ? selectedPitchIndex : null;
+            pitches = pitches.map((p, i) =>
+              narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: patch.accidental! } : p,
+            );
           }
           if (!isRest && pitches.length === 0) {
             pitches = [
@@ -327,7 +333,7 @@ function App() {
         }),
       );
     },
-    [selected, setScore],
+    [selected, selectedPitchIndex, setScore],
   );
 
   const handleDeleteSelected = useCallback(() => {
