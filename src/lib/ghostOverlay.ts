@@ -264,3 +264,51 @@ export function renderSeekBar(svg: SVGSVGElement | null, spec: SeekBarSpec | nul
 export function clearSeekBar(svg: SVGSVGElement | null): void {
   renderSeekBar(svg, null);
 }
+
+const MEASURE_FLASH_GROUP_ID = 'measure-flash-group';
+
+export interface MeasureFlashSpec {
+  /** Stable per-flash identity, so a still-active flash's DOM node (and its
+   * already-running CSS fade animation) is left untouched across re-renders
+   * instead of being recreated and restarted from full opacity. */
+  id: number;
+  x: number;
+  y: number;
+}
+
+/** Green checkmarks that fade out over ~3s, flashed over a measure the
+ * moment its beat count exactly fills the time signature (see StaffEditor's
+ * measure-completion tracking). Reconciles by id rather than replacing all
+ * children each call, since the fade is a real CSS animation that must keep
+ * running across the score's normal re-renders. */
+export function renderMeasureCompleteFlashes(svg: SVGSVGElement | null, specs: MeasureFlashSpec[]): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${MEASURE_FLASH_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', MEASURE_FLASH_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  const liveIds = new Set(specs.map((s) => String(s.id)));
+  Array.from(group.children).forEach((child) => {
+    if (!liveIds.has(child.getAttribute('data-flash-id') ?? '')) child.remove();
+  });
+  specs.forEach((spec) => {
+    const key = String(spec.id);
+    if (group!.querySelector(`[data-flash-id="${key}"]`)) return;
+    const mark = el('g', { 'data-flash-id': key, class: 'measure-flash-check' });
+    mark.setAttribute('transform', `translate(${spec.x}, ${spec.y})`);
+    mark.appendChild(
+      el('path', {
+        d: 'M-7 0 L-2 6 L8 -8',
+        stroke: '#2f9e44',
+        'stroke-width': 3,
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+        fill: 'none',
+      }),
+    );
+    group!.appendChild(mark);
+  });
+}

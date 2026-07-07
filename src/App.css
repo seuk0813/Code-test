@@ -142,6 +142,22 @@
   white-space: nowrap;
 }
 
+.measure-flash-check {
+  animation: measure-flash-fade 3s ease-out forwards;
+}
+
+@keyframes measure-flash-fade {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .more-menu-popover {
   position: absolute;
   top: calc(100% + 4px);
@@ -366,6 +382,11 @@
 }
 
 /* Floating add/remove-measure buttons — always act on the last measure. */
+/* Floating cluster, bottom-right, always visible (follows scroll): the "±"
+   toggle reveals +/- for inserting/deleting at the currently FOCUSED (mid-
+   score) measure; the clipboard button is its own always-visible action.
+   Circular buttons, in document order bottom-to-top (± toggle at the very
+   bottom, its revealed +/- appear above it, clipboard button above those). */
 .measure-fabs {
   position: fixed;
   right: 24px;
@@ -389,12 +410,23 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
 }
 
-.measure-fab-remove {
+.measure-fab-toggle {
+  background: #2f9e44;
+}
+
+.measure-fab-toggle.active {
+  background: #21742f;
+}
+
+.measure-fab-mid-remove {
   background: #8a8a8a;
 }
 
-.measure-fab-copy,
-.measure-fab-paste {
+.measure-fab-mid-add {
+  background: #2f9e44;
+}
+
+.measure-fab-clipboard {
   background: #5a6acf;
   font-size: 22px;
 }
@@ -404,6 +436,53 @@
 }
 
 .measure-fab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Inline row right after the score's own content (NOT fixed — it scrolls
+   away with the score, unlike the floating FAB cluster above): the "마디 ±"
+   toggle reveals +/- for adding/removing at the very END of the score.
+   Rounded-square pills, deliberately different from the floating circles. */
+.measure-end-toggle-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.measure-end-toggle {
+  min-width: 44px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.measure-end-toggle.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.measure-end-toggle-remove {
+  color: #8a8a8a;
+  border-color: #8a8a8a;
+}
+
+.measure-end-toggle-add {
+  color: #2f9e44;
+  border-color: #2f9e44;
+}
+
+.measure-end-toggle:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.measure-end-toggle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

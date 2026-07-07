@@ -26,6 +26,8 @@ import {
 import {
   chordLabel,
   cycleDurationLonger,
+  isStaffMeasureFull,
+  isStaffMeasureOverflow,
   lineToPitch,
   measureCapacityBeats,
   noteBeats,
@@ -38,6 +40,7 @@ import {
   clearTooltip,
   ledgerLinePositions,
   renderGhost,
+  renderMeasureCompleteFlashes,
   renderPlayback,
   renderSeekBar,
   renderTooltip,
@@ -330,6 +333,45 @@ function StaffEditorInner({
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
   }, [score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+
+  // Green checkmark that flashes over a measure the instant its beat count
+  // exactly fills the time signature (editing further past that, or back out
+  // of it, doesn't re-trigger it — only the false→true transition does).
+  const prevCompleteMeasuresRef = useRef<Set<number>>(new Set());
+  const [measureFlashes, setMeasureFlashes] = useState<{ id: number; measureIndex: number }[]>([]);
+  const flashIdRef = useRef(0);
+
+  useEffect(() => {
+    const current = new Set<number>();
+    score.measures.forEach((measure, measureIndex) => {
+      const staffComplete = (sm: typeof measure.treble) =>
+        isStaffMeasureFull(sm, score.timeSignature) && !isStaffMeasureOverflow(sm, score.timeSignature);
+      if (staffComplete(measure.treble) || staffComplete(measure.bass)) current.add(measureIndex);
+    });
+    const prev = prevCompleteMeasuresRef.current;
+    const newlyCompleted = [...current].filter((mi) => !prev.has(mi));
+    prevCompleteMeasuresRef.current = current;
+    if (newlyCompleted.length === 0) return;
+    const additions = newlyCompleted.map((measureIndex) => ({ id: flashIdRef.current++, measureIndex }));
+    setMeasureFlashes((prevFlashes) => [...prevFlashes, ...additions]);
+    additions.forEach(({ id }) => {
+      window.setTimeout(() => {
+        setMeasureFlashes((prevFlashes) => prevFlashes.filter((f) => f.id !== id));
+      }, 3200);
+    });
+  }, [score]);
+
+  useEffect(() => {
+    const result = renderResultRef.current;
+    if (!overlayRef.current || !result) return;
+    const specs = measureFlashes
+      .map(({ id, measureIndex }) => {
+        const treble = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
+        return treble ? { id, x: treble.x1 - 12, y: treble.y0 - 14 } : null;
+      })
+      .filter((s): s is { id: number; x: number; y: number } => s !== null);
+    renderMeasureCompleteFlashes(overlayRef.current, specs);
+  }, [measureFlashes, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
 
   // Playback playhead: a red bar per staff, snapped exactly to the real X of
   // the currently-sounding note (never interpolated — that's what previously

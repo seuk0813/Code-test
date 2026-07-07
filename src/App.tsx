@@ -13,6 +13,7 @@ import {
   addNoteToScore,
   adjacentIndexAfterDelete,
   CHORD_QUALITY_SUFFIX,
+  createEmptyMeasure,
   createEmptyScore,
   createNote,
   editChordText,
@@ -90,6 +91,12 @@ function App() {
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
   const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
+  // Two separate "+/-" reveal toggles: one inline at the end of the score
+  // (always operates on the very last measure), one floating bottom-right
+  // that follows scroll (always operates on the currently focused measure,
+  // so it can insert/delete in the middle of the score).
+  const [endFabOpen, setEndFabOpen] = useState(false);
+  const [midFabOpen, setMidFabOpen] = useState(false);
   // Beat position of the draggable "start playback here" seek bar (0 = very start).
   const [playbackStartBeat, setPlaybackStartBeat] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -603,9 +610,37 @@ function App() {
     );
   }, [selected, setScore]);
 
+  /** Always appends at the very end of the score — the end-of-score "+" is a fixed action, not tied to focus. */
   const handleAddMeasure = useCallback(() => {
     setScore((prev) => addMeasure(prev));
   }, [setScore]);
+
+  /** Always removes the last measure — the end-of-score "－" is a fixed action, not tied to focus. */
+  const handleDeleteLastMeasure = useCallback(() => {
+    if (score.measures.length <= 1) return;
+    const target = score.measures.length - 1;
+    setScore((prev) => removeMeasure(prev, target));
+    setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
+    setSelectedPitchIndex(null);
+    setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
+  }, [score.measures.length, setScore]);
+
+  /** Inserts a blank measure right after the focused (or last) measure — the floating FAB's "+", for mid-score insertion. */
+  const handleInsertMeasureAtFocused = useCallback(() => {
+    const idx = focusedMeasureIndex ?? score.measures.length - 1;
+    setScore((prev) => insertMeasureAfter(prev, idx, createEmptyMeasure()));
+    setFocusedMeasureIndex(idx + 1);
+  }, [focusedMeasureIndex, score.measures.length, setScore]);
+
+  /** Removes the focused (or last) measure — the floating FAB's "－", for mid-score deletion. */
+  const handleRemoveFocusedMeasure = useCallback(() => {
+    if (score.measures.length <= 1) return;
+    const target = focusedMeasureIndex ?? score.measures.length - 1;
+    setScore((prev) => removeMeasure(prev, target));
+    setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
+    setSelectedPitchIndex(null);
+    setFocusedMeasureIndex((foc) => (foc === target ? null : foc === null ? null : foc > target ? foc - 1 : foc));
+  }, [focusedMeasureIndex, score.measures.length, setScore]);
 
   /** Copies the focused (or last) measure into an in-memory clipboard. */
   const handleCopyMeasure = useCallback(() => {
@@ -622,15 +657,40 @@ function App() {
     setFocusedMeasureIndex(idx + 1);
   }, [copiedMeasure, focusedMeasureIndex, score.measures.length, setScore]);
 
-  /** Always removes the last measure — the FAB's "－" is a fixed end-of-score action, not tied to selection. */
-  const handleDeleteLastMeasure = useCallback(() => {
-    if (score.measures.length <= 1) return;
-    const target = score.measures.length - 1;
-    setScore((prev) => removeMeasure(prev, target));
-    setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
-    setSelectedPitchIndex(null);
-    setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
-  }, [score.measures.length, setScore]);
+  /**
+   * Single button for both copy and paste (previously two separate FABs):
+   * a plain click pastes if something is already copied, otherwise copies.
+   * Copying something new once the clipboard is already full needs a
+   * distinct gesture — long-press (touch) or right-click (desktop) always
+   * force-copies the focused measure, matching the long-press language
+   * already used elsewhere in this app (e.g. duration cycling).
+   */
+  const measureClipboardLongPressRef = useRef<number | null>(null);
+  const measureClipboardLongPressFiredRef = useRef(false);
+
+  const handleMeasureClipboardClick = useCallback(() => {
+    if (measureClipboardLongPressFiredRef.current) {
+      measureClipboardLongPressFiredRef.current = false;
+      return;
+    }
+    if (copiedMeasure) handlePasteMeasure();
+    else handleCopyMeasure();
+  }, [copiedMeasure, handlePasteMeasure, handleCopyMeasure]);
+
+  const handleMeasureClipboardPointerDown = useCallback(() => {
+    measureClipboardLongPressFiredRef.current = false;
+    measureClipboardLongPressRef.current = window.setTimeout(() => {
+      measureClipboardLongPressFiredRef.current = true;
+      handleCopyMeasure();
+    }, 600);
+  }, [handleCopyMeasure]);
+
+  const clearMeasureClipboardLongPress = useCallback(() => {
+    if (measureClipboardLongPressRef.current !== null) {
+      window.clearTimeout(measureClipboardLongPressRef.current);
+      measureClipboardLongPressRef.current = null;
+    }
+  }, []);
 
   const handleSetTitle = useCallback((title: string) => {
     setScore((prev) => ({ ...prev, title }));
@@ -830,35 +890,85 @@ function App() {
         seekBeat={playbackStartBeat}
         onSeekBeat={setPlaybackStartBeat}
       />
+      <div className="measure-end-toggle-row">
+        <button
+          className={`measure-end-toggle ${endFabOpen ? 'active' : ''}`}
+          onClick={() => setEndFabOpen((v) => !v)}
+          title="악보 끝에 마디 추가/삭제"
+          aria-label="악보 끝 마디 추가/삭제"
+        >
+          마디 ±
+        </button>
+        {endFabOpen && (
+          <>
+            <button
+              className="measure-end-toggle measure-end-toggle-remove"
+              onClick={handleDeleteLastMeasure}
+              disabled={score.measures.length <= 1}
+              title="마지막 마디 삭제"
+              aria-label="마지막 마디 삭제"
+            >
+              −
+            </button>
+            <button
+              className="measure-end-toggle measure-end-toggle-add"
+              onClick={handleAddMeasure}
+              title="끝에 마디 추가"
+              aria-label="끝에 마디 추가"
+            >
+              +
+            </button>
+          </>
+        )}
+      </div>
       <div className="measure-fabs">
         <button
-          className="measure-fab measure-fab-copy"
-          onClick={handleCopyMeasure}
-          title={`${(focusedMeasureIndex ?? score.measures.length - 1) + 1}번 마디 복사`}
-          aria-label="마디 복사"
+          className="measure-fab measure-fab-clipboard"
+          onClick={handleMeasureClipboardClick}
+          onPointerDown={handleMeasureClipboardPointerDown}
+          onPointerUp={clearMeasureClipboardLongPress}
+          onPointerLeave={clearMeasureClipboardLongPress}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            handleCopyMeasure();
+          }}
+          title={
+            copiedMeasure
+              ? '클릭: 복사한 마디 붙여넣기 / 길게 누르거나 우클릭: 새로 복사'
+              : `${(focusedMeasureIndex ?? score.measures.length - 1) + 1}번 마디 복사`
+          }
+          aria-label="마디 복사/붙여넣기"
         >
-          ⎘
+          {copiedMeasure ? '▤' : '⎘'}
         </button>
+        {midFabOpen && (
+          <>
+            <button
+              className="measure-fab measure-fab-mid-remove"
+              onClick={handleRemoveFocusedMeasure}
+              disabled={score.measures.length <= 1}
+              title="선택한 마디 삭제"
+              aria-label="선택한 마디 삭제"
+            >
+              −
+            </button>
+            <button
+              className="measure-fab measure-fab-mid-add"
+              onClick={handleInsertMeasureAtFocused}
+              title="선택한 마디 뒤에 마디 삽입"
+              aria-label="선택한 마디 뒤에 마디 삽입"
+            >
+              +
+            </button>
+          </>
+        )}
         <button
-          className="measure-fab measure-fab-paste"
-          onClick={handlePasteMeasure}
-          disabled={!copiedMeasure}
-          title="복사한 마디를 뒤에 붙여넣기"
-          aria-label="마디 붙여넣기"
+          className={`measure-fab measure-fab-toggle ${midFabOpen ? 'active' : ''}`}
+          onClick={() => setMidFabOpen((v) => !v)}
+          title="중간에 마디 추가/삭제"
+          aria-label="중간 마디 추가/삭제"
         >
-          ▤
-        </button>
-        <button
-          className="measure-fab measure-fab-remove"
-          onClick={handleDeleteLastMeasure}
-          disabled={score.measures.length <= 1}
-          title="마지막 마디 삭제"
-          aria-label="마지막 마디 삭제"
-        >
-          −
-        </button>
-        <button className="measure-fab" onClick={handleAddMeasure} title="마디 추가" aria-label="마디 추가">
-          +
+          ±
         </button>
       </div>
       {saveOpen && (
