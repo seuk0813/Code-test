@@ -19,6 +19,8 @@ export async function playScore(
   score: Score,
   onMeasure: (measureIndex: number) => void,
   onEnd: () => void,
+  /** Beats from the very start to begin playback from (the draggable seek bar). */
+  startBeat = 0,
 ): Promise<PlaybackHandle> {
   await Tone.start();
 
@@ -95,7 +97,11 @@ export async function playScore(
     }, time);
   }, totalSeconds + 0.1);
 
-  Tone.getTransport().start();
+  // Start the transport at the seek offset: events are all scheduled at their
+  // absolute times, so jumping the transport to startBeat both skips earlier
+  // notes and keeps transport.seconds reporting the true absolute position
+  // (so the visual playhead stays correct without any extra offset math).
+  Tone.getTransport().start(undefined, startBeat * secondsPerBeat);
 
   return {
     stop: () => {

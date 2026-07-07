@@ -39,6 +39,7 @@ import {
   ledgerLinePositions,
   renderGhost,
   renderPlayback,
+  renderSeekBar,
   renderTooltip,
 } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
@@ -89,6 +90,9 @@ interface StaffEditorProps {
   onDeselectNote: () => void;
   /** When playing, a clock returning elapsed transport seconds (drives the playhead). */
   playbackClock: { get: () => number } | null;
+  /** Beat position of the draggable "start playback here" bar. */
+  seekBeat: number;
+  onSeekBeat: (beat: number) => void;
   /** Inline editing directly on the score: title, composer, and adding/editing chords & lyrics in place. */
   onSetTitle: (title: string) => void;
   onSetComposer: (composer: string) => void;
@@ -218,6 +222,8 @@ function StaffEditorInner({
   onDeleteLyric,
   onDeselectNote,
   playbackClock,
+  seekBeat,
+  onSeekBeat,
   onSetTitle,
   onSetComposer,
   onAddChordAt,
@@ -297,6 +303,7 @@ function StaffEditorInner({
   const touchGestureRef = useRef<TouchGesture>(null);
   const touchHoldRef = useRef<number | null>(null);
   const playbackRafRef = useRef<number | null>(null);
+  const seekDraggingRef = useRef(false);
 
   // The currently-sounding note per staff during playback (null when playing
   // a rest, or when not playing at all). Recoloring the real VexFlow note via
@@ -411,6 +418,62 @@ function StaffEditorInner({
     // coordinates every hitbox/handler already assumes, at any zoom level.
     return { x: (event.clientX - rect.left) / zoomRef.current, y: (event.clientY - rect.top) / zoomRef.current };
   };
+
+  // --- Playback seek bar ------------------------------------------------------
+
+  const seekBarSpec = () => {
+    const result = renderResultRef.current;
+    if (!result) return null;
+    const measureBeats = measureCapacityBeats(score.timeSignature);
+    const mi = Math.min(score.measures.length - 1, Math.max(0, Math.floor(seekBeat / measureBeats)));
+    const frac = Math.min(1, Math.max(0, (seekBeat - mi * measureBeats) / measureBeats));
+    const treble = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'treble');
+    const bass = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const x = treble.noteStartX + frac * treble.noteAreaWidth;
+    const y0 = treble.refY0 - treble.spacing * 3;
+    const y1 = bass.refY0 + bass.spacing * 5;
+    return { x, y0, y1 };
+  };
+
+  const nearSeekHandle = (point: { x: number; y: number }) => {
+    const spec = seekBarSpec();
+    if (!spec) return false;
+    // Grab region is the knob just above the top of the bar, kept tight in x
+    // so it rarely collides with note/chord placement at the same column.
+    return Math.abs(point.x - spec.x) <= 10 && point.y >= spec.y0 - 16 && point.y <= spec.y0 + 12;
+  };
+
+  /** Maps a pointer position to a beat, snapped to the nearest note onset (or downbeat) in the measure under it. */
+  const xyToSeekBeat = (x: number, y: number): number | null => {
+    const result = renderResultRef.current;
+    if (!result) return null;
+    const measureBeats = measureCapacityBeats(score.timeSignature);
+    const trebles = result.staffHitboxes.filter((s) => s.clef === 'treble');
+    // Row under the pointer: the treble whose x-range contains x, nearest in y.
+    let hb = trebles
+      .filter((s) => x >= s.x0 && x <= s.x1)
+      .sort((a, b) => Math.abs(y - a.refY0) - Math.abs(y - b.refY0))[0];
+    if (!hb) hb = trebles.sort((a, b) => Math.abs(x - (a.x0 + a.x1) / 2) - Math.abs(x - (b.x0 + b.x1) / 2))[0];
+    if (!hb) return null;
+    const frac = Math.min(1, Math.max(0, (x - hb.noteStartX) / hb.noteAreaWidth));
+    const rawBeat = hb.measureIndex * measureBeats + frac * measureBeats;
+    // Candidate onsets: the downbeat plus each note's cumulative onset.
+    const onsets = [hb.measureIndex * measureBeats];
+    let b = hb.measureIndex * measureBeats;
+    score.measures[hb.measureIndex].treble.notes.forEach((note) => {
+      onsets.push(b);
+      b += noteBeats(note);
+    });
+    return onsets.reduce((best, o) => (Math.abs(o - rawBeat) < Math.abs(best - rawBeat) ? o : best), onsets[0]);
+  };
+
+  // Render the seek bar whenever its position or the score layout changes
+  // (hidden while playing — the red playhead takes over then).
+  useEffect(() => {
+    renderSeekBar(overlayRef.current, playbackClock ? null : seekBarSpec());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekBeat, score, selected, draggingNote, playingLocations, selectedPitchIndex, playbackClock]);
 
   // --- Shared placement helpers -----------------------------------------------
 
@@ -730,6 +793,20 @@ function StaffEditorInner({
 
   // --- Mouse (desktop) interactions -------------------------------------------
 
+  const handleSeekDocMouseMove = (event: MouseEvent) => {
+    if (!seekDraggingRef.current) return;
+    const point = eventPoint(event);
+    if (!point) return;
+    const beat = xyToSeekBeat(point.x, point.y);
+    if (beat !== null) onSeekBeat(beat);
+  };
+
+  const handleSeekDocMouseUp = () => {
+    seekDraggingRef.current = false;
+    document.removeEventListener('mousemove', handleSeekDocMouseMove);
+    document.removeEventListener('mouseup', handleSeekDocMouseUp);
+  };
+
   const handleDocumentMouseMove = (event: MouseEvent) => {
     const gesture = mouseGestureRef.current;
     const result = renderResultRef.current;
@@ -846,6 +923,13 @@ function StaffEditorInner({
     event.preventDefault();
     clearGhost(overlayRef.current);
     if (inlineEditor) commitInlineEditor();
+
+    if (nearSeekHandle(point)) {
+      seekDraggingRef.current = true;
+      document.addEventListener('mousemove', handleSeekDocMouseMove);
+      document.addEventListener('mouseup', handleSeekDocMouseUp);
+      return;
+    }
 
     if (findTitleAt(result, point.x, point.y)) {
       openTitleEditor();
@@ -1084,6 +1168,12 @@ function StaffEditorInner({
     if (!result || !point) return;
     if (inlineEditor) commitInlineEditor();
 
+    if (nearSeekHandle(point)) {
+      event.preventDefault();
+      seekDraggingRef.current = true;
+      return;
+    }
+
     if (findTitleAt(result, point.x, point.y)) {
       event.preventDefault();
       openTitleEditor();
@@ -1212,6 +1302,16 @@ function StaffEditorInner({
       return;
     }
 
+    if (seekDraggingRef.current) {
+      event.preventDefault();
+      const point = event.touches[0] && eventPoint(event.touches[0]);
+      if (point) {
+        const beat = xyToSeekBeat(point.x, point.y);
+        if (beat !== null) onSeekBeat(beat);
+      }
+      return;
+    }
+
     const gesture = touchGestureRef.current;
     if (!gesture) return;
     const touch = event.touches[0];
@@ -1261,6 +1361,10 @@ function StaffEditorInner({
   const handleTouchEnd = (event: TouchEvent) => {
     if (event.touches.length < 2) pinchRef.current = null;
     if (pinchRef.current) return;
+    if (seekDraggingRef.current) {
+      seekDraggingRef.current = false;
+      return;
+    }
     clearTouchHold();
     const gesture = touchGestureRef.current;
     if (!gesture) return;

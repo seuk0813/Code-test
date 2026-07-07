@@ -228,3 +228,39 @@ export function renderPlayback(svg: SVGSVGElement | null, visual: PlaybackVisual
 export function clearPlayback(svg: SVGSVGElement | null): void {
   renderPlayback(svg, null);
 }
+
+const SEEK_GROUP_ID = 'seek-bar-group';
+
+export interface SeekBarSpec {
+  x: number;
+  y0: number;
+  y1: number;
+}
+
+/** The draggable "start playback here" bar. Its knob is pointer-events:auto
+ * (the overlay itself is not) so it can be grabbed; hit-testing for the drag
+ * is handled in StaffEditor via findSeekHandleAt against the same geometry. */
+export function renderSeekBar(svg: SVGSVGElement | null, spec: SeekBarSpec | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${SEEK_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', SEEK_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!spec) return;
+  group.appendChild(el('line', { x1: spec.x, y1: spec.y0, x2: spec.x, y2: spec.y1, stroke: '#2f9e44', 'stroke-width': 2.5 }));
+  // Grab knob at the top of the bar.
+  group.appendChild(
+    el('path', {
+      d: `M${spec.x - 7} ${spec.y0 - 12} L${spec.x + 7} ${spec.y0 - 12} L${spec.x} ${spec.y0} Z`,
+      fill: '#2f9e44',
+    }),
+  );
+}
+
+export function clearSeekBar(svg: SVGSVGElement | null): void {
+  renderSeekBar(svg, null);
+}

@@ -85,6 +85,8 @@ function App() {
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
   const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
+  // Beat position of the draggable "start playback here" seek bar (0 = very start).
+  const [playbackStartBeat, setPlaybackStartBeat] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
   const [playbackClock, setPlaybackClock] = useState<{ get: () => number } | null>(null);
@@ -567,10 +569,11 @@ function App() {
         setPlaybackClock(null);
         playbackRef.current = null;
       },
+      playbackStartBeat,
     );
     playbackRef.current = handle;
     setPlaybackClock({ get: handle.getSeconds });
-  }, [score, isPlaying]);
+  }, [score, isPlaying, playbackStartBeat]);
 
   const handleStop = useCallback(() => {
     playbackRef.current?.stop();
@@ -686,6 +689,8 @@ function App() {
         onAddLyricAt={handleAddLyricAt}
         onEditLyricText={handleEditLyricText}
         playbackClock={playbackClock}
+        seekBeat={playbackStartBeat}
+        onSeekBeat={setPlaybackStartBeat}
       />
       <div className="measure-fabs">
         <button
