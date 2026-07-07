@@ -58,6 +58,10 @@ function App() {
   // (existing note clicked, chord tone toggled, or brand-new note placed)
   // consumes it and it clears back to false/'' immediately after.
   const [accidentalArmed, setAccidentalArmed] = useState(false);
+  // Same one-shot arming as accidentalArmed, but for the rest button: pressed
+  // with nothing selected, it arms turning the next note it touches into a
+  // rest of that note's own duration, then clears immediately after.
+  const [restArmed, setRestArmed] = useState(false);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
@@ -191,16 +195,22 @@ function App() {
           );
           setAccidentalArmed(false);
         }
+        if (restArmed) {
+          // A one-shot rest was armed (button pressed with nothing selected)
+          // — this click converts the note into a rest of its own duration.
+          setScore((prev) => updateNoteInScore(prev, location, (n) => ({ ...n, isRest: true, pitches: [] })));
+          setRestArmed(false);
+        }
         const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
         setEditTool({
           duration: note.duration,
           dotted: note.dotted,
-          isRest: note.isRest,
+          isRest: restArmed ? false : note.isRest,
           accidental: accidentalArmed ? '' : pitch?.accidental ?? '',
         });
       }
     },
-    [score, accidentalArmed, editTool.accidental, setScore],
+    [score, accidentalArmed, editTool.accidental, restArmed, setScore],
   );
 
   const handleAddNote = useCallback(
@@ -223,10 +233,13 @@ function App() {
       setScore(result.score);
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
-      // One-shot: a newly placed note consumes the armed accidental, so it
-      // doesn't silently keep sharping/flatting every note placed after it.
-      if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
+      // One-shot: a newly placed note consumes the armed accidental/rest, so
+      // it doesn't silently keep applying to every note placed after it.
+      if (editTool.accidental || editTool.isRest) {
+        setEditTool((prev) => ({ ...prev, accidental: '', isRest: false }));
+      }
       setAccidentalArmed(false);
+      setRestArmed(false);
     },
     [score, editTool, setScore],
   );
@@ -331,12 +344,23 @@ function App() {
       // toolbar resets to no-accidental right after applying it, so the next
       // unrelated new note placed elsewhere doesn't silently inherit it too.
       const isOneShotAccidental = !!selected && patch.accidental !== undefined;
-      setEditTool((prev) => ({ ...prev, ...patch, ...(isOneShotAccidental ? { accidental: '' } : {}) }));
+      // Same one-shot treatment for the rest button: applying it to an
+      // already-selected note doesn't leave it "pressed" for future notes.
+      const isOneShotRest = !!selected && patch.isRest !== undefined;
+      setEditTool((prev) => ({
+        ...prev,
+        ...patch,
+        ...(isOneShotAccidental ? { accidental: '' } : {}),
+        ...(isOneShotRest ? { isRest: false } : {}),
+      }));
       if (patch.accidental !== undefined) {
         // No note selected yet — arm it as a one-shot pen instead of applying
         // immediately; the next note it touches (see handleSelectNote,
         // handleAddNote, handleTogglePitch) consumes and clears it.
         setAccidentalArmed(!selected && patch.accidental !== '');
+      }
+      if (patch.isRest !== undefined) {
+        setRestArmed(!selected && patch.isRest);
       }
       if (!selected) return;
       setScore((prev) =>

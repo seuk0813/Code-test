@@ -313,14 +313,18 @@ export function Toolbar({
         >
           <DottedToggleGlyph isRest={editTool.isRest} />
         </button>
-        <label className="tool-checkbox" title="쉼표">
-          <input
-            type="checkbox"
-            checked={editTool.isRest}
-            onChange={(e) => onEditToolChange({ isRest: e.target.checked })}
-          />
+        <button
+          className={`tool-icon-btn ${editTool.isRest ? 'active' : ''}`}
+          // Not a persistent mode: pressed with a note selected, it flips
+          // just that note (rest <-> note) and un-presses right after;
+          // pressed with nothing selected, it arms turning the very next
+          // note it touches into a rest, one-shot (see onEditToolChange).
+          onClick={() => onEditToolChange({ isRest: hasSelection ? !editTool.isRest : true })}
+          aria-label="쉼표로 변환"
+          title="선택한 음표를 같은 박자의 쉼표로 변환"
+        >
           쉼표
-        </label>
+        </button>
         {ACCIDENTALS.map((a) => (
           <button
             key={a.value || 'none'}
