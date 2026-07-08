@@ -537,9 +537,10 @@ function App() {
   }, [marquee, score]);
 
   /** Ctrl+V: if the clipboard holds whole measures (a multi-measure marquee
-   * copy), insert fresh clones of them one after another right after the
-   * focused (or last) measure — the same insert-new-measure behavior as the
-   * single-measure copy/paste FAB, so a multi-measure copy never gets
+   * copy), insert fresh clones of them one after another STARTING AT the
+   * focused (or last) measure — i.e. right before it, so the pasted content
+   * begins at the exact measure the user clicked rather than the one after
+   * it — pushing that measure (and everything after) later. This never gets
    * flattened/crammed into one target measure and overflows it. Otherwise,
    * append the copied notes to the focused (or last) measure, each into its
    * original clef, in order — connections and free-x are dropped so the
@@ -549,7 +550,7 @@ function App() {
       const target = focusedMeasureIndex ?? score.measures.length - 1;
       setScore((prev) => {
         let next = prev;
-        let insertAt = target;
+        let insertAt = target - 1;
         measureClipboard.forEach((measure) => {
           next = insertMeasureAfter(next, insertAt, measure);
           insertAt += 1;

@@ -1090,13 +1090,22 @@ function StaffEditorInner({
     }
 
     if (gesture.kind === 'add') {
-      // Click-to-lock: the first click on empty staff locks a preview here; the
-      // second click commits it (spacebar/arrow keys handle it in between).
-      // Focus moves to this measure on the very first click, not just on
-      // commit — so a plain click marks "paste starts here" even before any
-      // note is placed.
+      // Click-to-lock: a click on empty staff locks a preview there. Clicking
+      // again ON THAT SAME PREVIEW commits it (spacebar/arrow keys handle it
+      // in between); clicking anywhere else instead MOVES the lock there —
+      // so the preview always follows the most recent click, and only a
+      // deliberate second click on the same spot places the note.
+      const lp = lockedPreviewRef.current;
+      const sameSpot =
+        !!lp &&
+        lp.measureIndex === gesture.measureIndex &&
+        lp.clef === gesture.clef &&
+        lp.line === gesture.line &&
+        Math.abs(lp.x - gesture.x) < TOUCH_PREVIEW_RADIUS;
+      // Focus moves to this measure on every such click, not just on commit —
+      // so a plain click marks "paste starts here" even before any note is placed.
       onFocusMeasure(gesture.measureIndex);
-      if (lockedPreviewRef.current) {
+      if (sameSpot) {
         commitLockedPreview();
       } else {
         setLockedPreview({ measureIndex: gesture.measureIndex, clef: gesture.clef, line: gesture.line, x: gesture.x });
