@@ -87,9 +87,13 @@ function App() {
   // "C키 기준 임시표": when true (default), new/moved notes auto-inherit the
   // accidental the current key signature implies relative to C major — e.g.
   // placing a plain B in F major automatically shows/sounds as Bb. An
-  // explicit accidental the user picks always overrides this, and turning
-  // the toggle off never touches accidentals already baked into existing
-  // notes — it only stops applying to notes placed/moved from then on.
+  // explicit accidental the user picks always overrides this. Turning the
+  // toggle off also strips the auto flat/sharp from existing notes (see
+  // handleToggleCKeyBasedAccidentals below) — a manually-chosen accidental
+  // is indistinguishable from an auto one once baked in, so any note whose
+  // stored accidental exactly matches what the key signature would have
+  // implied is treated as auto and cleared; playback is unaffected since it
+  // always falls back to the key signature (see effectiveAccidental).
   const [cKeyBasedAccidentals, setCKeyBasedAccidentals] = useState(true);
   const [focusedMeasureIndex, setFocusedMeasureIndex] = useState<number | null>(null);
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
@@ -98,6 +102,11 @@ function App() {
   // batch copy (Ctrl+C) / paste (Ctrl+V) of those notes.
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
   const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent }[]>([]);
+  // When a marquee selection spans multiple measures, Ctrl+C copies whole
+  // measures instead (see handleCopyNotes) — pasting a flat run of several
+  // measures' worth of notes into one target measure would badly overflow
+  // it, so multi-measure copies pastes as new measures instead.
+  const [measureClipboard, setMeasureClipboard] = useState<Measure[]>([]);
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
   const previewLockedRef = useRef(false);
@@ -394,6 +403,46 @@ function App() {
     [editTool.accidental, cKeyBasedAccidentals, accidentalArmed, setScore],
   );
 
+  /** Toggling "C키 기준 임시표" off should make the key-signature-implied
+   * flats/sharps it auto-added disappear, not just stop applying to future
+   * notes — so also strip any existing pitch whose accidental exactly
+   * matches what the key signature implies for its letter (indistinguishable
+   * from an auto one). Sound is unaffected: playback always falls back to
+   * the key signature regardless (see effectiveAccidental). */
+  const handleToggleCKeyBasedAccidentals = useCallback(() => {
+    setCKeyBasedAccidentals((wasOn) => {
+      if (wasOn) {
+        setScore((prev) => ({
+          ...prev,
+          measures: prev.measures.map((measure) => ({
+            ...measure,
+            treble: {
+              notes: measure.treble.notes.map((n) => ({
+                ...n,
+                pitches: n.pitches.map((p) =>
+                  p.accidental && p.accidental === keySignatureAccidentalFor(p.letter, prev.keySignature)
+                    ? { ...p, accidental: '' }
+                    : p,
+                ),
+              })),
+            },
+            bass: {
+              notes: measure.bass.notes.map((n) => ({
+                ...n,
+                pitches: n.pitches.map((p) =>
+                  p.accidental && p.accidental === keySignatureAccidentalFor(p.letter, prev.keySignature)
+                    ? { ...p, accidental: '' }
+                    : p,
+                ),
+              })),
+            },
+          })),
+        }));
+      }
+      return !wasOn;
+    });
+  }, [setScore]);
+
   const handleFocusMeasure = useCallback((measureIndex: number) => {
     setFocusedMeasureIndex(measureIndex);
   }, []);
@@ -463,9 +512,22 @@ function App() {
     [selected, selectedPitchIndex, setScore, accidentalAfterMove],
   );
 
-  /** Ctrl+C: copy the marquee-selected notes (in reading order) to the note clipboard. */
+  /** Ctrl+C: copy the marquee selection. A selection confined to a single
+   * measure copies its notes (in reading order) to the flat note clipboard,
+   * pasted as a run. A selection spanning multiple measures copies those
+   * whole measures instead — see handlePasteNotes for why. */
   const handleCopyNotes = useCallback(() => {
     if (marquee.length === 0) return;
+    const measureIndices = [...new Set(marquee.map((l) => l.measureIndex))].sort((a, b) => a - b);
+    if (measureIndices.length > 1) {
+      const first = measureIndices[0];
+      const last = measureIndices[measureIndices.length - 1];
+      const measures = score.measures.slice(first, last + 1);
+      setMeasureClipboard(measures);
+      setNoteClipboard([]);
+      return;
+    }
+    setMeasureClipboard([]);
     const ordered = [...marquee].sort(
       (a, b) => a.measureIndex - b.measureIndex || (a.clef === b.clef ? a.noteIndex - b.noteIndex : a.clef === 'treble' ? -1 : 1),
     );
@@ -478,10 +540,28 @@ function App() {
     setNoteClipboard(copied);
   }, [marquee, score]);
 
-  /** Ctrl+V: append the copied notes to the focused (or last) measure, each into
-   * its original clef, in order. Connections and free-x are dropped so the
+  /** Ctrl+V: if the clipboard holds whole measures (a multi-measure marquee
+   * copy), insert fresh clones of them one after another right after the
+   * focused (or last) measure — the same insert-new-measure behavior as the
+   * single-measure copy/paste FAB, so a multi-measure copy never gets
+   * flattened/crammed into one target measure and overflows it. Otherwise,
+   * append the copied notes to the focused (or last) measure, each into its
+   * original clef, in order — connections and free-x are dropped so the
    * pasted run lays out cleanly. */
   const handlePasteNotes = useCallback(() => {
+    if (measureClipboard.length > 0) {
+      const target = focusedMeasureIndex ?? score.measures.length - 1;
+      setScore((prev) => {
+        let next = prev;
+        let insertAt = target;
+        measureClipboard.forEach((measure) => {
+          next = insertMeasureAfter(next, insertAt, measure);
+          insertAt += 1;
+        });
+        return next;
+      });
+      return;
+    }
     if (noteClipboard.length === 0) return;
     const target = focusedMeasureIndex ?? score.measures.length - 1;
     setScore((prev) => {
@@ -503,7 +583,7 @@ function App() {
       });
       return { ...prev, measures };
     });
-  }, [noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
+  }, [measureClipboard, noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -526,7 +606,7 @@ function App() {
         handleCopyNotes();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && noteClipboard.length > 0) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && (noteClipboard.length > 0 || measureClipboard.length > 0)) {
         e.preventDefault();
         handlePasteNotes();
         return;
@@ -560,7 +640,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, noteClipboard, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, marquee, noteClipboard, measureClipboard, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -1007,7 +1087,7 @@ function App() {
           onSetSelectMode={setSelectMode}
           onAddChord={handleAddChordTool}
           cKeyBasedAccidentals={cKeyBasedAccidentals}
-          onToggleCKeyBasedAccidentals={() => setCKeyBasedAccidentals((v) => !v)}
+          onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
         />
       </div>
       <div className="status-line">
