@@ -240,12 +240,15 @@ function App() {
           setRestArmed(false);
         }
         const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
-        setEditTool({
-          duration: note.duration,
-          dotted: note.dotted,
+        // duration/dotted are NOT synced here — they're a "pen" that only
+        // changes when the user explicitly presses those buttons (see the
+        // decoupling in handleEditToolChange), not whenever a note happens
+        // to be selected/clicked.
+        setEditTool((prev) => ({
+          ...prev,
           isRest: restArmed ? false : note.isRest,
           accidental: accidentalArmed ? '' : pitch?.accidental ?? '',
-        });
+        }));
       }
     },
     [score, accidentalArmed, editTool.accidental, restArmed, setScore],
