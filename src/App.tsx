@@ -110,6 +110,11 @@ function App() {
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
   const previewLockedRef = useRef(false);
+  // True right after a note is placed via the click-to-lock flow, as long as
+  // it's still the selection — lets Left/Right chain into placing the NEXT
+  // note (via StaffEditor's openAdjacentPreview) instead of editing this
+  // one's duration. Cleared by any selection change that isn't that chain.
+  const justPlacedRef = useRef(false);
   // Two separate "+/-" reveal toggles: one inline at the end of the score
   // (always operates on the very last measure), one floating bottom-right
   // that follows scroll (always operates on the currently focused measure,
@@ -207,6 +212,7 @@ function App() {
       setSelected(location);
       setSelectedPitchIndex(pitchIndex ?? null);
       setMarquee([]);
+      justPlacedRef.current = false;
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
         if (accidentalArmed) {
@@ -276,6 +282,10 @@ function App() {
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
       setMarquee([]);
+      // This note is now eligible to chain into the next one via Left/Right
+      // (see justPlacedRef) — cleared as soon as the selection moves away
+      // from it through any other path.
+      justPlacedRef.current = true;
       // One-shot: a newly placed note consumes the armed accidental/rest, so
       // it doesn't silently keep applying to every note placed after it.
       if (editTool.accidental || editTool.isRest) {
@@ -636,6 +646,14 @@ function App() {
       }
       if (selected && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
+        // Right after placing a note (still selected, untouched since), Left/
+        // Right instead opens a new placement preview next to it — chains
+        // into continuous keyboard-only note entry (place, Right, place, …)
+        // instead of editing the just-placed note's duration.
+        if (justPlacedRef.current) {
+          const opened = staffEditorRef.current?.openAdjacentPreview(selected, e.key === 'ArrowRight' ? 1 : -1);
+          if (opened) return;
+        }
         handleStepDuration(e.key === 'ArrowRight' ? 1 : -1);
         return;
       }
@@ -676,11 +694,13 @@ function App() {
     setSelected(null);
     setSelectedPitchIndex(null);
     setMarquee([]);
+    justPlacedRef.current = false;
   }, []);
 
   /** Commits a rubber-band multi-selection; a non-empty one supersedes the single selection. */
   const handleMarqueeSelect = useCallback((locations: NoteLocation[]) => {
     setMarquee(locations);
+    justPlacedRef.current = false;
     if (locations.length > 0) {
       setSelected(null);
       setSelectedPitchIndex(null);

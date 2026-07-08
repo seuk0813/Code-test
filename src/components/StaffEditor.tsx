@@ -120,6 +120,8 @@ interface StaffEditorProps {
 export interface StaffEditorHandle {
   /** Replaces the value of the currently-open chord add/edit box with `text`. Returns false (no-op) if no chord editor is open. */
   fillActiveChordEditor(text: string): boolean;
+  /** Opens a locked placement preview adjacent to `location` (see openAdjacentPreview). Returns false if there's nowhere to put it. */
+  openAdjacentPreview(location: NoteLocation, direction: 1 | -1): boolean;
 }
 
 /** A floating text input overlaid on the score for in-place editing of title, composer, chords, and lyrics. */
@@ -318,8 +320,12 @@ function StaffEditorInner({
         setInlineEditor({ ...inlineEditor, value: text });
         return true;
       },
+      openAdjacentPreview(location: NoteLocation, direction: 1 | -1) {
+        return openAdjacentPreview(location, direction);
+      },
     }),
-    [inlineEditor],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inlineEditor, score],
   );
 
   const mouseGestureRef = useRef<MouseGesture>(null);
@@ -760,6 +766,48 @@ function StaffEditorInner({
     if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, editTool.duration);
     setLockedPreview(null);
     clearGhost(overlayRef.current);
+  };
+
+  /** Opens a locked placement preview right after (direction=1) or before
+   * (direction=-1) the given note — lets continuous keyboard-only note entry
+   * chain off a just-placed note (App calls this for Left/Right when the
+   * selection is still the note it just committed). Crosses into the next/
+   * previous measure when the step would run off this one's note area.
+   * Returns false when there's nowhere sensible to place it (so the caller
+   * can fall back to its normal arrow-key behavior). */
+  const openAdjacentPreview = (location: NoteLocation, direction: 1 | -1): boolean => {
+    const result = renderResultRef.current;
+    const note = score.measures[location.measureIndex]?.[location.clef].notes[location.noteIndex];
+    if (!result || !note) return false;
+    const hitbox = result.noteHitboxes.find(
+      (h) => h.measureIndex === location.measureIndex && h.clef === location.clef && h.noteIndex === location.noteIndex,
+    );
+    const staff = result.staffHitboxes.find((s) => s.measureIndex === location.measureIndex && s.clef === location.clef);
+    if (!hitbox || !staff) return false;
+    const line = note.pitches.length > 0 ? pitchToLine(location.clef, note.pitches[0].letter, note.pitches[0].octave) : 0;
+    const step = staff.noteAreaWidth / 8;
+    let nx = hitbox.centerX + step * direction;
+    let measureIndex = location.measureIndex;
+    let targetStaff = staff;
+    if (direction > 0 && nx > staff.noteStartX + staff.noteAreaWidth) {
+      const nextStaff = result.staffHitboxes.find((s) => s.measureIndex === measureIndex + 1 && s.clef === location.clef);
+      if (nextStaff) {
+        measureIndex += 1;
+        targetStaff = nextStaff;
+        nx = nextStaff.noteStartX + step;
+      }
+    } else if (direction < 0 && nx < staff.noteStartX) {
+      const prevStaff = result.staffHitboxes.find((s) => s.measureIndex === measureIndex - 1 && s.clef === location.clef);
+      if (prevStaff) {
+        measureIndex -= 1;
+        targetStaff = prevStaff;
+        nx = prevStaff.noteStartX + prevStaff.noteAreaWidth - step;
+      }
+    }
+    nx = Math.min(targetStaff.noteStartX + targetStaff.noteAreaWidth, Math.max(targetStaff.noteStartX, nx));
+    onFocusMeasure(measureIndex);
+    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx });
+    return true;
   };
 
   const clearMouseHold = () => {
