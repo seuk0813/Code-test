@@ -99,14 +99,13 @@ function App() {
   // In-memory clipboard for measure copy/paste (한 마디 통째 복사 → 붙여넣기).
   const [copiedMeasure, setCopiedMeasure] = useState<Measure | null>(null);
   // Notes multi-selected via shift+drag rubber-band, and a note clipboard for
-  // batch copy (Ctrl+C) / paste (Ctrl+V) of those notes.
+  // batch copy (Ctrl+C) / paste (Ctrl+V) of those notes. Only the exact
+  // selected notes are copied (never a whole measure's worth) — measureOffset
+  // remembers which measure (relative to the first selected one) each note
+  // came from, so a multi-measure selection pastes back across that many
+  // measures instead of cramming everything into one and overflowing it.
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
-  const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent }[]>([]);
-  // When a marquee selection spans multiple measures, Ctrl+C copies whole
-  // measures instead (see handleCopyNotes) — pasting a flat run of several
-  // measures' worth of notes into one target measure would badly overflow
-  // it, so multi-measure copies pastes as new measures instead.
-  const [measureClipboard, setMeasureClipboard] = useState<Measure[]>([]);
+  const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent; measureOffset: number }[]>([]);
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
   const previewLockedRef = useRef(false);
@@ -239,15 +238,17 @@ function App() {
           setScore((prev) => updateNoteInScore(prev, location, (n) => ({ ...n, isRest: true, pitches: [] })));
           setRestArmed(false);
         }
-        const pitch = pitchIndex !== undefined ? note.pitches[pitchIndex] : note.pitches[0];
-        // duration/dotted are NOT synced here — they're a "pen" that only
-        // changes when the user explicitly presses those buttons (see the
-        // decoupling in handleEditToolChange), not whenever a note happens
-        // to be selected/clicked.
+        // duration/dotted/accidental are NOT synced here — they're each a
+        // one-shot "pen" that only changes when the user explicitly presses
+        // those buttons (see the decoupling in handleEditToolChange), not
+        // whenever a note happens to be selected/clicked — even if that note
+        // already carries an accidental of its own. If an armed accidental
+        // WAS just consumed by this click (above), its one-shot use is over,
+        // so the button stops looking pressed.
         setEditTool((prev) => ({
           ...prev,
           isRest: restArmed ? false : note.isRest,
-          accidental: accidentalArmed ? '' : pitch?.accidental ?? '',
+          ...(accidentalArmed ? { accidental: '' } : {}),
         }));
       }
     },
@@ -521,79 +522,55 @@ function App() {
     [selected, selectedPitchIndex, setScore, accidentalAfterMove],
   );
 
-  /** Ctrl+C: copy the marquee selection. A selection confined to a single
-   * measure copies its notes (in reading order) to the flat note clipboard,
-   * pasted as a run. A selection spanning multiple measures copies those
-   * whole measures instead — see handlePasteNotes for why. */
+  /** Ctrl+C: copy exactly the marquee-selected notes (in reading order) to
+   * the note clipboard — never a whole measure's worth, even when the
+   * selection spans several measures. Each note remembers measureOffset,
+   * its measure relative to the first selected one, so a multi-measure
+   * selection pastes back across that same span (see handlePasteNotes). */
   const handleCopyNotes = useCallback(() => {
     if (marquee.length === 0) return;
-    const measureIndices = [...new Set(marquee.map((l) => l.measureIndex))].sort((a, b) => a - b);
-    if (measureIndices.length > 1) {
-      const first = measureIndices[0];
-      const last = measureIndices[measureIndices.length - 1];
-      const measures = score.measures.slice(first, last + 1);
-      setMeasureClipboard(measures);
-      setNoteClipboard([]);
-      return;
-    }
-    setMeasureClipboard([]);
+    const minMeasure = Math.min(...marquee.map((l) => l.measureIndex));
     const ordered = [...marquee].sort(
       (a, b) => a.measureIndex - b.measureIndex || (a.clef === b.clef ? a.noteIndex - b.noteIndex : a.clef === 'treble' ? -1 : 1),
     );
     const copied = ordered
       .map((loc) => {
         const note = score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex];
-        return note ? { clef: loc.clef, note } : null;
+        return note ? { clef: loc.clef, note, measureOffset: loc.measureIndex - minMeasure } : null;
       })
-      .filter((x): x is { clef: Clef; note: NoteEvent } => x !== null);
+      .filter((x): x is { clef: Clef; note: NoteEvent; measureOffset: number } => x !== null);
     setNoteClipboard(copied);
   }, [marquee, score]);
 
-  /** Ctrl+V: if the clipboard holds whole measures (a multi-measure marquee
-   * copy), insert fresh clones of them one after another STARTING AT the
-   * focused (or last) measure — i.e. right before it, so the pasted content
-   * begins at the exact measure the user clicked rather than the one after
-   * it — pushing that measure (and everything after) later. This never gets
-   * flattened/crammed into one target measure and overflows it. Otherwise,
-   * append the copied notes to the focused (or last) measure, each into its
-   * original clef, in order — connections and free-x are dropped so the
-   * pasted run lays out cleanly. */
+  /** Ctrl+V: append the copied notes into the focused (or last) measure and
+   * onward — each note lands in the measure at (target + its measureOffset),
+   * so a multi-measure copy spreads back across that many measures instead
+   * of overflowing one. New measures are appended to the score if the copy
+   * reaches past its end. Notes are always ADDED alongside whatever's
+   * already in each target measure, never replacing it. Connections and
+   * free-x are dropped so the pasted notes lay out cleanly. */
   const handlePasteNotes = useCallback(() => {
-    if (measureClipboard.length > 0) {
-      const target = focusedMeasureIndex ?? score.measures.length - 1;
-      setScore((prev) => {
-        let next = prev;
-        let insertAt = target - 1;
-        measureClipboard.forEach((measure) => {
-          next = insertMeasureAfter(next, insertAt, measure);
-          insertAt += 1;
-        });
-        return next;
-      });
-      return;
-    }
     if (noteClipboard.length === 0) return;
     const target = focusedMeasureIndex ?? score.measures.length - 1;
     setScore((prev) => {
-      const measures = prev.measures.map((m, i) => {
-        if (i !== target) return m;
-        const treble = [...m.treble.notes];
-        const bass = [...m.bass.notes];
-        noteClipboard.forEach(({ clef, note }) => {
-          const clone: NoteEvent = {
-            id: nextId('note'),
-            pitches: note.pitches.map((p) => ({ ...p })),
-            duration: note.duration,
-            dotted: note.dotted,
-            isRest: note.isRest,
-          };
-          (clef === 'treble' ? treble : bass).push(clone);
-        });
-        return { ...m, treble: { notes: treble }, bass: { notes: bass } };
+      const maxOffset = Math.max(...noteClipboard.map((c) => c.measureOffset));
+      const measures = [...prev.measures];
+      while (measures.length <= target + maxOffset) measures.push(createEmptyMeasure());
+      noteClipboard.forEach(({ clef, note, measureOffset }) => {
+        const mi = target + measureOffset;
+        const clone: NoteEvent = {
+          id: nextId('note'),
+          pitches: note.pitches.map((p) => ({ ...p })),
+          duration: note.duration,
+          dotted: note.dotted,
+          isRest: note.isRest,
+        };
+        const m = measures[mi];
+        measures[mi] = { ...m, [clef]: { notes: [...m[clef].notes, clone] } };
       });
       return { ...prev, measures };
     });
-  }, [measureClipboard, noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
+  }, [noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
 
   /** Delete/Backspace with a marquee selection removes every selected note.
    * Notes are removed highest-noteIndex-first (within each measure/clef) so
@@ -626,7 +603,7 @@ function App() {
         handleCopyNotes();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && (noteClipboard.length > 0 || measureClipboard.length > 0)) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && noteClipboard.length > 0) {
         e.preventDefault();
         handlePasteNotes();
         return;
@@ -679,7 +656,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, noteClipboard, measureClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, marquee, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -874,7 +851,16 @@ function App() {
     setScore((prev) => removeMeasure(prev, target));
     setSelected((sel) => (sel && sel.measureIndex === target ? null : sel));
     setSelectedPitchIndex(null);
-    setFocusedMeasureIndex((foc) => (foc === target ? null : foc === null ? null : foc > target ? foc - 1 : foc));
+    // Keep focus AT the same index (not null) after deleting it — the
+    // measure that follows shifts into that slot, so pressing "－" again
+    // removes the NEXT measure in sequence instead of losing focus and
+    // falling back to always deleting the last measure in the score.
+    setFocusedMeasureIndex((foc) => {
+      const newLength = score.measures.length - 1;
+      if (foc === target) return newLength > 0 ? Math.min(target, newLength - 1) : null;
+      if (foc === null) return null;
+      return foc > target ? foc - 1 : foc;
+    });
   }, [focusedMeasureIndex, score.measures.length, setScore]);
 
   /** Copies the focused (or last) measure into an in-memory clipboard. */

@@ -9,6 +9,7 @@ import {
   noteBeats,
   pitchToLine,
   pitchToVexKey,
+  stemPointsUp,
   vexDurationString,
 } from './scoreUtils';
 
@@ -70,6 +71,35 @@ function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void 
     if (mark.color) text.setAttribute('fill', mark.color);
     text.textContent = ACCIDENTAL_GLYPH[mark.type];
     svg.appendChild(text);
+  });
+}
+
+interface ConnectStubMark {
+  x: number;
+  y: number;
+  /** Whether the little hook bulges upward (away from a down-stem) or downward (away from an up-stem). */
+  curveUp: boolean;
+}
+
+/**
+ * A tie/slur that crosses a line break can't be drawn as one continuous
+ * curve — the two notes are on different rows, far apart on the page, which
+ * would draw one giant diagonal line across the gap between them. Standard
+ * notation instead draws a small hook at the end of the line indicating the
+ * connection continues — this draws just that stub, poking out past the
+ * note (and possibly the measure) rather than reaching all the way to the
+ * next row.
+ */
+function drawConnectStubs(svg: SVGSVGElement, marks: ConnectStubMark[]): void {
+  marks.forEach((mark) => {
+    const y0 = mark.y + (mark.curveUp ? -6 : 6);
+    const midY = y0 + (mark.curveUp ? -6 : 6);
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', `M ${mark.x} ${y0} Q ${mark.x + 9} ${midY} ${mark.x + 18} ${y0}`);
+    path.setAttribute('stroke', '#000');
+    path.setAttribute('stroke-width', '1.2');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
   });
 }
 
@@ -443,7 +473,11 @@ export function renderScore(
   const overflowHitboxes: OverflowHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
-  const connectChains: Record<Clef, { event: NoteEvent; staveNote: StaveNote }[]> = { treble: [], bass: [] };
+  const connectStubs: ConnectStubMark[] = [];
+  const connectChains: Record<Clef, { event: NoteEvent; staveNote: StaveNote; rowIndex: number; ys: number[] }[]> = {
+    treble: [],
+    bass: [],
+  };
 
   const capacity = measureCapacityBeats(score.timeSignature);
 
@@ -581,8 +615,15 @@ export function renderScore(
           // Collect (event, staveNote) in play order per clef so tie/slur
           // curves — drawn once at the very end, after every measure has its
           // note positions — can connect a note to the next one in the staff,
-          // even across a measure boundary.
-          staveNotes.forEach((sn, i) => connectChains[clef].push({ event: notes[i], staveNote: sn }));
+          // even across a measure boundary. rowIndex/ys let that final pass
+          // detect a connection crossing a line break (see connectStubs).
+          staveNotes.forEach((sn, i) => {
+            const note = notes[i];
+            const ys = note.isRest
+              ? [refY0 - 3 * spacing]
+              : note.pitches.map((p) => refY0 - pitchToLine(clef, p.letter, p.octave) * spacing);
+            connectChains[clef].push({ event: note, staveNote: sn, rowIndex, ys });
+          });
 
           staveNotes.forEach((sn, noteIndex) => {
             const note = notes[noteIndex];
@@ -729,12 +770,27 @@ export function renderScore(
       const next = chain[i + 1];
       if (cur.event.isRest || next.event.isRest || !cur.event.connectToNext) continue;
       try {
+        // User-chosen anchor pitch (see ConnectButton in Toolbar.tsx): a tie
+        // re-finds the same pitch by key in the next note (falling back to
+        // the same index if none matches); a slur just reuses the same
+        // chord index on both ends, clamped to the next note's size. Legacy
+        // data (no connectKind) always anchors at index 0.
+        const curIndex = cur.event.connectKind ? Math.min(cur.event.connectPitchIndex ?? 0, cur.event.pitches.length - 1) : 0;
+
+        if (cur.rowIndex !== next.rowIndex) {
+          // The two notes are on different rows (a line break falls between
+          // them) — a real curve would have to span the whole gap between
+          // rows as one giant diagonal line. Draw a small hook poking out
+          // past this note instead (fine if it runs past the measure edge),
+          // matching how printed scores mark a tie/slur that continues onto
+          // the next line.
+          const line = pitchToLine(clef, cur.event.pitches[curIndex].letter, cur.event.pitches[curIndex].octave);
+          const noteheadRightX = cur.staveNote.getAbsoluteX() + cur.staveNote.getGlyphWidth();
+          connectStubs.push({ x: noteheadRightX, y: cur.ys[curIndex] ?? cur.ys[0], curveUp: !stemPointsUp(line) });
+          continue;
+        }
+
         if (cur.event.connectKind) {
-          // User-chosen anchor pitch (see ConnectButton in Toolbar.tsx): a
-          // tie re-finds the same pitch by key in the next note (falling
-          // back to the same index if none matches); a slur just reuses the
-          // same chord index on both ends, clamped to the next note's size.
-          const curIndex = Math.min(cur.event.connectPitchIndex ?? 0, cur.event.pitches.length - 1);
           let nextIndex = Math.min(curIndex, next.event.pitches.length - 1);
           if (cur.event.connectKind === 'tie') {
             const curKey = pitchToVexKey(cur.event.pitches[curIndex]);
@@ -792,6 +848,7 @@ export function renderScore(
     drawOverflowMarks(svg, overflowHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
+    drawConnectStubs(svg, connectStubs);
   }
 
   return {

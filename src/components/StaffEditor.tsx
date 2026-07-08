@@ -335,6 +335,13 @@ function StaffEditorInner({
 
   const mouseGestureRef = useRef<MouseGesture>(null);
   const mouseHoldRef = useRef<number | null>(null);
+  // Right-mouse hold-to-lower-pitch on an existing note (mirrors the left
+  // mouse's hold-to-cycle-duration): held down, it steps the note's pitch
+  // down once per HOLD_CYCLE_MS tick. A quick right click (the hold never
+  // fires) still deletes the note as before — see handleContextMenu.
+  const rightHoldLocationRef = useRef<NoteLocation | null>(null);
+  const rightHoldFiredRef = useRef(false);
+  const rightHoldIntervalRef = useRef<number | null>(null);
 
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const touchGestureRef = useRef<TouchGesture>(null);
@@ -1244,7 +1251,47 @@ function StaffEditorInner({
     else mouseHoldRef.current = id;
   };
 
+  // The browser's own `contextmenu` event fires right after mousedown (not
+  // after mouseup, and not after however long the button was held) — too
+  // early and unreliable to gate "quick click vs. hold" on. So that decision
+  // is made here instead, on the right button's mouseup: if the hold
+  // interval never ticked (rightHoldFiredRef still false), it was a quick
+  // click and the note gets deleted (matching the old contextmenu-delete
+  // behavior); otherwise the hold already lowered its pitch and there's
+  // nothing more to do.
+  const handleRightMouseUp = () => {
+    if (rightHoldIntervalRef.current !== null) {
+      window.clearInterval(rightHoldIntervalRef.current);
+      rightHoldIntervalRef.current = null;
+    }
+    const location = rightHoldLocationRef.current;
+    const fired = rightHoldFiredRef.current;
+    rightHoldLocationRef.current = null;
+    rightHoldFiredRef.current = false;
+    document.removeEventListener('mouseup', handleRightMouseUp);
+    if (location && !fired) onDeleteNote(location);
+  };
+
   const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button === 2) {
+      const result = renderResultRef.current;
+      const point = eventPoint(event);
+      if (!result || !point) return;
+      event.preventDefault();
+      const click = resolveClick(result, point.x, point.y);
+      if (click?.type !== 'select') return;
+      const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
+      const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
+      if (!note || note.isRest || note.pitches.length === 0) return;
+      rightHoldLocationRef.current = location;
+      rightHoldFiredRef.current = false;
+      rightHoldIntervalRef.current = window.setInterval(() => {
+        rightHoldFiredRef.current = true;
+        onMoveNote(location, -0.5);
+      }, HOLD_CYCLE_MS);
+      document.addEventListener('mouseup', handleRightMouseUp);
+      return;
+    }
     if (event.button !== 0) return;
     const result = renderResultRef.current;
     const point = eventPoint(event);
@@ -1434,6 +1481,9 @@ function StaffEditorInner({
     void event;
   };
 
+  // Note deletion for a right click is handled on mouseup (handleRightMouseUp)
+  // instead of here — see its comment for why. This only still handles
+  // chord/lyric right-click deletion, and suppresses the native menu.
   const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     const result = renderResultRef.current;
@@ -1449,12 +1499,6 @@ function StaffEditorInner({
     const lyricHit = findLyricAt(result, point.x, point.y);
     if (lyricHit) {
       onDeleteLyric(lyricHit.measureIndex, lyricHit.lyricId);
-      return;
-    }
-
-    const click = resolveClick(result, point.x, point.y);
-    if (click?.type === 'select') {
-      onDeleteNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex });
     }
   };
 
