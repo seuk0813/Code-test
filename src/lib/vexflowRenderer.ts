@@ -19,13 +19,12 @@ const NOTE_AREA_RIGHT_PAD = 16;
  * glyph size as the notehead itself, which reads as oversized — render them
  * smaller, independently of the notehead's own size. */
 const ACCIDENTAL_FONT_SIZE = 21;
-/** Horizontal gap between a notehead's right edge and its accidental glyph's left edge. */
+/** Horizontal gap between an accidental glyph's right edge and the notehead's left edge. */
 const ACCIDENTAL_GAP = 2;
 /** Fingering numbers are drawn slightly larger than accidentals, to the right of them. */
 const FINGER_FONT_SIZE = 16;
-/** Gap before a fingering number, and the width reserved for an accidental glyph when one precedes it. */
+/** Gap between a notehead's right edge and its fingering number. */
 const FINGER_GAP = 4;
-const ACCIDENTAL_ADVANCE = 11;
 
 /**
  * Accidentals are drawn as plain SVG text (like the chord/lyric/title labels
@@ -60,9 +59,12 @@ interface AccidentalMark {
 function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void {
   marks.forEach((mark) => {
     const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', String(mark.x + ACCIDENTAL_GAP));
+    // Standard notation puts an accidental just to the LEFT of its notehead
+    // — mark.x is the notehead's left edge, and text-anchor "end" grows the
+    // glyph leftward from (x - gap) so its right edge stops right there.
+    text.setAttribute('x', String(mark.x - ACCIDENTAL_GAP));
     text.setAttribute('y', String(mark.y));
-    text.setAttribute('text-anchor', 'start');
+    text.setAttribute('text-anchor', 'end');
     text.setAttribute('font-size', String(ACCIDENTAL_FONT_SIZE));
     text.setAttribute('stroke', 'none');
     if (mark.color) text.setAttribute('fill', mark.color);
@@ -628,13 +630,14 @@ export function renderScore(
                   color = narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
                 }
                 if (pitch.accidental) {
-                  accidentalMarks.push({ x: noteheadRightX, y: ys[pitchIndex], type: pitch.accidental, color });
+                  // Standard notation: the accidental sits to the LEFT of its
+                  // notehead, so it uses the note's left edge, not the right.
+                  accidentalMarks.push({ x: centerXs[noteIndex], y: ys[pitchIndex], type: pitch.accidental, color });
                 }
                 if (pitch.finger !== undefined) {
-                  // Fingering sits to the right of the notehead — and to the
-                  // right of the accidental glyph, if this pitch has one.
-                  const fingerX =
-                    noteheadRightX + ACCIDENTAL_GAP + (pitch.accidental ? ACCIDENTAL_ADVANCE : 0) + FINGER_GAP;
+                  // Fingering sits to the right of the notehead — accidentals
+                  // no longer live there too, so no extra offset is needed.
+                  const fingerX = noteheadRightX + FINGER_GAP;
                   fingeringMarks.push({ x: fingerX, y: ys[pitchIndex], finger: pitch.finger, color });
                 }
               });
