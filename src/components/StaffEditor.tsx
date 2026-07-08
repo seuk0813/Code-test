@@ -1092,6 +1092,10 @@ function StaffEditorInner({
     if (gesture.kind === 'add') {
       // Click-to-lock: the first click on empty staff locks a preview here; the
       // second click commits it (spacebar/arrow keys handle it in between).
+      // Focus moves to this measure on the very first click, not just on
+      // commit — so a plain click marks "paste starts here" even before any
+      // note is placed.
+      onFocusMeasure(gesture.measureIndex);
       if (lockedPreviewRef.current) {
         commitLockedPreview();
       } else {

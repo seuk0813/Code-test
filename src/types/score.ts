@@ -11,6 +11,13 @@ export interface Pitch {
   octave: number;
   /** Optional fingering number (1-5) shown to the right of the notehead (and its accidental). */
   finger?: number;
+  /**
+   * True when this accidental was explicitly chosen by the user (an
+   * accidental toolbar button pressed on a placed/selected note), as opposed
+   * to auto-derived from the key signature. The "C키 기준 임시표" toggle only
+   * ever adds/removes auto accidentals — a manual one is never touched.
+   */
+  manualAccidental?: boolean;
 }
 
 export interface NoteEvent {

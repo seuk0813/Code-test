@@ -220,7 +220,7 @@ function App() {
               return {
                 ...n,
                 pitches: n.pitches.map((p, i) =>
-                  narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: armedAccidental } : p,
+                  narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: armedAccidental, manualAccidental: true } : p,
                 ),
               };
             }),
@@ -265,7 +265,7 @@ function App() {
         explicitAccidental || !cKeyBasedAccidentals
           ? explicitAccidental
           : keySignatureAccidentalFor(letter as Pitch['letter'], score.keySignature);
-      const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave };
+      const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave, manualAccidental: !!explicitAccidental };
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
@@ -301,13 +301,21 @@ function App() {
   /** Recomputes the accidental for a pitch after a drag repositions it: a
    * changed letter almost certainly invalidates whatever accidental it had
    * (a C# dragged onto D shouldn't silently become a D#), so re-derive from
-   * the key signature (respecting "C키 기준 임시표") like a fresh placement.
-   * An octave-only move (same letter) keeps its existing accidental as-is. */
+   * the key signature (respecting "C키 기준 임시표") like a fresh placement —
+   * this always produces an auto (non-manual) accidental, since the specific
+   * choice a manual accidental represented no longer applies to the new
+   * letter. An octave-only move (same letter) keeps the pitch's existing
+   * accidental AND manual/auto status as-is. */
   const accidentalAfterMove = useCallback(
-    (oldLetter: Pitch['letter'], oldAccidental: Accidental, newLetter: Pitch['letter']): Accidental => {
-      if (newLetter === oldLetter) return oldAccidental;
-      if (!cKeyBasedAccidentals) return '';
-      return keySignatureAccidentalFor(newLetter, score.keySignature);
+    (
+      oldLetter: Pitch['letter'],
+      oldAccidental: Accidental,
+      oldManual: boolean | undefined,
+      newLetter: Pitch['letter'],
+    ): { accidental: Accidental; manual: boolean } => {
+      if (newLetter === oldLetter) return { accidental: oldAccidental, manual: !!oldManual };
+      if (!cKeyBasedAccidentals) return { accidental: '', manual: false };
+      return { accidental: keySignatureAccidentalFor(newLetter, score.keySignature), manual: false };
     },
     [cKeyBasedAccidentals, score.keySignature],
   );
@@ -330,12 +338,12 @@ function App() {
       if (!p) return;
       const line = pitchToLine(location.clef, p.letter, p.octave) + deltaLine;
       const { letter, octave } = lineToPitch(location.clef, line);
-      const accidental = accidentalAfterMove(p.letter, p.accidental, letter as Pitch['letter']);
+      const { accidental, manual } = accidentalAfterMove(p.letter, p.accidental, p.manualAccidental, letter as Pitch['letter']);
       const result = splitPitchFromNote(
         score,
         location,
         pitchIndex,
-        { ...p, letter: letter as Pitch['letter'], octave, accidental },
+        { ...p, letter: letter as Pitch['letter'], octave, accidental, manualAccidental: manual },
         x ?? note.x,
       );
       setScore(result.score);
@@ -349,8 +357,8 @@ function App() {
         pitches: n.pitches.map((pitch) => {
           const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
           const { letter, octave } = lineToPitch(location.clef, line);
-          const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
-          return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
+          const { accidental, manual } = accidentalAfterMove(pitch.letter, pitch.accidental, pitch.manualAccidental, letter as Pitch['letter']);
+          return { ...pitch, letter: letter as Pitch['letter'], octave, accidental, manualAccidental: manual };
         }),
         x: x ?? n.x,
       })),
@@ -371,8 +379,8 @@ function App() {
       const movedPitches = note.pitches.map((pitch) => {
         const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
         const { letter, octave } = lineToPitch(location.clef, line);
-        const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
-        return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
+        const { accidental, manual } = accidentalAfterMove(pitch.letter, pitch.accidental, pitch.manualAccidental, letter as Pitch['letter']);
+        return { ...pitch, letter: letter as Pitch['letter'], octave, accidental, manualAccidental: manual };
       });
       const result = mergeNoteIntoChord(score, location, targetNoteIndex, movedPitches);
       setScore(result.score);
@@ -394,7 +402,7 @@ function App() {
           explicitAccidental || !cKeyBasedAccidentals
             ? explicitAccidental
             : keySignatureAccidentalFor(letter as Pitch['letter'], prev.keySignature);
-        return togglePitchInNote(prev, location, letter as Pitch['letter'], accidental, octave);
+        return togglePitchInNote(prev, location, letter as Pitch['letter'], accidental, octave, !!explicitAccidental);
       });
       // One-shot: this added/toggled chord tone consumes the armed accidental.
       if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
@@ -403,45 +411,33 @@ function App() {
     [editTool.accidental, cKeyBasedAccidentals, accidentalArmed, setScore],
   );
 
-  /** Toggling "C키 기준 임시표" off should make the key-signature-implied
-   * flats/sharps it auto-added disappear, not just stop applying to future
-   * notes — so also strip any existing pitch whose accidental exactly
-   * matches what the key signature implies for its letter (indistinguishable
-   * from an auto one). Sound is unaffected: playback always falls back to
-   * the key signature regardless (see effectiveAccidental). */
+  /** Toggling "C키 기준 임시표" adds/removes the key-signature-implied
+   * flat/sharp on every non-manual pitch: turning it on sets each such
+   * pitch's accidental to what the key signature implies for its letter
+   * (e.g. B -> Bb in F major), turning it off clears it back to ''. A pitch
+   * whose accidental was explicitly chosen via the accidental toolbar
+   * buttons (manualAccidental) is never touched either way. Sound is
+   * unaffected regardless: playback always falls back to the key signature
+   * for non-explicit accidentals (see effectiveAccidental). */
   const handleToggleCKeyBasedAccidentals = useCallback(() => {
     setCKeyBasedAccidentals((wasOn) => {
-      if (wasOn) {
-        setScore((prev) => ({
-          ...prev,
-          measures: prev.measures.map((measure) => ({
-            ...measure,
-            treble: {
-              notes: measure.treble.notes.map((n) => ({
-                ...n,
-                pitches: n.pitches.map((p) =>
-                  p.accidental && p.accidental === keySignatureAccidentalFor(p.letter, prev.keySignature)
-                    ? { ...p, accidental: '' }
-                    : p,
-                ),
-              })),
-            },
-            bass: {
-              notes: measure.bass.notes.map((n) => ({
-                ...n,
-                pitches: n.pitches.map((p) =>
-                  p.accidental && p.accidental === keySignatureAccidentalFor(p.letter, prev.keySignature)
-                    ? { ...p, accidental: '' }
-                    : p,
-                ),
-              })),
-            },
-          })),
-        }));
-      }
-      return !wasOn;
+      const turningOn = !wasOn;
+      const restyle = (p: Pitch): Pitch => {
+        if (p.manualAccidental) return p;
+        const accidental = turningOn ? keySignatureAccidentalFor(p.letter, score.keySignature) : '';
+        return { ...p, accidental };
+      };
+      setScore((prev) => ({
+        ...prev,
+        measures: prev.measures.map((measure) => ({
+          ...measure,
+          treble: { notes: measure.treble.notes.map((n) => ({ ...n, pitches: n.pitches.map(restyle) })) },
+          bass: { notes: measure.bass.notes.map((n) => ({ ...n, pitches: n.pitches.map(restyle) })) },
+        })),
+      }));
+      return turningOn;
     });
-  }, [setScore]);
+  }, [setScore, score.keySignature]);
 
   const handleFocusMeasure = useCallback((measureIndex: number) => {
     setFocusedMeasureIndex(measureIndex);
@@ -502,8 +498,8 @@ function App() {
             if (narrowed !== null && i !== narrowed) return pitch;
             const line = pitchToLine(selected.clef, pitch.letter, pitch.octave) + delta;
             const { letter, octave } = lineToPitch(selected.clef, line);
-            const accidental = accidentalAfterMove(pitch.letter, pitch.accidental, letter as Pitch['letter']);
-            return { ...pitch, letter: letter as Pitch['letter'], octave, accidental };
+            const { accidental, manual } = accidentalAfterMove(pitch.letter, pitch.accidental, pitch.manualAccidental, letter as Pitch['letter']);
+            return { ...pitch, letter: letter as Pitch['letter'], octave, accidental, manualAccidental: manual };
           });
           return { ...note, pitches };
         }),
@@ -585,6 +581,16 @@ function App() {
     });
   }, [measureClipboard, noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
 
+  /** Delete/Backspace with a marquee selection removes every selected note.
+   * Notes are removed highest-noteIndex-first (within each measure/clef) so
+   * deleting one doesn't shift the still-pending indices of the others. */
+  const handleDeleteMarquee = useCallback(() => {
+    if (marquee.length === 0) return;
+    const ordered = [...marquee].sort((a, b) => b.noteIndex - a.noteIndex);
+    setScore((prev) => ordered.reduce((s, loc) => removeNoteFromScore(s, loc), prev));
+    setMarquee([]);
+  }, [marquee, setScore]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -611,9 +617,10 @@ function App() {
         handlePasteNotes();
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (marquee.length > 0 || selected)) {
         e.preventDefault();
-        deleteNoteAndSelectAdjacent(selected);
+        if (marquee.length > 0) handleDeleteMarquee();
+        else if (selected) deleteNoteAndSelectAdjacent(selected);
         return;
       }
       // A locked placement preview owns the arrow keys (moves the preview) —
@@ -640,7 +647,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, noteClipboard, measureClipboard, deleteNoteAndSelectAdjacent, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, marquee, noteClipboard, measureClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -727,7 +734,9 @@ function App() {
             // changed, not every tone in the chord.
             const narrowedIndex = pitches.length > 1 ? selectedPitchIndex : null;
             pitches = pitches.map((p, i) =>
-              narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: patch.accidental! } : p,
+              narrowedIndex === null || i === narrowedIndex
+                ? { ...p, accidental: patch.accidental!, manualAccidental: true }
+                : p,
             );
           }
           if (!isRest && pitches.length === 0) {
@@ -1093,7 +1102,7 @@ function App() {
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
-          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이). Shift+드래그로 여러 음표 선택 후 Ctrl+C·V로 복사/붙여넣기. 위 단추는 다음에 입력할 음표를 정합니다.'}
+          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이). Shift+드래그로 여러 음표 선택 후 Ctrl+C·V로 복사/붙여넣기, Delete로 삭제. 위 단추는 다음에 입력할 음표를 정합니다.'}
       </div>
       <StaffEditor
         ref={staffEditorRef}

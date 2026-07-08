@@ -613,6 +613,7 @@ export function togglePitchInNote(
   letter: Pitch['letter'],
   accidental: Accidental,
   octave: number,
+  manualAccidental: boolean,
 ): Score {
   return updateNoteInScore(score, location, (note) => {
     if (note.isRest) return note;
@@ -621,7 +622,7 @@ export function togglePitchInNote(
       if (note.pitches.length <= 1) return note;
       return { ...note, pitches: note.pitches.filter((_, i) => i !== existingIndex) };
     }
-    return { ...note, pitches: [...note.pitches, { letter, accidental, octave }] };
+    return { ...note, pitches: [...note.pitches, { letter, accidental, octave, manualAccidental }] };
   });
 }
 
