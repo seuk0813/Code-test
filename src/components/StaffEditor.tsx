@@ -122,6 +122,8 @@ export interface StaffEditorHandle {
   fillActiveChordEditor(text: string): boolean;
   /** Opens a locked placement preview adjacent to `location` (see openAdjacentPreview). Returns false if there's nowhere to put it. */
   openAdjacentPreview(location: NoteLocation, direction: 1 | -1): boolean;
+  /** Opens a locked placement preview at the start of `targetMeasureIndex` (see openMeasurePreview). Returns false if that measure/clef doesn't exist. */
+  openMeasurePreview(location: NoteLocation, targetMeasureIndex: number): boolean;
 }
 
 /** A floating text input overlaid on the score for in-place editing of title, composer, chords, and lyrics. */
@@ -322,6 +324,9 @@ function StaffEditorInner({
       },
       openAdjacentPreview(location: NoteLocation, direction: 1 | -1) {
         return openAdjacentPreview(location, direction);
+      },
+      openMeasurePreview(location: NoteLocation, targetMeasureIndex: number) {
+        return openMeasurePreview(location, targetMeasureIndex);
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -807,6 +812,22 @@ function StaffEditorInner({
     nx = Math.min(targetStaff.noteStartX + targetStaff.noteAreaWidth, Math.max(targetStaff.noteStartX, nx));
     onFocusMeasure(measureIndex);
     setLockedPreview({ measureIndex, clef: location.clef, line, x: nx });
+    return true;
+  };
+
+  /** Opens a locked placement preview at the START of `targetMeasureIndex`
+   * (same clef and pitch line as `location`'s note) — Tab/Shift+Tab jump
+   * straight to the next/previous measure instead of arrow-stepping through
+   * whatever's left of the current one. Returns false if that measure or
+   * clef doesn't exist. */
+  const openMeasurePreview = (location: NoteLocation, targetMeasureIndex: number): boolean => {
+    const result = renderResultRef.current;
+    const note = score.measures[location.measureIndex]?.[location.clef].notes[location.noteIndex];
+    const targetStaff = result?.staffHitboxes.find((s) => s.measureIndex === targetMeasureIndex && s.clef === location.clef);
+    if (!result || !note || !targetStaff) return false;
+    const line = note.pitches.length > 0 ? pitchToLine(location.clef, note.pitches[0].letter, note.pitches[0].octave) : 0;
+    onFocusMeasure(targetMeasureIndex);
+    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX });
     return true;
   };
 

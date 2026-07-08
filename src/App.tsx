@@ -657,6 +657,16 @@ function App() {
         handleStepDuration(e.key === 'ArrowRight' ? 1 : -1);
         return;
       }
+      // Tab/Shift+Tab jump straight to the start of the next/previous measure
+      // (same clef and pitch) instead of arrow-stepping through the rest of
+      // the current one — handy once a measure is done and you want to keep
+      // placing notes right into the next.
+      if (selected && e.key === 'Tab') {
+        e.preventDefault();
+        const targetMeasure = selected.measureIndex + (e.shiftKey ? -1 : 1);
+        if (targetMeasure >= 0) staffEditorRef.current?.openMeasurePreview(selected, targetMeasure);
+        return;
+      }
       // Fingering: with a note selected, a digit sets its fingering (0 clears).
       if (selected && /^[0-9]$/.test(e.key)) {
         e.preventDefault();
