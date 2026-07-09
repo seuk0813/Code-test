@@ -1,6 +1,6 @@
 import * as Tone from 'tone';
 import type { Clef, NoteEvent, Score } from '../types/score';
-import { measureCapacityBeats, noteBeats, pitchToToneNote, pitchToVexKey } from './scoreUtils';
+import { measureStartBeat, noteBeats, pitchToToneNote, pitchToVexKey } from './scoreUtils';
 
 export interface PlaybackHandle {
   stop: () => void;
@@ -21,10 +21,10 @@ interface FlatNote {
 }
 
 /** Every note in a staff, across all measures, with its absolute beat offset — ties can span barlines. */
-function flattenStaffNotes(score: Score, clef: Clef, measureBeats: number): FlatNote[] {
+function flattenStaffNotes(score: Score, clef: Clef): FlatNote[] {
   const flat: FlatNote[] = [];
   score.measures.forEach((measure, measureIndex) => {
-    let t = measureIndex * measureBeats;
+    let t = measureStartBeat(score, measureIndex);
     measure[clef].notes.forEach((note) => {
       flat.push({ note, timeBeats: t });
       t += noteBeats(note);
@@ -123,17 +123,15 @@ export async function playScore(
   Tone.getTransport().bpm.value = score.tempo;
 
   const secondsPerBeat = 60 / score.tempo;
-  const measureBeats = measureCapacityBeats(score.timeSignature);
   const events: ScheduledEvent[] = [
-    ...buildStaffEvents(flattenStaffNotes(score, 'treble', measureBeats), trebleSynth, score.keySignature, secondsPerBeat),
-    ...buildStaffEvents(flattenStaffNotes(score, 'bass', measureBeats), bassSynth, score.keySignature, secondsPerBeat),
+    ...buildStaffEvents(flattenStaffNotes(score, 'treble'), trebleSynth, score.keySignature, secondsPerBeat),
+    ...buildStaffEvents(flattenStaffNotes(score, 'bass'), bassSynth, score.keySignature, secondsPerBeat),
   ];
 
   score.measures.forEach((_, measureIndex) => {
-    const measureStartBeats = measureIndex * measureBeats;
     Tone.getTransport().schedule((time) => {
       Tone.getDraw().schedule(() => onMeasure(measureIndex), time);
-    }, measureStartBeats * secondsPerBeat);
+    }, measureStartBeat(score, measureIndex) * secondsPerBeat);
   });
 
   events.forEach((ev) => {
@@ -142,7 +140,7 @@ export async function playScore(
     }, ev.timeBeats * secondsPerBeat);
   });
 
-  const totalSeconds = score.measures.length * measureBeats * secondsPerBeat;
+  const totalSeconds = measureStartBeat(score, score.measures.length) * secondsPerBeat;
 
   const cleanup = () => {
     trebleSynth.releaseAll();

@@ -2,6 +2,15 @@ import type { Measure, Score } from '../types/score';
 import { renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
+const RECENT_SCORES_KEY = 'piano-sheet-editor:recent-scores';
+const RECENT_SCORES_LIMIT = 5;
+
+export interface RecentScoreEntry {
+  id: string;
+  title: string;
+  savedAt: number;
+  score: Score;
+}
 
 /** Backfills fields added in later versions so older saved scores load cleanly. */
 export function normalizeScore(score: Score): Score {
@@ -335,5 +344,34 @@ export function loadAutosave(): Score | null {
     return raw ? normalizeScore(JSON.parse(raw) as Score) : null;
   } catch {
     return null;
+  }
+}
+
+/** Returns the up-to-5 most recently saved/loaded scores, newest first. */
+export function getRecentScores(): RecentScoreEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_SCORES_KEY);
+    if (!raw) return [];
+    const entries = JSON.parse(raw) as RecentScoreEntry[];
+    return entries.map((e) => ({ ...e, score: normalizeScore(e.score) }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Records a score as "recently worked on" — called after every successful
+ * save or load — keeping only the 5 newest (deduped by title, so re-saving
+ * the same piece over and over just bumps its position instead of piling up
+ * duplicates). Best-effort: silently no-ops on storage failures.
+ */
+export function saveRecentScore(score: Score): void {
+  try {
+    const existing = getRecentScores().filter((e) => e.title !== score.title);
+    const entry: RecentScoreEntry = { id: `r-${Date.now()}`, title: score.title || '제목 없는 악보', savedAt: Date.now(), score };
+    const next = [entry, ...existing].slice(0, RECENT_SCORES_LIMIT);
+    localStorage.setItem(RECENT_SCORES_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore storage quota / privacy-mode failures — this is a convenience feature only.
   }
 }

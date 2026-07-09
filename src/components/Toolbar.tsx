@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
 import { CHORD_QUALITY_LABELS, DURATION_LABELS } from '../lib/scoreUtils';
+import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
 const LONG_PRESS_STEP_MS = 1000;
@@ -275,6 +276,14 @@ export function Toolbar({
             ))}
           </select>
         </label>
+        <button
+          className={`tool-icon-btn ${score.hasPickupMeasure ? 'active' : ''}`}
+          onClick={() => onScoreMetaChange({ hasPickupMeasure: !score.hasPickupMeasure })}
+          aria-label="못갖춘마디"
+          title="켜면 첫 마디가 못갖춘마디(anacrusis)로 취급되어, 채운 박자만큼만 재생/탐색 타임라인에 반영됩니다 (뒤에 무음이 채워지지 않음)"
+        >
+          못갖춘마디
+        </button>
         <label>
           조표
           <select
@@ -585,6 +594,72 @@ export function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml:
           >
             MIDI 내보내기
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "불러오기" button: opens either a native file picker or one of the 5 most recently saved/loaded scores. */
+export function LoadMenu({
+  recentScores,
+  onLoadFile,
+  onLoadRecent,
+}: {
+  recentScores: RecentScoreEntry[];
+  onLoadFile: (file: File) => void;
+  onLoadRecent: (entry: RecentScoreEntry) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  return (
+    <div className="more-menu" ref={rootRef}>
+      <button className="quick-action-button" onClick={() => setOpen((v) => !v)} title="저장했던 악보 파일을 불러오거나, 최근 작업한 악보를 다시 엽니다">
+        📂 불러오기
+      </button>
+      {open && (
+        <div className="more-menu-popover">
+          <button onClick={() => fileInputRef.current?.click()}>파일에서 불러오기...</button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onLoadFile(file);
+              e.target.value = '';
+              setOpen(false);
+            }}
+          />
+          {recentScores.length > 0 && (
+            <>
+              <div className="more-menu-divider" />
+              <div className="more-menu-label">최근 작업한 악보</div>
+              {recentScores.map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => {
+                    onLoadRecent(entry);
+                    setOpen(false);
+                  }}
+                >
+                  {entry.title || '제목 없는 악보'}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

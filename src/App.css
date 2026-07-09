@@ -191,6 +191,18 @@
   white-space: nowrap;
 }
 
+.more-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.more-menu-label {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  padding: 2px 4px;
+}
+
 .toolbar button {
   font: inherit;
   font-size: 14px;

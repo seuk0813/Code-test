@@ -29,7 +29,8 @@ import {
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
-  measureCapacityBeats,
+  measureDurationBeats,
+  measureStartBeat,
   noteBeats,
   pitchToLine,
   stemPointsUp,
@@ -500,7 +501,6 @@ function StaffEditorInner({
       return;
     }
     const secondsPerBeat = 60 / score.tempo;
-    const measureBeats = measureCapacityBeats(score.timeSignature);
 
     interface Seg {
       startBeat: number;
@@ -515,7 +515,7 @@ function StaffEditorInner({
       if (!result) return [];
       const segs: Seg[] = [];
       score.measures.forEach((measure, measureIndex) => {
-        let beat = measureIndex * measureBeats;
+        let beat = measureStartBeat(score, measureIndex);
         measure[clef].notes.forEach((note, noteIndex) => {
           const dur = noteBeats(note);
           const hb = result.noteHitboxes.find(
@@ -585,9 +585,18 @@ function StaffEditorInner({
   const seekBarSpec = () => {
     const result = renderResultRef.current;
     if (!result) return null;
-    const measureBeats = measureCapacityBeats(score.timeSignature);
-    const mi = Math.min(score.measures.length - 1, Math.max(0, Math.floor(seekBeat / measureBeats)));
-    const frac = Math.min(1, Math.max(0, (seekBeat - mi * measureBeats) / measureBeats));
+    // Measures can have unequal beat-widths (a 못갖춘마디/pickup first measure
+    // spans fewer beats than the time signature's capacity), so find which
+    // measure seekBeat falls into by walking cumulative start times instead of
+    // a single division.
+    let mi = score.measures.length - 1;
+    for (let i = 0; i < score.measures.length; i++) {
+      if (seekBeat < measureStartBeat(score, i) + measureDurationBeats(score, i) - 1e-9) {
+        mi = i;
+        break;
+      }
+    }
+    const frac = Math.min(1, Math.max(0, (seekBeat - measureStartBeat(score, mi)) / Math.max(1e-9, measureDurationBeats(score, mi))));
     const treble = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'treble');
     const bass = result.staffHitboxes.find((s) => s.measureIndex === mi && s.clef === 'bass');
     if (!treble || !bass) return null;
@@ -614,7 +623,6 @@ function StaffEditorInner({
   const xyToSeekBeat = (x: number, y: number): number | null => {
     const result = renderResultRef.current;
     if (!result) return null;
-    const measureBeats = measureCapacityBeats(score.timeSignature);
     const trebles = result.staffHitboxes.filter((s) => s.clef === 'treble');
     // Row under the pointer: the treble whose x-range contains x, nearest in y.
     let hb = trebles
@@ -623,10 +631,11 @@ function StaffEditorInner({
     if (!hb) hb = trebles.sort((a, b) => Math.abs(x - (a.x0 + a.x1) / 2) - Math.abs(x - (b.x0 + b.x1) / 2))[0];
     if (!hb) return null;
     const frac = Math.min(1, Math.max(0, (x - hb.noteStartX) / hb.noteAreaWidth));
-    const rawBeat = hb.measureIndex * measureBeats + frac * measureBeats;
+    const measureStart = measureStartBeat(score, hb.measureIndex);
+    const rawBeat = measureStart + frac * measureDurationBeats(score, hb.measureIndex);
     // Candidate onsets: the downbeat plus each note's cumulative onset.
-    const onsets = [hb.measureIndex * measureBeats];
-    let b = hb.measureIndex * measureBeats;
+    const onsets = [measureStart];
+    let b = measureStart;
     score.measures[hb.measureIndex].treble.notes.forEach((note) => {
       onsets.push(b);
       b += noteBeats(note);

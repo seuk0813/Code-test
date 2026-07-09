@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
-import { Toolbar, MoreMenu, type EditTool } from './components/Toolbar';
+import { Toolbar, MoreMenu, LoadMenu, type EditTool } from './components/Toolbar';
 import type { Accidental, ChordQuality, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScore,
@@ -21,7 +20,7 @@ import {
   insertMeasureAfter,
   keySignatureAccidentalFor,
   lineToPitch,
-  measureCapacityBeats,
+  measureStartBeat,
   mergeNoteIntoChord,
   moveChordInScore,
   moveLyricInScore,
@@ -40,7 +39,17 @@ import {
 } from './lib/scoreUtils';
 import { exportMusicXml } from './lib/exportMusicXml';
 import { exportMidi } from './lib/exportMidi';
-import { downloadBlob, loadAutosave, readScoreFile, saveAutosave, saveScorePdf, saveScoreJson } from './lib/fileIO';
+import {
+  downloadBlob,
+  getRecentScores,
+  loadAutosave,
+  readScoreFile,
+  saveAutosave,
+  saveRecentScore,
+  saveScorePdf,
+  saveScoreJson,
+  type RecentScoreEntry,
+} from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
@@ -63,6 +72,8 @@ const UNDO_HISTORY_LIMIT = 100;
 
 function App() {
   const [score, setScoreRaw] = useState<Score>(() => loadAutosave() ?? createEmptyScore());
+  // Up to 5 most recently saved/loaded scores, for the "불러오기" popover's quick-reopen list.
+  const [recentScores, setRecentScores] = useState<RecentScoreEntry[]>(() => getRecentScores());
   const [selected, setSelected] = useState<NoteLocation | null>(null);
   // Narrows a chord (multi-pitch note) selection to one specific pitch —
   // clicking an already-selected chord's specific notehead again sets this;
@@ -1009,11 +1020,10 @@ function App() {
     const elapsedSeconds = playbackClock ? playbackClock.get() : 0;
     const secondsPerBeat = 60 / score.tempo;
     const currentBeat = elapsedSeconds / secondsPerBeat;
-    const measureBeats = measureCapacityBeats(score.timeSignature);
     let onset = 0;
     (['treble', 'bass'] as const).forEach((clef) => {
       score.measures.forEach((measure, mi) => {
-        let t = mi * measureBeats;
+        let t = measureStartBeat(score, mi);
         measure[clef].notes.forEach((n) => {
           if (t <= currentBeat + 1e-6 && t > onset) onset = t;
           t += noteBeats(n);
@@ -1070,8 +1080,14 @@ function App() {
   const handleSaveConfirm = useCallback(
     (format: SaveFormat) => {
       setSaveOpen(false);
-      if (format === 'json') void saveScoreJson(score, score.title);
-      else void saveScorePdf(score, score.title);
+      if (format === 'json') {
+        void saveScoreJson(score, score.title).then(() => {
+          saveRecentScore(score);
+          setRecentScores(getRecentScores());
+        });
+      } else {
+        void saveScorePdf(score, score.title);
+      }
     },
     [score],
   );
@@ -1083,15 +1099,36 @@ function App() {
         setSelected(null);
         setSelectedPitchIndex(null);
         setFocusedMeasureIndex(null);
+        saveRecentScore(loaded);
+        setRecentScores(getRecentScores());
       })
       .catch(() => window.alert('악보 파일을 읽을 수 없습니다.'));
   }, [setScore]);
 
-  const handleLoadFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) handleLoadJson(file);
-    event.target.value = '';
-  };
+  /** Reopens a score from the "불러오기" popover's recent-scores list. */
+  const handleLoadRecent = useCallback(
+    (entry: RecentScoreEntry) => {
+      setScore(entry.score);
+      setSelected(null);
+      setSelectedPitchIndex(null);
+      setFocusedMeasureIndex(null);
+      saveRecentScore(entry.score);
+      setRecentScores(getRecentScores());
+    },
+    [setScore],
+  );
+
+  /** Resets to a brand-new blank score after confirming, since there's no unsaved-changes tracking to rely on. */
+  const handleNewScore = useCallback(() => {
+    if (!window.confirm('새 악보를 시작할까요? 저장하지 않은 변경 사항은 사라집니다.')) return;
+    setScore(createEmptyScore());
+    setSelected(null);
+    setSelectedPitchIndex(null);
+    setMarquee([]);
+    setMarqueeChords([]);
+    setFocusedMeasureIndex(null);
+    setPlaybackStartBeat(0);
+  }, [setScore]);
 
   return (
     <div className="app">
@@ -1116,13 +1153,13 @@ function App() {
             >
               ⏹
             </button>
+            <button className="quick-action-button" onClick={handleNewScore} title="현재 악보를 지우고 새 악보를 시작합니다">
+              📄 새로 만들기
+            </button>
             <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
               💾 저장
             </button>
-            <label className="file-input-label quick-action-button" title="저장했던 악보 파일(.json)을 불러옵니다">
-              📂 불러오기
-              <input type="file" accept="application/json" onChange={handleLoadFile} />
-            </label>
+            <LoadMenu recentScores={recentScores} onLoadFile={handleLoadJson} onLoadRecent={handleLoadRecent} />
             <MoreMenu onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
           </div>
         </div>
