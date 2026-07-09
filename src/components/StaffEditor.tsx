@@ -633,13 +633,18 @@ function StaffEditorInner({
     const frac = Math.min(1, Math.max(0, (x - hb.noteStartX) / hb.noteAreaWidth));
     const measureStart = measureStartBeat(score, hb.measureIndex);
     const rawBeat = measureStart + frac * measureDurationBeats(score, hb.measureIndex);
-    // Candidate onsets: the downbeat plus each note's cumulative onset.
-    const onsets = [measureStart];
+    // Candidate onsets: the downbeat plus each note's cumulative onset. An
+    // empty measure has no note onset to snap to besides the downbeat itself
+    // — snapping to it there would pin every drag to beat 0 (defeating, e.g.,
+    // freely dragging the seek bar to set a 못갖춘마디 length before any notes
+    // exist), so fall back to the raw unsnapped position in that case.
+    const onsets: number[] = [];
     let b = measureStart;
     score.measures[hb.measureIndex].treble.notes.forEach((note) => {
       onsets.push(b);
       b += noteBeats(note);
     });
+    if (onsets.length === 0) return rawBeat;
     return onsets.reduce((best, o) => (Math.abs(o - rawBeat) < Math.abs(best - rawBeat) ? o : best), onsets[0]);
   };
 

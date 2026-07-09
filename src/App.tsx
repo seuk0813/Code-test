@@ -1179,6 +1179,7 @@ function App() {
           onAddChord={handleAddChordTool}
           cKeyBasedAccidentals={cKeyBasedAccidentals}
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
+          seekBeat={playbackStartBeat}
         />
       </div>
       <div className="status-line">

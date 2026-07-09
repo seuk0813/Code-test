@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DURATION_LABELS } from '../lib/scoreUtils';
+import { CHORD_QUALITY_LABELS, DURATION_LABELS, measureCapacityBeats } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
@@ -185,6 +185,8 @@ interface ToolbarProps {
   /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
   cKeyBasedAccidentals: boolean;
   onToggleCKeyBasedAccidentals: () => void;
+  /** Current seek/playback bar position in beats from the start of the score — the "못갖춘마디" toggle captures this as the pickup measure's length when pressed. */
+  seekBeat: number;
 }
 
 export function Toolbar({
@@ -203,6 +205,7 @@ export function Toolbar({
   onAddChord,
   cKeyBasedAccidentals,
   onToggleCKeyBasedAccidentals,
+  seekBeat,
 }: ToolbarProps) {
   const [chordRootIndex, setChordRootIndex] = useState(0);
   const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
@@ -257,6 +260,25 @@ export function Toolbar({
     onEditToolChange({ duration });
   };
 
+  /**
+   * 못갖춘마디 toggle: OFF→ON captures the CURRENT seek bar position (in
+   * beats from the start) as the first measure's pickup length — drag the
+   * seek bar to where the pickup content should end, then press this. ON→OFF
+   * just clears it, restoring a normal full first measure.
+   */
+  const handleTogglePickupMeasure = () => {
+    if (score.pickupBeats !== undefined) {
+      onScoreMetaChange({ pickupBeats: undefined });
+      return;
+    }
+    const capacity = measureCapacityBeats(score.timeSignature);
+    if (seekBeat <= 1e-6 || seekBeat >= capacity - 1e-6) {
+      window.alert('먼저 재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 다시 눌러주세요.');
+      return;
+    }
+    onScoreMetaChange({ pickupBeats: seekBeat });
+  };
+
   return (
     <div className="toolbar">
       <div className="toolbar-row">
@@ -277,10 +299,14 @@ export function Toolbar({
           </select>
         </label>
         <button
-          className={`tool-icon-btn ${score.hasPickupMeasure ? 'active' : ''}`}
-          onClick={() => onScoreMetaChange({ hasPickupMeasure: !score.hasPickupMeasure })}
+          className={`tool-icon-btn ${score.pickupBeats !== undefined ? 'active' : ''}`}
+          onClick={handleTogglePickupMeasure}
           aria-label="못갖춘마디"
-          title="켜면 첫 마디가 못갖춘마디(anacrusis)로 취급되어, 채운 박자만큼만 재생/탐색 타임라인에 반영됩니다 (뒤에 무음이 채워지지 않음)"
+          title={
+            score.pickupBeats !== undefined
+              ? '다시 누르면 못갖춘마디를 해제하고 첫 마디를 원래 길이로 되돌립니다'
+              : '재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 누르면, 그 위치까지가 못갖춘마디 길이로 고정됩니다'
+          }
         >
           못갖춘마디
         </button>

@@ -112,11 +112,18 @@ export interface Score {
   measures: Measure[];
   /** Measure indices after which a manual line break (new system) starts. */
   lineBreaks: number[];
-  /** 못갖춘마디 (anacrusis/pickup measure): when set, the FIRST measure is
-   * timed by however many beats its own notes actually fill instead of the
-   * full time-signature capacity, so playback/seek don't pad it with
-   * trailing silence — see measureStartBeat/measureDurationBeats. */
-  hasPickupMeasure?: boolean;
+  /**
+   * 못갖춘마디 (anacrusis/pickup measure): when set, the FIRST measure spans
+   * exactly this many beats instead of the full time-signature capacity, so
+   * playback/seek don't pad it with trailing silence. Set explicitly by the
+   * user — drag the seek bar to the desired position inside the first
+   * measure, then press the "못갖춘마디" toggle, which captures that beat
+   * position as the pickup length (see the toggle's handler in Toolbar and
+   * measureStartBeat/measureDurationBeats). Always strictly less than the
+   * time signature's capacity; undefined means no pickup (a normal, full
+   * first measure).
+   */
+  pickupBeats?: number;
 }
 
 export interface NoteLocation {
