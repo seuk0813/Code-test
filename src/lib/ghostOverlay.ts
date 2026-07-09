@@ -265,6 +265,50 @@ export function clearSeekBar(svg: SVGSVGElement | null): void {
   renderSeekBar(svg, null);
 }
 
+const PICKUP_HANDLE_GROUP_ID = 'pickup-handle-group';
+
+export interface PickupHandleSpec {
+  x: number;
+  y0: number;
+  y1: number;
+}
+
+/**
+ * Draggable resize handles for the boundary between a 못갖춘마디(pickup)
+ * measure and the one after it, and/or the boundary before a trailing
+ * partial closing measure — drawn as an orange grip line with knobs at both
+ * ends so it reads as separate from the green seek bar even when both are
+ * near each other. Either spec may be null if that end isn't split.
+ */
+export function renderPickupHandles(
+  svg: SVGSVGElement | null,
+  pickup: PickupHandleSpec | null,
+  trailing: PickupHandleSpec | null,
+): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${PICKUP_HANDLE_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', PICKUP_HANDLE_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  [pickup, trailing].forEach((spec) => {
+    if (!spec) return;
+    group!.appendChild(
+      el('line', { x1: spec.x, y1: spec.y0, x2: spec.x, y2: spec.y1, stroke: '#f08c00', 'stroke-width': 3, opacity: 0.65 }),
+    );
+    [spec.y0, spec.y1].forEach((y) => {
+      group!.appendChild(el('circle', { cx: spec.x, cy: y, r: 5, fill: '#f08c00' }));
+    });
+  });
+}
+
+export function clearPickupHandles(svg: SVGSVGElement | null): void {
+  renderPickupHandles(svg, null, null);
+}
+
 const MARQUEE_BOX_GROUP_ID = 'marquee-box-group';
 const MARQUEE_HL_GROUP_ID = 'marquee-hl-group';
 

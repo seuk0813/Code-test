@@ -29,6 +29,7 @@ import {
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
+  measureCapacityBeats,
   measureDurationBeats,
   measureStartBeat,
   noteBeats,
@@ -44,6 +45,7 @@ import {
   renderMarqueeBox,
   renderMarqueeHighlights,
   renderMeasureCompleteFlashes,
+  renderPickupHandles,
   renderPlayback,
   renderSeekBar,
   renderTooltip,
@@ -116,6 +118,10 @@ interface StaffEditorProps {
   /** Beat position of the draggable "start playback here" bar. */
   seekBeat: number;
   onSeekBeat: (beat: number) => void;
+  /** Drags the boundary between the 못갖춘마디(pickup) and the measure after it, resizing the pickup to end at the given beat. Only meaningful while score.pickupBeats is set. */
+  onResizePickupMeasure: (newPickupBeats: number) => void;
+  /** Mirrors onResizePickupMeasure for the boundary before the trailing partial closing measure — `splitBeat` is measured the same way as when the trailing measure was first created (see splitTrailingMeasure). Only meaningful while score.trailingBeats is set. */
+  onResizeTrailingMeasure: (splitBeat: number) => void;
   /** Inline editing directly on the score: title, composer, and adding/editing chords & lyrics in place. */
   onSetTitle: (title: string) => void;
   onSetComposer: (composer: string) => void;
@@ -267,6 +273,8 @@ function StaffEditorInner({
   playbackClock,
   seekBeat,
   onSeekBeat,
+  onResizePickupMeasure,
+  onResizeTrailingMeasure,
   onSetTitle,
   onSetComposer,
   onAddChordAt,
@@ -361,6 +369,8 @@ function StaffEditorInner({
   const touchHoldRef = useRef<number | null>(null);
   const playbackRafRef = useRef<number | null>(null);
   const seekDraggingRef = useRef(false);
+  /** Which boundary handle (if any) is currently being dragged to resize the pickup/trailing partial measure, and the drag's starting reference point (see startBoundaryResize). */
+  const boundaryResizeRef = useRef<{ which: 'pickup' | 'trailing'; startX: number; startBeat: number; pxPerBeat: number } | null>(null);
 
   // The currently-sounding note per staff during playback (null when playing
   // a rest, or when not playing at all). Recoloring the real VexFlow note via
@@ -629,8 +639,8 @@ function StaffEditorInner({
     return Math.abs(point.x - spec.x) <= 10 && point.y >= spec.y0 - 16 && point.y <= spec.y0 + 12;
   };
 
-  /** Maps a pointer position to a beat, snapped to the nearest note onset (or downbeat) in the measure under it. */
-  const xyToSeekBeat = (x: number, y: number): number | null => {
+  /** Row-relative raw beat (no onset snapping) under a pointer position — shared by the seek bar and the pickup/trailing resize handles below. */
+  const xyToRawBeat = (x: number, y: number): { measureIndex: number; beat: number } | null => {
     const result = renderResultRef.current;
     if (!result) return null;
     const trebles = result.staffHitboxes.filter((s) => s.clef === 'treble');
@@ -643,6 +653,14 @@ function StaffEditorInner({
     const frac = Math.min(1, Math.max(0, (x - hb.noteStartX) / hb.noteAreaWidth));
     const measureStart = measureStartBeat(score, hb.measureIndex);
     const rawBeat = measureStart + frac * measureDurationBeats(score, hb.measureIndex);
+    return { measureIndex: hb.measureIndex, beat: rawBeat };
+  };
+
+  /** Maps a pointer position to a beat, snapped to the nearest note onset (or downbeat) in the measure under it. */
+  const xyToSeekBeat = (x: number, y: number): number | null => {
+    const raw = xyToRawBeat(x, y);
+    if (!raw) return null;
+    const measureStart = measureStartBeat(score, raw.measureIndex);
     // Candidate onsets: the downbeat plus each note's cumulative onset. An
     // empty measure has no note onset to snap to besides the downbeat itself
     // — snapping to it there would pin every drag to beat 0 (defeating, e.g.,
@@ -650,12 +668,12 @@ function StaffEditorInner({
     // exist), so fall back to the raw unsnapped position in that case.
     const onsets: number[] = [];
     let b = measureStart;
-    score.measures[hb.measureIndex].treble.notes.forEach((note) => {
+    score.measures[raw.measureIndex].treble.notes.forEach((note) => {
       onsets.push(b);
       b += noteBeats(note);
     });
-    if (onsets.length === 0) return rawBeat;
-    return onsets.reduce((best, o) => (Math.abs(o - rawBeat) < Math.abs(best - rawBeat) ? o : best), onsets[0]);
+    if (onsets.length === 0) return raw.beat;
+    return onsets.reduce((best, o) => (Math.abs(o - raw.beat) < Math.abs(best - raw.beat) ? o : best), onsets[0]);
   };
 
   // Render the seek bar whenever its position or the score layout changes
@@ -664,6 +682,69 @@ function StaffEditorInner({
     renderSeekBar(overlayRef.current, playbackClock ? null : seekBarSpec());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekBeat, score, selected, draggingNote, playingLocations, selectedPitchIndex, playbackClock]);
+
+  // --- 못갖춘마디/trailing measure resize handles -------------------------------
+
+  /** Draggable-boundary geometry at the barline right after the pickup measure (index 0→1), or null if there's no pickup. */
+  const pickupBoundarySpec = () => {
+    const result = renderResultRef.current;
+    if (!result || score.pickupBeats === undefined || score.measures.length < 2) return null;
+    const treble = result.staffHitboxes.find((s) => s.measureIndex === 0 && s.clef === 'treble');
+    const bass = result.staffHitboxes.find((s) => s.measureIndex === 0 && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const overhang = treble.spacing * 1.2;
+    return {
+      x: treble.x1,
+      y0: treble.refY0 - treble.spacing * 5 - overhang,
+      y1: bass.refY0 - bass.spacing * 1 + overhang,
+    };
+  };
+
+  /** Mirrors pickupBoundarySpec for the barline right before the trailing measure, or null if there's no trailing measure. */
+  const trailingBoundarySpec = () => {
+    const result = renderResultRef.current;
+    if (!result || score.trailingBeats === undefined || score.measures.length < 2) return null;
+    const lastIndex = score.measures.length - 1;
+    const treble = result.staffHitboxes.find((s) => s.measureIndex === lastIndex - 1 && s.clef === 'treble');
+    const bass = result.staffHitboxes.find((s) => s.measureIndex === lastIndex - 1 && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const overhang = treble.spacing * 1.2;
+    return {
+      x: treble.x1,
+      y0: treble.refY0 - treble.spacing * 5 - overhang,
+      y1: bass.refY0 - bass.spacing * 1 + overhang,
+    };
+  };
+
+  const nearBoundaryHandle = (point: { x: number; y: number }, spec: { x: number; y0: number; y1: number } | null) => {
+    if (!spec) return false;
+    return Math.abs(point.x - spec.x) <= 10 && point.y >= spec.y0 - 6 && point.y <= spec.y1 + 6;
+  };
+
+  /**
+   * Starts a boundary-resize drag. The pickup/trailing measures can render
+   * much narrower than their beat share (row-width normalization shrinks and
+   * floors partial-measure slots — see computeRowMeasureWidths), so mapping
+   * the pointer's absolute position straight through a stave's own rendered
+   * width the way xyToRawBeat does would make the handle jump the instant a
+   * drag starts (rest position wouldn't map back to the current split beat).
+   * Instead this tracks the pixel delta from where the drag began and
+   * applies it to the CURRENT split beat using a fixed, non-redistributed
+   * px-per-beat estimate, so "no movement yet" always means "no change yet".
+   */
+  const startBoundaryResize = (which: 'pickup' | 'trailing', point: { x: number; y: number }) => {
+    const capacity = measureCapacityBeats(score.timeSignature);
+    const startBeat = which === 'pickup' ? score.pickupBeats ?? 0 : capacity - (score.trailingBeats ?? capacity);
+    // MEASURE_WIDTH's nominal (non-redistributed) pixel width for one full measure — a stable conversion factor independent of any particular row's current layout.
+    const pxPerBeat = 220 / capacity;
+    boundaryResizeRef.current = { which, startX: point.x, startBeat, pxPerBeat };
+  };
+
+  // Render the pickup/trailing resize handles whenever the score layout changes.
+  useEffect(() => {
+    renderPickupHandles(overlayRef.current, pickupBoundarySpec(), trailingBoundarySpec());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [score]);
 
   // --- Shared placement helpers -----------------------------------------------
 
@@ -1150,6 +1231,26 @@ function StaffEditorInner({
     document.removeEventListener('mouseup', handleSeekDocMouseUp);
   };
 
+  const handleBoundaryResizeDocMouseMove = (event: MouseEvent) => {
+    const drag = boundaryResizeRef.current;
+    if (!drag) return;
+    const point = eventPoint(event);
+    if (!point) return;
+    const capacity = measureCapacityBeats(score.timeSignature);
+    const newSplitBeat = Math.min(capacity - 0.05, Math.max(0.05, drag.startBeat + (point.x - drag.startX) / drag.pxPerBeat));
+    if (drag.which === 'pickup') {
+      onResizePickupMeasure(newSplitBeat);
+    } else {
+      onResizeTrailingMeasure(newSplitBeat);
+    }
+  };
+
+  const handleBoundaryResizeDocMouseUp = () => {
+    boundaryResizeRef.current = null;
+    document.removeEventListener('mousemove', handleBoundaryResizeDocMouseMove);
+    document.removeEventListener('mouseup', handleBoundaryResizeDocMouseUp);
+  };
+
   const handleDocumentMouseMove = (event: MouseEvent) => {
     const gesture = mouseGestureRef.current;
     const result = renderResultRef.current;
@@ -1395,6 +1496,20 @@ function StaffEditorInner({
       mouseGestureRef.current = { kind: 'marquee', startX: point.x, startY: point.y, curX: point.x, curY: point.y };
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
+      return;
+    }
+
+    if (nearBoundaryHandle(point, pickupBoundarySpec())) {
+      startBoundaryResize('pickup', point);
+      document.addEventListener('mousemove', handleBoundaryResizeDocMouseMove);
+      document.addEventListener('mouseup', handleBoundaryResizeDocMouseUp);
+      return;
+    }
+
+    if (nearBoundaryHandle(point, trailingBoundarySpec())) {
+      startBoundaryResize('trailing', point);
+      document.addEventListener('mousemove', handleBoundaryResizeDocMouseMove);
+      document.addEventListener('mouseup', handleBoundaryResizeDocMouseUp);
       return;
     }
 
@@ -1654,6 +1769,18 @@ function StaffEditorInner({
     if (!result || !point) return;
     if (inlineEditor) commitInlineEditor();
 
+    if (nearBoundaryHandle(point, pickupBoundarySpec())) {
+      event.preventDefault();
+      startBoundaryResize('pickup', point);
+      return;
+    }
+
+    if (nearBoundaryHandle(point, trailingBoundarySpec())) {
+      event.preventDefault();
+      startBoundaryResize('trailing', point);
+      return;
+    }
+
     if (nearSeekHandle(point)) {
       event.preventDefault();
       seekDraggingRef.current = true;
@@ -1788,6 +1915,22 @@ function StaffEditorInner({
       return;
     }
 
+    if (boundaryResizeRef.current) {
+      event.preventDefault();
+      const drag = boundaryResizeRef.current;
+      const point = event.touches[0] && eventPoint(event.touches[0]);
+      if (point) {
+        const capacity = measureCapacityBeats(score.timeSignature);
+        const newSplitBeat = Math.min(capacity - 0.05, Math.max(0.05, drag.startBeat + (point.x - drag.startX) / drag.pxPerBeat));
+        if (drag.which === 'pickup') {
+          onResizePickupMeasure(newSplitBeat);
+        } else {
+          onResizeTrailingMeasure(newSplitBeat);
+        }
+      }
+      return;
+    }
+
     if (seekDraggingRef.current) {
       event.preventDefault();
       const point = event.touches[0] && eventPoint(event.touches[0]);
@@ -1847,6 +1990,10 @@ function StaffEditorInner({
   const handleTouchEnd = (event: TouchEvent) => {
     if (event.touches.length < 2) pinchRef.current = null;
     if (pinchRef.current) return;
+    if (boundaryResizeRef.current) {
+      boundaryResizeRef.current = null;
+      return;
+    }
     if (seekDraggingRef.current) {
       seekDraggingRef.current = false;
       return;

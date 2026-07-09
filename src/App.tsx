@@ -35,6 +35,8 @@ import {
   removeLyricFromScore,
   removeMeasure,
   removeNoteFromScore,
+  resizePickupMeasure,
+  resizeTrailingMeasure,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -486,18 +488,62 @@ function App() {
    * validates the seek bar is actually positioned inside the first measure
    * before calling this. */
   const handleTogglePickupMeasure = useCallback(() => {
-    setScore((prev) => (prev.pickupBeats !== undefined ? clearPickupMeasure(prev) : splitPickupMeasure(prev, playbackStartBeat)));
-  }, [playbackStartBeat, setScore]);
+    if (score.pickupBeats !== undefined) {
+      setScore(clearPickupMeasure(score));
+      return;
+    }
+    const next = splitPickupMeasure(score, playbackStartBeat);
+    setScore(next);
+    // Move the seek bar off the fragile split-point boundary and into the
+    // middle of the freshly created pickup measure, so pressing the toggle
+    // again right away (to clear it) reliably lands inside that measure
+    // instead of ambiguously sitting on the new boundary between it and the
+    // measure after it.
+    if (next.pickupBeats !== undefined) setPlaybackStartBeat(next.pickupBeats / 2);
+  }, [score, playbackStartBeat, setScore]);
 
   /** Mirrors handleTogglePickupMeasure for a trailing partial closing measure at the end of the piece. */
   const handleToggleTrailingMeasure = useCallback(() => {
-    setScore((prev) => {
-      if (prev.trailingBeats !== undefined) return clearTrailingMeasure(prev);
-      const lastIndex = prev.measures.length - 1;
-      const splitBeat = playbackStartBeat - measureStartBeat(prev, lastIndex);
-      return splitTrailingMeasure(prev, splitBeat);
-    });
-  }, [playbackStartBeat, setScore]);
+    if (score.trailingBeats !== undefined) {
+      setScore(clearTrailingMeasure(score));
+      return;
+    }
+    const lastIndex = score.measures.length - 1;
+    const splitBeat = playbackStartBeat - measureStartBeat(score, lastIndex);
+    const next = splitTrailingMeasure(score, splitBeat);
+    setScore(next);
+    if (next.trailingBeats !== undefined) {
+      const newLastIndex = next.measures.length - 1;
+      setPlaybackStartBeat(measureStartBeat(next, newLastIndex) + next.trailingBeats / 2);
+    }
+  }, [score, playbackStartBeat, setScore]);
+
+  /** Drags the boundary right after the 못갖춘마디 to a new beat position (StaffEditor's onResizePickupMeasure). */
+  const handleResizePickupMeasure = useCallback(
+    (newPickupBeats: number) => {
+      const next = resizePickupMeasure(score, newPickupBeats);
+      setScore(next);
+      // Keep the seek bar centered inside the pickup as it's resized, same
+      // reasoning as the toggle's initial creation — otherwise shrinking the
+      // pickup below the seek bar's old position would strand it in the next
+      // measure and the merged toggle button would misread which end to act on.
+      if (next.pickupBeats !== undefined) setPlaybackStartBeat(next.pickupBeats / 2);
+    },
+    [score, setScore],
+  );
+
+  /** Mirrors handleResizePickupMeasure for the boundary just before the trailing partial closing measure. */
+  const handleResizeTrailingMeasure = useCallback(
+    (splitBeat: number) => {
+      const next = resizeTrailingMeasure(score, splitBeat);
+      setScore(next);
+      if (next.trailingBeats !== undefined) {
+        const newLastIndex = next.measures.length - 1;
+        setPlaybackStartBeat(measureStartBeat(next, newLastIndex) + next.trailingBeats / 2);
+      }
+    },
+    [score, setScore],
+  );
 
   /** Sets (or clears, when finger is null) the fingering number on the selected
    * note's pitch — the narrowed pitch if one is picked out, else the primary. */
@@ -1277,6 +1323,8 @@ function App() {
         playbackClock={playbackClock}
         seekBeat={playbackStartBeat}
         onSeekBeat={setPlaybackStartBeat}
+        onResizePickupMeasure={handleResizePickupMeasure}
+        onResizeTrailingMeasure={handleResizeTrailingMeasure}
       />
       <div className="measure-end-toggle-row">
         <button

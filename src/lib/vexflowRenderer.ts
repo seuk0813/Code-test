@@ -145,6 +145,47 @@ function measureSlotXRange(indexInRow: number): { x0: number; x1: number } {
   return { x0: x, x1: x + w };
 }
 
+/**
+ * Per-slot widths for one row. Normally each slot just uses its fixed base
+ * width. But a row holding the pickup or trailing partial measure has
+ * MEASURES_PER_ROW + 1 slots — one more than a normal row — so if every slot
+ * kept its base width, that row would render wider than the rest and stick
+ * out past the normal right edge. Instead the partial slot is shrunk toward
+ * its beat fraction of a full measure (with a floor so glyphs/notes still
+ * fit) and the freed width is redistributed across the row's other slots,
+ * proportional to their own base widths, so the row's total width always
+ * matches a normal MEASURES_PER_ROW-measure row.
+ */
+function computeRowMeasureWidths(row: number[], score: Score, capacity: number): number[] {
+  const baseWidths = row.map((_, localIndex) => (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH));
+  if (row.length <= MEASURES_PER_ROW) return baseWidths;
+
+  const lastScoreIndex = score.measures.length - 1;
+  const partialLocalIndex = row.findIndex((measureIndex, localIndex) => {
+    if (localIndex === 0 && measureIndex === 0 && score.pickupBeats !== undefined) return true;
+    if (localIndex === row.length - 1 && measureIndex === lastScoreIndex && score.trailingBeats !== undefined) {
+      return true;
+    }
+    return false;
+  });
+  if (partialLocalIndex === -1) return baseWidths;
+
+  const partialBeats = partialLocalIndex === 0 ? score.pickupBeats! : score.trailingBeats!;
+  const fraction = Math.max(0, Math.min(1, partialBeats / capacity));
+  const partialBase = baseWidths[partialLocalIndex];
+  // The pickup slot (local index 0) still needs room for the clef/key/time
+  // signature glyphs even when very short, so it gets a taller floor than a
+  // trailing slot (which only needs room for a note or two).
+  const minWidth = partialLocalIndex === 0 ? 150 : 90;
+  const partialWidth = Math.max(partialBase * fraction, minWidth);
+
+  const targetRowWidth = FIRST_MEASURE_WIDTH + (MEASURES_PER_ROW - 1) * MEASURE_WIDTH;
+  const remaining = targetRowWidth - partialWidth;
+  const otherBaseSum = baseWidths.reduce((sum, w, i) => (i === partialLocalIndex ? sum : sum + w), 0);
+
+  return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w * (remaining / otherBaseSum)));
+}
+
 const ROW_HEIGHT = 320;
 // Kept clear of the staff's own clickable "add a ledger-line note" region
 // (which reaches STAVE_TOP_MARGIN above the top staff line) so the chord
@@ -455,9 +496,9 @@ export function renderScore(
     MEASURES_PER_ROW,
   );
 
-  const rowWidths = rows.map((row) =>
-    row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),
-  );
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const rowMeasureWidths = rows.map((row) => computeRowMeasureWidths(row, score, capacity));
+  const rowWidths = rowMeasureWidths.map((widths) => widths.reduce((sum, w) => sum + w, 20));
   // The composer credit always sits above the 4th measure's slot (index 3 in
   // row 0) — even before that measure actually exists — so it never jumps
   // around as measures are added; the canvas is widened to fit that slot if
@@ -493,8 +534,6 @@ export function renderScore(
     bass: [],
   };
 
-  const capacity = measureCapacityBeats(score.timeSignature);
-
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * ROW_HEIGHT + titleBand;
     const chordY = rowY + CHORD_BAND_Y;
@@ -507,7 +546,7 @@ export function renderScore(
       const isRowStart = localIndex === 0;
       const isPieceStart = measureIndex === 0;
       const isLastMeasure = measureIndex === score.measures.length - 1;
-      const measureWidth = isRowStart ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH;
+      const measureWidth = rowMeasureWidths[rowIndex][localIndex];
 
       const trebleStave = new Stave(x, trebleY, measureWidth);
       const bassStave = new Stave(x, bassY, measureWidth);

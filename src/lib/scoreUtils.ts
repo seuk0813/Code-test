@@ -254,6 +254,29 @@ export function clearTrailingMeasure(score: Score): Score {
   return { ...score, measures, trailingBeats: undefined };
 }
 
+/**
+ * Moves an already-created 못갖춘마디's end boundary to a new beat position
+ * (dragging the handle at the barline after it) — implemented as merge then
+ * re-split so notes get reassigned to whichever side of the new boundary
+ * their onset now falls on, same as creating it fresh. No-op if there's no
+ * pickup measure to resize.
+ */
+export function resizePickupMeasure(score: Score, newPickupBeats: number): Score {
+  if (score.pickupBeats === undefined) return score;
+  return splitPickupMeasure(clearPickupMeasure(score), newPickupBeats);
+}
+
+/**
+ * Mirrors resizePickupMeasure for the trailing partial closing measure's
+ * start boundary. `splitBeat` is measured the same way as splitTrailingMeasure
+ * expects (a beat position within the merged pair, not the resulting
+ * trailing length). No-op if there's no trailing measure to resize.
+ */
+export function resizeTrailingMeasure(score: Score, splitBeat: number): Score {
+  if (score.trailingBeats === undefined) return score;
+  return splitTrailingMeasure(clearTrailingMeasure(score), splitBeat);
+}
+
 function emptyStaffMeasure(): StaffMeasure {
   return { notes: [] };
 }
