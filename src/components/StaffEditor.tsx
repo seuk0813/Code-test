@@ -721,6 +721,78 @@ function StaffEditorInner({
     return Math.abs(point.x - spec.x) <= 10 && point.y >= spec.y0 - 6 && point.y <= spec.y1 + 6;
   };
 
+  /** The pickup measure's own rectangle (its full column, not just the boundary line) — hovering anywhere in it reveals the resize handle. */
+  const pickupHoverZone = () => {
+    const result = renderResultRef.current;
+    if (!result || score.pickupBeats === undefined || score.measures.length < 2) return null;
+    const treble = result.staffHitboxes.find((s) => s.measureIndex === 0 && s.clef === 'treble');
+    const bass = result.staffHitboxes.find((s) => s.measureIndex === 0 && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const overhang = treble.spacing * 1.2;
+    return {
+      x0: treble.x0 - 4,
+      x1: treble.x1 + 10,
+      y0: treble.refY0 - treble.spacing * 5 - overhang,
+      y1: bass.refY0 - bass.spacing * 1 + overhang,
+    };
+  };
+
+  /** Mirrors pickupHoverZone for the trailing measure. */
+  const trailingHoverZone = () => {
+    const result = renderResultRef.current;
+    if (!result || score.trailingBeats === undefined || score.measures.length < 2) return null;
+    const lastIndex = score.measures.length - 1;
+    const treble = result.staffHitboxes.find((s) => s.measureIndex === lastIndex && s.clef === 'treble');
+    const bass = result.staffHitboxes.find((s) => s.measureIndex === lastIndex && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const overhang = treble.spacing * 1.2;
+    return {
+      x0: treble.x0 - 10,
+      x1: treble.x1 + 4,
+      y0: treble.refY0 - treble.spacing * 5 - overhang,
+      y1: bass.refY0 - bass.spacing * 1 + overhang,
+    };
+  };
+
+  const inHoverZone = (point: { x: number; y: number }, zone: { x0: number; x1: number; y0: number; y1: number } | null) =>
+    !!zone && point.x >= zone.x0 && point.x <= zone.x1 && point.y >= zone.y0 && point.y <= zone.y1;
+
+  /** Which boundary handle is currently visible on hover (kept separate from boundaryResizeRef so an in-progress drag can force visibility even if the pointer strays outside the hover zone). */
+  const hoverBoundaryRef = useRef<'pickup' | 'trailing' | null>(null);
+
+  /** Redraws the pickup/trailing handles for whichever one is hovered or being dragged — hidden otherwise, so they don't clutter the score when not needed. */
+  const refreshPickupHandles = () => {
+    const active = boundaryResizeRef.current?.which ?? hoverBoundaryRef.current;
+    renderPickupHandles(
+      overlayRef.current,
+      active === 'pickup' ? pickupBoundarySpec() : null,
+      active === 'trailing' ? trailingBoundarySpec() : null,
+    );
+  };
+
+  /**
+   * Hit-tests every measure's own start barline (its stave's left edge,
+   * spanning the full grand staff top-to-bottom) — clicking one jumps the
+   * seek bar straight to that measure's start beat. Kept to a tight x
+   * tolerance so it doesn't compete with normal note placement/selection
+   * clicks a few pixels away.
+   */
+  const findMeasureStartAt = (x: number, y: number): number | null => {
+    const result = renderResultRef.current;
+    if (!result) return null;
+    const TOL = 6;
+    for (const treble of result.staffHitboxes) {
+      if (treble.clef !== 'treble' || Math.abs(x - treble.x0) > TOL) continue;
+      const bass = result.staffHitboxes.find((s) => s.measureIndex === treble.measureIndex && s.clef === 'bass');
+      if (!bass) continue;
+      const overhang = treble.spacing * 1.2;
+      const y0 = treble.refY0 - treble.spacing * 5 - overhang;
+      const y1 = bass.refY0 - bass.spacing * 1 + overhang;
+      if (y >= y0 && y <= y1) return treble.measureIndex;
+    }
+    return null;
+  };
+
   /**
    * Starts a boundary-resize drag. The pickup/trailing measures can render
    * much narrower than their beat share (row-width normalization shrinks and
@@ -738,11 +810,13 @@ function StaffEditorInner({
     // MEASURE_WIDTH's nominal (non-redistributed) pixel width for one full measure — a stable conversion factor independent of any particular row's current layout.
     const pxPerBeat = 220 / capacity;
     boundaryResizeRef.current = { which, startX: point.x, startBeat, pxPerBeat };
+    refreshPickupHandles();
   };
 
-  // Render the pickup/trailing resize handles whenever the score layout changes.
+  // Keep the pickup/trailing handles' geometry in sync with the score layout
+  // (still respecting whatever the current hover/drag visibility is).
   useEffect(() => {
-    renderPickupHandles(overlayRef.current, pickupBoundarySpec(), trailingBoundarySpec());
+    refreshPickupHandles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [score]);
 
@@ -1243,12 +1317,16 @@ function StaffEditorInner({
     } else {
       onResizeTrailingMeasure(newSplitBeat);
     }
+    refreshPickupHandles();
   };
 
-  const handleBoundaryResizeDocMouseUp = () => {
+  const handleBoundaryResizeDocMouseUp = (event: MouseEvent) => {
     boundaryResizeRef.current = null;
     document.removeEventListener('mousemove', handleBoundaryResizeDocMouseMove);
     document.removeEventListener('mouseup', handleBoundaryResizeDocMouseUp);
+    const point = eventPoint(event);
+    hoverBoundaryRef.current = point && inHoverZone(point, pickupHoverZone()) ? 'pickup' : point && inHoverZone(point, trailingHoverZone()) ? 'trailing' : null;
+    refreshPickupHandles();
   };
 
   const handleDocumentMouseMove = (event: MouseEvent) => {
@@ -1520,6 +1598,13 @@ function StaffEditorInner({
       return;
     }
 
+    const barlineMeasureIndex = findMeasureStartAt(point.x, point.y);
+    if (barlineMeasureIndex !== null) {
+      onSeekBeat(measureStartBeat(score, barlineMeasureIndex));
+      suppressClickRef.current = true;
+      return;
+    }
+
     if (findTitleAt(result, point.x, point.y)) {
       openTitleEditor();
       suppressClickRef.current = true;
@@ -1638,6 +1723,25 @@ function StaffEditorInner({
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    // Pickup/trailing resize handles stay hidden until the pointer hovers
+    // that measure, so they don't clutter the score otherwise — this runs
+    // unconditionally (even during other gestures) except mid-drag, where
+    // the drag itself already forces the dragged handle visible.
+    if (!boundaryResizeRef.current) {
+      const hoverPoint = eventPoint(event);
+      const nextHover = hoverPoint
+        ? inHoverZone(hoverPoint, pickupHoverZone())
+          ? 'pickup'
+          : inHoverZone(hoverPoint, trailingHoverZone())
+            ? 'trailing'
+            : null
+        : null;
+      if (nextHover !== hoverBoundaryRef.current) {
+        hoverBoundaryRef.current = nextHover;
+        refreshPickupHandles();
+      }
+    }
+
     if (mouseGestureRef.current) return; // active press handled by document listeners
     if (lockedPreviewRef.current) return; // a locked preview owns the ghost; don't hover-draw over it
     const result = renderResultRef.current;
@@ -1675,6 +1779,10 @@ function StaffEditorInner({
     if (!mouseGestureRef.current) {
       clearGhost(overlayRef.current);
       clearTooltip(overlayRef.current);
+    }
+    if (!boundaryResizeRef.current && hoverBoundaryRef.current !== null) {
+      hoverBoundaryRef.current = null;
+      refreshPickupHandles();
     }
   };
 
@@ -1784,6 +1892,13 @@ function StaffEditorInner({
     if (nearSeekHandle(point)) {
       event.preventDefault();
       seekDraggingRef.current = true;
+      return;
+    }
+
+    const barlineMeasureIndex = findMeasureStartAt(point.x, point.y);
+    if (barlineMeasureIndex !== null) {
+      event.preventDefault();
+      onSeekBeat(measureStartBeat(score, barlineMeasureIndex));
       return;
     }
 
