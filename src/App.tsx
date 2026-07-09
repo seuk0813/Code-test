@@ -105,6 +105,8 @@ function App() {
   // came from, so a multi-measure selection pastes back across that many
   // measures instead of cramming everything into one and overflowing it.
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
+  // Chord symbols multi-selected via the same shift+drag rubber-band, for batch delete.
+  const [marqueeChords, setMarqueeChords] = useState<{ measureIndex: number; chordId: string }[]>([]);
   const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent; measureOffset: number }[]>([]);
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
@@ -211,6 +213,7 @@ function App() {
       setSelected(location);
       setSelectedPitchIndex(pitchIndex ?? null);
       setMarquee([]);
+      setMarqueeChords([]);
       justPlacedRef.current = false;
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
@@ -286,6 +289,7 @@ function App() {
       setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
       setSelectedPitchIndex(null);
       setMarquee([]);
+      setMarqueeChords([]);
       // This note is now eligible to chain into the next one via Left/Right
       // (see justPlacedRef) — cleared as soon as the selection moves away
       // from it through any other path.
@@ -582,6 +586,13 @@ function App() {
     setMarquee([]);
   }, [marquee, setScore]);
 
+  /** Delete/Backspace with a marquee selection also removes every selected chord symbol. */
+  const handleDeleteMarqueeChords = useCallback(() => {
+    if (marqueeChords.length === 0) return;
+    setScore((prev) => marqueeChords.reduce((s, { measureIndex, chordId }) => removeChordFromScore(s, measureIndex, chordId), prev));
+    setMarqueeChords([]);
+  }, [marqueeChords, setScore]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -608,10 +619,14 @@ function App() {
         handlePasteNotes();
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (marquee.length > 0 || selected)) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (marquee.length > 0 || marqueeChords.length > 0 || selected)) {
         e.preventDefault();
-        if (marquee.length > 0) handleDeleteMarquee();
-        else if (selected) deleteNoteAndSelectAdjacent(selected);
+        if (marquee.length > 0 || marqueeChords.length > 0) {
+          if (marquee.length > 0) handleDeleteMarquee();
+          if (marqueeChords.length > 0) handleDeleteMarqueeChords();
+        } else if (selected) {
+          deleteNoteAndSelectAdjacent(selected);
+        }
         return;
       }
       // A locked placement preview owns the arrow keys (moves the preview) —
@@ -656,7 +671,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, marquee, marqueeChords, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -684,6 +699,7 @@ function App() {
     setSelected(null);
     setSelectedPitchIndex(null);
     setMarquee([]);
+    setMarqueeChords([]);
     justPlacedRef.current = false;
   }, []);
 
@@ -692,6 +708,15 @@ function App() {
     setMarquee(locations);
     justPlacedRef.current = false;
     if (locations.length > 0) {
+      setSelected(null);
+      setSelectedPitchIndex(null);
+    }
+  }, []);
+
+  /** Commits a rubber-band multi-selection of chord symbols (mirrors handleMarqueeSelect for notes). */
+  const handleMarqueeChordSelect = useCallback((items: { measureIndex: number; chordId: string }[]) => {
+    setMarqueeChords(items);
+    if (items.length > 0) {
       setSelected(null);
       setSelectedPitchIndex(null);
     }
@@ -1131,6 +1156,8 @@ function App() {
         selectedPitchIndex={selectedPitchIndex}
         marquee={marquee}
         onMarqueeSelect={handleMarqueeSelect}
+        marqueeChords={marqueeChords}
+        onMarqueeChordSelect={handleMarqueeChordSelect}
         onPreviewLockChange={(v) => {
           previewLockedRef.current = v;
         }}

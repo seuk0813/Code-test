@@ -72,6 +72,32 @@ export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature
   return staffMeasureBeats(staffMeasure) > measureCapacityBeats(timeSignature) + 1e-6;
 }
 
+/**
+ * How many beats the given measure spans for absolute-timing purposes (used
+ * to place it on the playback/seek timeline) — the full time-signature
+ * capacity for every ordinary measure. The exception is 못갖춘마디 (an
+ * anacrusis/pickup measure): when `score.hasPickupMeasure` is set, the very
+ * FIRST measure instead spans only however many beats its own notes (treble
+ * or bass, whichever has more) actually fill, so it doesn't get padded with
+ * trailing silence before the next measure starts.
+ */
+export function measureDurationBeats(score: Score, measureIndex: number): number {
+  const capacity = measureCapacityBeats(score.timeSignature);
+  if (score.hasPickupMeasure && measureIndex === 0 && score.measures.length > 0) {
+    const m = score.measures[0];
+    return Math.min(capacity, Math.max(staffMeasureBeats(m.treble), staffMeasureBeats(m.bass)));
+  }
+  return capacity;
+}
+
+/** Absolute beat offset where the given measure starts — see measureDurationBeats. */
+export function measureStartBeat(score: Score, measureIndex: number): number {
+  const capacity = measureCapacityBeats(score.timeSignature);
+  if (!score.hasPickupMeasure) return measureIndex * capacity;
+  if (measureIndex <= 0) return 0;
+  return measureDurationBeats(score, 0) + (measureIndex - 1) * capacity;
+}
+
 function emptyStaffMeasure(): StaffMeasure {
   return { notes: [] };
 }

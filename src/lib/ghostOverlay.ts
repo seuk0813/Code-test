@@ -298,8 +298,8 @@ export function renderMarqueeBox(svg: SVGSVGElement | null, box: { x0: number; y
   );
 }
 
-/** Persistent blue highlight blobs over each marquee-selected notehead. */
-export function renderMarqueeHighlights(svg: SVGSVGElement | null, spots: { x: number; y: number }[]): void {
+/** Persistent blue highlight blobs over each marquee-selected notehead (or chord symbol, with a wider rx/ry). */
+export function renderMarqueeHighlights(svg: SVGSVGElement | null, spots: { x: number; y: number; rx?: number; ry?: number }[]): void {
   if (!svg) return;
   let group = svg.querySelector<SVGGElement>(`#${MARQUEE_HL_GROUP_ID}`);
   if (!group) {
@@ -310,7 +310,7 @@ export function renderMarqueeHighlights(svg: SVGSVGElement | null, spots: { x: n
   }
   group.replaceChildren();
   spots.forEach((s) => {
-    group!.appendChild(el('ellipse', { cx: s.x, cy: s.y, rx: 9, ry: 7, fill: 'rgba(47, 111, 237, 0.35)' }));
+    group!.appendChild(el('ellipse', { cx: s.x, cy: s.y, rx: s.rx ?? 9, ry: s.ry ?? 7, fill: 'rgba(47, 111, 237, 0.35)' }));
   });
 }
 

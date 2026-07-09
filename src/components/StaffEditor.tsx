@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { ForwardedRef } from 'react';
-import type { Accidental, Clef, DurationValue, NoteLocation, Score } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, NoteLocation, Score } from '../types/score';
 import {
   findChordAt,
   findChordBandAt,
@@ -73,6 +73,10 @@ interface StaffEditorProps {
   marquee: NoteLocation[];
   /** Commits a rubber-band multi-selection (empty array clears it). */
   onMarqueeSelect: (locations: NoteLocation[]) => void;
+  /** Chord symbols multi-selected via the same shift+drag rubber-band (for batch delete). */
+  marqueeChords: { measureIndex: number; chordId: string }[];
+  /** Commits a rubber-band multi-selection of chord symbols (empty array clears it). */
+  onMarqueeChordSelect: (items: { measureIndex: number; chordId: string }[]) => void;
   /** Reports whether a placement preview is currently locked, so App's own
    * keyboard handler yields arrow/space to the preview while it is. */
   onPreviewLockChange: (locked: boolean) => void;
@@ -234,6 +238,8 @@ function StaffEditorInner({
   selectedPitchIndex,
   marquee,
   onMarqueeSelect,
+  marqueeChords,
+  onMarqueeChordSelect,
   onPreviewLockChange,
   noteSelectMode,
   editTool,
@@ -425,7 +431,7 @@ function StaffEditorInner({
   useEffect(() => {
     const result = renderResultRef.current;
     if (!overlayRef.current) return;
-    const spots: { x: number; y: number }[] = [];
+    const spots: { x: number; y: number; rx?: number; ry?: number }[] = [];
     if (result) {
       marquee.forEach((loc) => {
         const hb = result.noteHitboxes.find(
@@ -433,9 +439,13 @@ function StaffEditorInner({
         );
         if (hb) hb.ys.forEach((y) => spots.push({ x: hb.centerX, y }));
       });
+      marqueeChords.forEach((sel) => {
+        const hb = result.chordHitboxes.find((c) => c.measureIndex === sel.measureIndex && c.chordId === sel.chordId);
+        if (hb) spots.push({ x: hb.x, y: hb.y - 6, rx: hb.halfWidth, ry: 12 });
+      });
     }
     renderMarqueeHighlights(overlayRef.current, spots);
-  }, [marquee, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [marquee, marqueeChords, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
 
   // Keep the locked-preview ghost drawn (and tell App the lock state so it
   // yields arrow/space to the preview) whenever it or the active tool changes.
@@ -1039,17 +1049,47 @@ function StaffEditorInner({
       inlineCancelledRef.current = true;
       event.currentTarget.blur();
     } else if (event.key === 'Tab' && inlineEditor && (inlineEditor.kind === 'chordAdd' || inlineEditor.kind === 'chordEdit')) {
-      // Commit the current chord and immediately open the next chord slot so
-      // a run of chords can be typed one after another without re-clicking.
+      // Commit the current chord (editing it, adding it, or — when cleared —
+      // deleting it) and jump to the next chord. If one already exists ahead
+      // of this position, open it for editing so a run of existing chords
+      // can be reviewed/deleted one after another with just Tab. Otherwise
+      // fall back to a fresh empty slot so a brand-new run can still be typed.
       event.preventDefault();
       const ed = inlineEditor;
+      const currentMeasureIndex = ed.measureIndex;
       const currentOffset =
         ed.kind === 'chordAdd' ? ed.offset : (score.measures[ed.measureIndex]?.chords.find((c) => c.id === ed.chordId)?.offset ?? 0);
       commitInlineEditor();
       const result = renderResultRef.current;
       if (!result) return;
+
+      let nextExisting: { measureIndex: number; chord: ChordSymbol } | null = null;
+      for (let mi = currentMeasureIndex; mi < score.measures.length; mi++) {
+        const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
+        const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset > currentOffset + 1e-6) : chords;
+        if (candidates.length > 0) {
+          nextExisting = { measureIndex: mi, chord: candidates[0] };
+          break;
+        }
+      }
+      if (nextExisting) {
+        const band = result.chordBandHitboxes.find((b) => b.measureIndex === nextExisting!.measureIndex);
+        if (!band) return;
+        setInlineEditor({
+          kind: 'chordEdit',
+          measureIndex: nextExisting.measureIndex,
+          chordId: nextExisting.chord.id,
+          left: band.measureX + nextExisting.chord.offset * band.measureWidth - 45,
+          top: (band.y0 + band.y1) / 2 - 8,
+          width: 90,
+          align: 'center',
+          value: chordLabel(nextExisting.chord),
+        });
+        return;
+      }
+
       const step = 0.18;
-      let nextMeasureIndex = ed.measureIndex;
+      let nextMeasureIndex = currentMeasureIndex;
       let nextOffset = currentOffset + step;
       if (nextOffset > 0.95) {
         nextMeasureIndex += 1;
@@ -1153,6 +1193,18 @@ function StaffEditorInner({
         picked.push({ measureIndex: hb.measureIndex, clef: hb.clef, noteIndex: hb.noteIndex });
       });
       onMarqueeSelect(picked);
+      // A chord symbol counts as selected when its label box (same box used
+      // for click hit-testing, see findChordAt) overlaps the rubber-band.
+      const pickedChords: { measureIndex: number; chordId: string }[] = [];
+      result.chordHitboxes.forEach((hb) => {
+        const cx0 = hb.x - hb.halfWidth;
+        const cx1 = hb.x + hb.halfWidth;
+        const cy0 = hb.y - 14;
+        const cy1 = hb.y + 14;
+        if (cx1 < x0 || cx0 > x1 || cy1 < y0 || cy0 > y1) return;
+        pickedChords.push({ measureIndex: hb.measureIndex, chordId: hb.chordId });
+      });
+      onMarqueeChordSelect(pickedChords);
       suppressClickRef.current = true;
       return;
     }

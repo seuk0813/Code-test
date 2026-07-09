@@ -134,6 +134,7 @@ const TIME_SIGNATURES: [number, number][] = [
   [4, 4],
   [3, 4],
   [2, 4],
+  [6, 8],
 ];
 
 /** All 12 chromatic roots, sharp spelling (C through B), for the chord-builder root dropdown. */

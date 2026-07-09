@@ -112,6 +112,11 @@ export interface Score {
   measures: Measure[];
   /** Measure indices after which a manual line break (new system) starts. */
   lineBreaks: number[];
+  /** 못갖춘마디 (anacrusis/pickup measure): when set, the FIRST measure is
+   * timed by however many beats its own notes actually fill instead of the
+   * full time-signature capacity, so playback/seek don't pad it with
+   * trailing silence — see measureStartBeat/measureDurationBeats. */
+  hasPickupMeasure?: boolean;
 }
 
 export interface NoteLocation {
