@@ -78,6 +78,10 @@ interface StaffEditorProps {
   marqueeChords: { measureIndex: number; chordId: string }[];
   /** Commits a rubber-band multi-selection of chord symbols (empty array clears it). */
   onMarqueeChordSelect: (items: { measureIndex: number; chordId: string }[]) => void;
+  /** Lyric syllables multi-selected via the same shift+drag rubber-band (for batch delete). */
+  marqueeLyrics: { measureIndex: number; lyricId: string }[];
+  /** Commits a rubber-band multi-selection of lyric syllables (empty array clears it). */
+  onMarqueeLyricSelect: (items: { measureIndex: number; lyricId: string }[]) => void;
   /** Reports whether a placement preview is currently locked, so App's own
    * keyboard handler yields arrow/space to the preview while it is. */
   onPreviewLockChange: (locked: boolean) => void;
@@ -241,6 +245,8 @@ function StaffEditorInner({
   onMarqueeSelect,
   marqueeChords,
   onMarqueeChordSelect,
+  marqueeLyrics,
+  onMarqueeLyricSelect,
   onPreviewLockChange,
   noteSelectMode,
   editTool,
@@ -444,9 +450,13 @@ function StaffEditorInner({
         const hb = result.chordHitboxes.find((c) => c.measureIndex === sel.measureIndex && c.chordId === sel.chordId);
         if (hb) spots.push({ x: hb.x, y: hb.y - 6, rx: hb.halfWidth, ry: 12 });
       });
+      marqueeLyrics.forEach((sel) => {
+        const hb = result.lyricHitboxes.find((l) => l.measureIndex === sel.measureIndex && l.lyricId === sel.lyricId);
+        if (hb) spots.push({ x: hb.x, y: hb.y - 4, rx: hb.halfWidth, ry: 10 });
+      });
     }
     renderMarqueeHighlights(overlayRef.current, spots);
-  }, [marquee, marqueeChords, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [marquee, marqueeChords, marqueeLyrics, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
 
   // Keep the locked-preview ghost drawn (and tell App the lock state so it
   // yields arrow/space to the preview) whenever it or the active tool changes.
@@ -669,7 +679,7 @@ function StaffEditorInner({
    * — clicking again selects only it, dragging moves only it. A press on a
    * not-yet-selected note (or a single-pitch note) applies to the whole note.
    */
-  const resolveNarrowedPitchIndex = (location: NoteLocation, pressY: number): number | undefined => {
+  const resolveNarrowedPitchIndex = (location: NoteLocation, pressX: number, pressY: number): number | undefined => {
     const isSameNoteAlreadySelected =
       selected &&
       selected.measureIndex === location.measureIndex &&
@@ -681,7 +691,7 @@ function StaffEditorInner({
     const hb = renderResultRef.current?.noteHitboxes.find(
       (n) => n.measureIndex === location.measureIndex && n.clef === location.clef && n.noteIndex === location.noteIndex,
     );
-    return hb ? nearestPitchIndexAt(hb, pressY) : undefined;
+    return hb ? nearestPitchIndexAt(hb, pressX, pressY) : undefined;
   };
 
   /**
@@ -1219,6 +1229,18 @@ function StaffEditorInner({
         pickedChords.push({ measureIndex: hb.measureIndex, chordId: hb.chordId });
       });
       onMarqueeChordSelect(pickedChords);
+      // A lyric syllable counts as selected the same way (same box used for
+      // click hit-testing, see findLyricAt).
+      const pickedLyrics: { measureIndex: number; lyricId: string }[] = [];
+      result.lyricHitboxes.forEach((hb) => {
+        const lx0 = hb.x - hb.halfWidth;
+        const lx1 = hb.x + hb.halfWidth;
+        const ly0 = hb.y - 12;
+        const ly1 = hb.y + 12;
+        if (lx1 < x0 || lx0 > x1 || ly1 < y0 || ly0 > y1) return;
+        pickedLyrics.push({ measureIndex: hb.measureIndex, lyricId: hb.lyricId });
+      });
+      onMarqueeLyricSelect(pickedLyrics);
       suppressClickRef.current = true;
       return;
     }
@@ -1451,7 +1473,7 @@ function StaffEditorInner({
       }
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
-      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.y);
+      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gesture: Extract<MouseGesture, { kind: 'note' }> = {
         kind: 'note',
@@ -1717,7 +1739,7 @@ function StaffEditorInner({
       event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
-      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.y);
+      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',

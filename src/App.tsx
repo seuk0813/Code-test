@@ -118,6 +118,8 @@ function App() {
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
   // Chord symbols multi-selected via the same shift+drag rubber-band, for batch delete.
   const [marqueeChords, setMarqueeChords] = useState<{ measureIndex: number; chordId: string }[]>([]);
+  // Lyric syllables multi-selected via the same shift+drag rubber-band, for batch delete.
+  const [marqueeLyrics, setMarqueeLyrics] = useState<{ measureIndex: number; lyricId: string }[]>([]);
   const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent; measureOffset: number }[]>([]);
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
@@ -225,6 +227,7 @@ function App() {
       setSelectedPitchIndex(pitchIndex ?? null);
       setMarquee([]);
       setMarqueeChords([]);
+      setMarqueeLyrics([]);
       justPlacedRef.current = false;
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       if (note) {
@@ -301,6 +304,7 @@ function App() {
       setSelectedPitchIndex(null);
       setMarquee([]);
       setMarqueeChords([]);
+      setMarqueeLyrics([]);
       // This note is now eligible to chain into the next one via Left/Right
       // (see justPlacedRef) — cleared as soon as the selection moves away
       // from it through any other path.
@@ -604,6 +608,13 @@ function App() {
     setMarqueeChords([]);
   }, [marqueeChords, setScore]);
 
+  /** Delete/Backspace with a marquee selection also removes every selected lyric syllable. */
+  const handleDeleteMarqueeLyrics = useCallback(() => {
+    if (marqueeLyrics.length === 0) return;
+    setScore((prev) => marqueeLyrics.reduce((s, { measureIndex, lyricId }) => removeLyricFromScore(s, measureIndex, lyricId), prev));
+    setMarqueeLyrics([]);
+  }, [marqueeLyrics, setScore]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -630,11 +641,15 @@ function App() {
         handlePasteNotes();
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (marquee.length > 0 || marqueeChords.length > 0 || selected)) {
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        (marquee.length > 0 || marqueeChords.length > 0 || marqueeLyrics.length > 0 || selected)
+      ) {
         e.preventDefault();
-        if (marquee.length > 0 || marqueeChords.length > 0) {
+        if (marquee.length > 0 || marqueeChords.length > 0 || marqueeLyrics.length > 0) {
           if (marquee.length > 0) handleDeleteMarquee();
           if (marqueeChords.length > 0) handleDeleteMarqueeChords();
+          if (marqueeLyrics.length > 0) handleDeleteMarqueeLyrics();
         } else if (selected) {
           deleteNoteAndSelectAdjacent(selected);
         }
@@ -682,7 +697,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, marqueeChords, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -711,6 +726,7 @@ function App() {
     setSelectedPitchIndex(null);
     setMarquee([]);
     setMarqueeChords([]);
+    setMarqueeLyrics([]);
     justPlacedRef.current = false;
   }, []);
 
@@ -727,6 +743,15 @@ function App() {
   /** Commits a rubber-band multi-selection of chord symbols (mirrors handleMarqueeSelect for notes). */
   const handleMarqueeChordSelect = useCallback((items: { measureIndex: number; chordId: string }[]) => {
     setMarqueeChords(items);
+    if (items.length > 0) {
+      setSelected(null);
+      setSelectedPitchIndex(null);
+    }
+  }, []);
+
+  /** Commits a rubber-band multi-selection of lyric syllables (mirrors handleMarqueeSelect for notes). */
+  const handleMarqueeLyricSelect = useCallback((items: { measureIndex: number; lyricId: string }[]) => {
+    setMarqueeLyrics(items);
     if (items.length > 0) {
       setSelected(null);
       setSelectedPitchIndex(null);
@@ -1126,6 +1151,7 @@ function App() {
     setSelectedPitchIndex(null);
     setMarquee([]);
     setMarqueeChords([]);
+    setMarqueeLyrics([]);
     setFocusedMeasureIndex(null);
     setPlaybackStartBeat(0);
   }, [setScore]);
@@ -1196,6 +1222,8 @@ function App() {
         onMarqueeSelect={handleMarqueeSelect}
         marqueeChords={marqueeChords}
         onMarqueeChordSelect={handleMarqueeChordSelect}
+        marqueeLyrics={marqueeLyrics}
+        onMarqueeLyricSelect={handleMarqueeLyricSelect}
         onPreviewLockChange={(v) => {
           previewLockedRef.current = v;
         }}

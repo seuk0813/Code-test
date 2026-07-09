@@ -201,6 +201,14 @@ export interface NoteHitbox {
   stemX: number;
   /** Y of each notehead (a chord has several), for pitch-aware click hit-testing. */
   ys: number[];
+  /**
+   * X of each notehead, paired index-for-index with `ys`. VexFlow shifts
+   * adjacent noteheads (a 2nd apart) left/right so they don't overlap —
+   * `centerX` is only the note's own nominal column, so a chord tone that
+   * got shifted needs its own X for accurate click hit-testing. Falls back
+   * to `centerX` for any pitch VexFlow didn't report a notehead for.
+   */
+  xs: number[];
 }
 
 export interface StaffHitbox {
@@ -645,6 +653,13 @@ export function renderScore(
                 // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
               }
             }
+            const xs = ys.map((_, pitchIndex) => {
+              try {
+                return sn.noteHeads[pitchIndex]?.getAbsoluteX() ?? centerXs[noteIndex];
+              } catch {
+                return centerXs[noteIndex];
+              }
+            });
             const hb: NoteHitbox = {
               measureIndex,
               clef,
@@ -652,6 +667,7 @@ export function renderScore(
               centerX: centerXs[noteIndex],
               stemX,
               ys,
+              xs,
             };
             noteHitboxes.push(hb);
 
@@ -1035,8 +1051,7 @@ export function resolveClick(result: RenderResult, x: number, y: number): ClickR
     (n) =>
       n.measureIndex === staff.measureIndex &&
       n.clef === staff.clef &&
-      Math.abs(n.centerX - x) < NOTE_HIT_RADIUS &&
-      n.ys.some((ny) => Math.abs(ny - y) < yRadius),
+      n.ys.some((ny, i) => Math.abs((n.xs[i] ?? n.centerX) - x) < NOTE_HIT_RADIUS && Math.abs(ny - y) < yRadius),
   );
   if (hitNote) {
     return { type: 'select', measureIndex: hitNote.measureIndex, clef: hitNote.clef, noteIndex: hitNote.noteIndex };
@@ -1104,12 +1119,13 @@ export function findOverflowMarkAt(result: RenderResult, x: number, y: number): 
   );
 }
 
-/** Index of the pitch (within a note's own `pitches`) nearest a Y position — used to narrow a chord selection to a specific pitch. */
-export function nearestPitchIndexAt(hb: NoteHitbox, y: number): number {
+/** Index of the pitch (within a note's own `pitches`) nearest a point — used to narrow a chord selection to a specific pitch. */
+export function nearestPitchIndexAt(hb: NoteHitbox, x: number, y: number): number {
   let best = 0;
   let bestDist = Infinity;
   hb.ys.forEach((py, i) => {
-    const d = Math.abs(py - y);
+    const px = hb.xs[i] ?? hb.centerX;
+    const d = Math.hypot(px - x, py - y);
     if (d < bestDist) {
       bestDist = d;
       best = i;
@@ -1121,7 +1137,7 @@ export function nearestPitchIndexAt(hb: NoteHitbox, y: number): number {
 /** All notes within a generous radius of a point, nearest first — used by note-select mode to pick the closest existing note to a tap. */
 export function findNearbyNotesAt(result: RenderResult, x: number, y: number, radius: number): NoteHitbox[] {
   return result.noteHitboxes
-    .map((n) => ({ n, d: Math.min(...n.ys.map((ny) => Math.hypot(n.centerX - x, ny - y))) }))
+    .map((n) => ({ n, d: Math.min(...n.ys.map((ny, i) => Math.hypot((n.xs[i] ?? n.centerX) - x, ny - y))) }))
     .filter(({ d }) => d < radius)
     .sort((a, b) => a.d - b.d)
     .map(({ n }) => n);
