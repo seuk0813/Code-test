@@ -579,7 +579,14 @@ export function renderScore(
               const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
               const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
               const beamGroups = computeBeamNoteGroups(notes, staveNotes, pulseBeats);
-              beams = beamGroups.map((group) => new Beam(group));
+              // autoStem=true: each note's own StaveNote already picked its
+              // OWN stem direction independently (autoStem on StaveNote), so
+              // two notes straddling the middle line in the same beam group
+              // could end up with opposite stem directions — a real notation
+              // error that renders as a squashed beam with a near-zero-length
+              // stem on one note. Beam(notes, true) recomputes and forces one
+              // consistent direction for the whole group, like real engraving.
+              beams = beamGroups.map((group) => new Beam(group, true));
             } catch {
               // Beaming is a visual nicety; ignore failures on unusual groupings.
             }
