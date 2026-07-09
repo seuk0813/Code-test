@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DURATION_LABELS, measureCapacityBeats } from '../lib/scoreUtils';
+import { CHORD_QUALITY_LABELS, DURATION_LABELS, measureCapacityBeats, measureStartBeat, pickupTrailingMismatch } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
@@ -185,8 +185,12 @@ interface ToolbarProps {
   /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
   cKeyBasedAccidentals: boolean;
   onToggleCKeyBasedAccidentals: () => void;
-  /** Current seek/playback bar position in beats from the start of the score — the "못갖춘마디" toggle captures this as the pickup measure's length when pressed. */
+  /** Current seek/playback bar position in beats from the start of the score — the "못갖춘마디"/"마지막 마디" toggles capture this as the split point when pressed. */
   seekBeat: number;
+  /** Splits/merges the first measure into a 못갖춘마디 (pickup) at the current seek bar position. */
+  onTogglePickupMeasure: () => void;
+  /** Mirrors onTogglePickupMeasure for a trailing partial closing measure at the end of the piece. */
+  onToggleTrailingMeasure: () => void;
 }
 
 export function Toolbar({
@@ -206,6 +210,8 @@ export function Toolbar({
   cKeyBasedAccidentals,
   onToggleCKeyBasedAccidentals,
   seekBeat,
+  onTogglePickupMeasure,
+  onToggleTrailingMeasure,
 }: ToolbarProps) {
   const [chordRootIndex, setChordRootIndex] = useState(0);
   const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
@@ -261,14 +267,15 @@ export function Toolbar({
   };
 
   /**
-   * 못갖춘마디 toggle: OFF→ON captures the CURRENT seek bar position (in
-   * beats from the start) as the first measure's pickup length — drag the
-   * seek bar to where the pickup content should end, then press this. ON→OFF
-   * just clears it, restoring a normal full first measure.
+   * 못갖춘마디 toggle: OFF→ON splits the first measure at the CURRENT seek
+   * bar position (in beats from the start) into a short pickup + a fresh
+   * normal measure holding the rest — drag the seek bar to where the pickup
+   * content should end, then press this. ON→OFF merges them back into one
+   * normal first measure.
    */
   const handleTogglePickupMeasure = () => {
     if (score.pickupBeats !== undefined) {
-      onScoreMetaChange({ pickupBeats: undefined });
+      onTogglePickupMeasure();
       return;
     }
     const capacity = measureCapacityBeats(score.timeSignature);
@@ -276,8 +283,26 @@ export function Toolbar({
       window.alert('먼저 재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 다시 눌러주세요.');
       return;
     }
-    onScoreMetaChange({ pickupBeats: seekBeat });
+    onTogglePickupMeasure();
   };
+
+  /** Mirrors handleTogglePickupMeasure for a trailing partial closing measure at the end of the piece. */
+  const handleToggleTrailingMeasure = () => {
+    if (score.trailingBeats !== undefined) {
+      onToggleTrailingMeasure();
+      return;
+    }
+    const capacity = measureCapacityBeats(score.timeSignature);
+    const lastIndex = score.measures.length - 1;
+    const within = seekBeat - measureStartBeat(score, lastIndex);
+    if (within <= 1e-6 || within >= capacity - 1e-6) {
+      window.alert('먼저 재생 바를 마지막 마디 안의 원하는 위치로 옮긴 뒤 다시 눌러주세요.');
+      return;
+    }
+    onToggleTrailingMeasure();
+  };
+
+  const pickupMismatch = pickupTrailingMismatch(score);
 
   return (
     <div className="toolbar">
@@ -305,11 +330,28 @@ export function Toolbar({
           title={
             score.pickupBeats !== undefined
               ? '다시 누르면 못갖춘마디를 해제하고 첫 마디를 원래 길이로 되돌립니다'
-              : '재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 누르면, 그 위치까지가 못갖춘마디 길이로 고정됩니다'
+              : '재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 누르면, 그 위치에서 마디가 나뉘어 앞부분이 못갖춘마디가 됩니다'
           }
         >
           못갖춘마디
         </button>
+        <button
+          className={`tool-icon-btn ${score.trailingBeats !== undefined ? 'active' : ''}`}
+          onClick={handleToggleTrailingMeasure}
+          aria-label="마지막 마디"
+          title={
+            score.trailingBeats !== undefined
+              ? '다시 누르면 마지막 마디 나눔을 해제하고 하나의 정상 마디로 되돌립니다'
+              : '재생 바를 마지막 마디 안의 원하는 위치로 옮긴 뒤 누르면, 그 위치에서 마디가 나뉘어 뒷부분이 짧은 마지막 마디가 됩니다'
+          }
+        >
+          마지막 마디
+        </button>
+        {pickupMismatch && (
+          <span className="pickup-mismatch-warning" title="못갖춘마디와 마지막 마디의 박자를 합치면 한 마디 박자와 같아야 합니다">
+            ⚠ 못갖춘마디+마지막 마디 박자 불일치
+          </span>
+        )}
         <label>
           조표
           <select

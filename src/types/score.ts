@@ -113,17 +113,28 @@ export interface Score {
   /** Measure indices after which a manual line break (new system) starts. */
   lineBreaks: number[];
   /**
-   * 못갖춘마디 (anacrusis/pickup measure): when set, the FIRST measure spans
-   * exactly this many beats instead of the full time-signature capacity, so
-   * playback/seek don't pad it with trailing silence. Set explicitly by the
-   * user — drag the seek bar to the desired position inside the first
-   * measure, then press the "못갖춘마디" toggle, which captures that beat
-   * position as the pickup length (see the toggle's handler in Toolbar and
-   * measureStartBeat/measureDurationBeats). Always strictly less than the
-   * time signature's capacity; undefined means no pickup (a normal, full
-   * first measure).
+   * 못갖춘마디 (anacrusis/pickup measure): when set, the FIRST measure is a
+   * real, distinct Measure that spans exactly this many beats instead of the
+   * full time-signature capacity — playback/seek don't pad it with trailing
+   * silence, and it gets its own slot when grouping measures into rows (see
+   * computeScoreRows: the first row holds the pickup plus up to 4 regular
+   * measures). Set explicitly by the user — drag the seek bar to the desired
+   * position inside the first measure, then press the "못갖춘마디" toggle,
+   * which SPLITS whatever was in the first measure at that point into a
+   * short pickup and a fresh normal measure holding the rest (see
+   * splitPickupMeasure/clearPickupMeasure in scoreUtils). Always strictly
+   * less than the time signature's capacity; undefined means no pickup.
    */
   pickupBeats?: number;
+  /**
+   * Mirrors `pickupBeats` at the other end of the piece: when set, the LAST
+   * measure is a short, real, distinct closing measure spanning exactly this
+   * many beats (see splitTrailingMeasure/clearTrailingMeasure). By classical
+   * convention, `pickupBeats` and `trailingBeats` together should add up to
+   * exactly one full measure's worth of beats — see pickupTrailingMismatch,
+   * which flags it when they don't.
+   */
+  trailingBeats?: number;
 }
 
 export interface NoteLocation {

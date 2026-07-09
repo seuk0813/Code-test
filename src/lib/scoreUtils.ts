@@ -75,26 +75,183 @@ export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature
 /**
  * How many beats the given measure spans for absolute-timing purposes (used
  * to place it on the playback/seek timeline) — the full time-signature
- * capacity for every ordinary measure. The exception is 못갖춘마디 (an
- * anacrusis/pickup measure): when `score.pickupBeats` is set, the very FIRST
- * measure instead spans exactly that many beats (a value the user chose
- * explicitly via the seek bar, see the "못갖춘마디" toggle in Toolbar), so it
- * doesn't get padded with trailing silence before the next measure starts.
+ * capacity for every ordinary measure. The exceptions are the two optional
+ * partial measures a piece can have: 못갖춘마디 (an anacrusis/pickup measure,
+ * `score.pickupBeats`) at index 0, and a mirrored trailing partial closing
+ * measure (`score.trailingBeats`) at the very last index — each spans
+ * exactly its declared beat count instead of the full capacity, so it
+ * doesn't get padded with trailing silence. Both are set explicitly by the
+ * user via the seek bar (see splitPickupMeasure/splitTrailingMeasure).
  */
 export function measureDurationBeats(score: Score, measureIndex: number): number {
   const capacity = measureCapacityBeats(score.timeSignature);
   if (measureIndex === 0 && score.pickupBeats !== undefined && score.measures.length > 0) {
     return Math.min(capacity, Math.max(0, score.pickupBeats));
   }
+  if (measureIndex === score.measures.length - 1 && score.trailingBeats !== undefined) {
+    return Math.min(capacity, Math.max(0, score.trailingBeats));
+  }
   return capacity;
 }
 
 /** Absolute beat offset where the given measure starts — see measureDurationBeats. */
 export function measureStartBeat(score: Score, measureIndex: number): number {
+  if (score.pickupBeats === undefined && score.trailingBeats === undefined) {
+    return measureIndex * measureCapacityBeats(score.timeSignature);
+  }
+  let start = 0;
+  for (let i = 0; i < measureIndex; i++) start += measureDurationBeats(score, i);
+  return start;
+}
+
+/**
+ * True when a 못갖춘마디(pickup) is set but its beats, combined with the last
+ * measure's (its declared `trailingBeats` if it's also been marked as a
+ * partial closing measure, else the full time-signature capacity), don't add
+ * up to one full measure's worth of beats — the classical convention that a
+ * pickup "borrows" beats from the piece's closing measure. Surfaced as a
+ * warning in Toolbar next to the 못갖춘마디 toggle.
+ */
+export function pickupTrailingMismatch(score: Score): boolean {
+  if (score.pickupBeats === undefined) return false;
   const capacity = measureCapacityBeats(score.timeSignature);
-  if (score.pickupBeats === undefined) return measureIndex * capacity;
-  if (measureIndex <= 0) return 0;
-  return measureDurationBeats(score, 0) + (measureIndex - 1) * capacity;
+  const lastBeats = score.trailingBeats ?? capacity;
+  return Math.abs(score.pickupBeats + lastBeats - capacity) > 1e-6;
+}
+
+function clampMeasureOffset(x: number): number {
+  return Math.min(0.97, Math.max(0.03, x));
+}
+
+interface MeasureSplitHalf {
+  treble: StaffMeasure;
+  bass: StaffMeasure;
+  chords: ChordSymbol[];
+  lyrics: LyricSyllable[];
+}
+
+/** Splits a measure's content at `splitBeat` (0..capacity) into a head half (everything before) and a tail half (everything from splitBeat onward). Notes split by cumulative onset; chord/lyric offsets (fractions of the whole measure) are rescaled to fractions of whichever half they land in. */
+function splitMeasureContent(measure: Measure, splitBeat: number, capacity: number): { head: MeasureSplitHalf; tail: MeasureSplitHalf } {
+  const splitStaff = (sm: StaffMeasure): { head: StaffMeasure; tail: StaffMeasure } => {
+    let t = 0;
+    const head: NoteEvent[] = [];
+    const tail: NoteEvent[] = [];
+    sm.notes.forEach((n) => {
+      if (t < splitBeat - 1e-6) head.push(n);
+      else tail.push(n);
+      t += noteBeats(n);
+    });
+    return { head: { notes: head }, tail: { notes: tail } };
+  };
+  const treble = splitStaff(measure.treble);
+  const bass = splitStaff(measure.bass);
+  const frac = Math.min(0.999, Math.max(0.001, splitBeat / capacity));
+  function splitByOffset<T extends { offset: number }>(items: T[]): { head: T[]; tail: T[] } {
+    const head: T[] = [];
+    const tail: T[] = [];
+    items.forEach((item) => {
+      if (item.offset < frac) head.push({ ...item, offset: clampMeasureOffset(item.offset / frac) });
+      else tail.push({ ...item, offset: clampMeasureOffset((item.offset - frac) / (1 - frac)) });
+    });
+    return { head, tail };
+  }
+  const chords = splitByOffset(measure.chords);
+  const lyrics = splitByOffset(measure.lyrics);
+  return {
+    head: { treble: treble.head, bass: bass.head, chords: chords.head, lyrics: lyrics.head },
+    tail: { treble: treble.tail, bass: bass.tail, chords: chords.tail, lyrics: lyrics.tail },
+  };
+}
+
+/**
+ * Creates the 못갖춘마디: splits the first measure's content at `splitBeat`
+ * (captured from the current seek bar position) into a short pickup — kept
+ * at index 0 — and a fresh full-capacity measure holding the rest, inserted
+ * right after. See the "못갖춘마디" toggle in Toolbar.
+ */
+export function splitPickupMeasure(score: Score, splitBeat: number): Score {
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const clamped = Math.min(capacity - 0.01, Math.max(0.01, splitBeat));
+  const original = score.measures[0];
+  if (!original) return score;
+  const { head, tail } = splitMeasureContent(original, clamped, capacity);
+  const pickupMeasure: Measure = { id: original.id, ...head };
+  const restMeasure: Measure = { id: nextId('m'), ...tail };
+  const measures = [pickupMeasure, restMeasure, ...score.measures.slice(1)];
+  const lineBreaks = score.lineBreaks.map((b) => b + 1);
+  return { ...score, measures, lineBreaks, pickupBeats: clamped };
+}
+
+/** Undoes splitPickupMeasure: merges the pickup and the measure after it back into one normal first measure. */
+export function clearPickupMeasure(score: Score): Score {
+  if (score.pickupBeats === undefined || score.measures.length < 2) return { ...score, pickupBeats: undefined };
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const head = score.measures[0];
+  const tail = score.measures[1];
+  const frac = Math.min(0.999, Math.max(0.001, score.pickupBeats / capacity));
+  function mergeOffsets<T extends { offset: number }>(headItems: T[], tailItems: T[]): T[] {
+    return [
+      ...headItems.map((it) => ({ ...it, offset: clampMeasureOffset(it.offset * frac) })),
+      ...tailItems.map((it) => ({ ...it, offset: clampMeasureOffset(frac + it.offset * (1 - frac)) })),
+    ];
+  }
+  const merged: Measure = {
+    id: head.id,
+    treble: { notes: [...head.treble.notes, ...tail.treble.notes] },
+    bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
+    chords: mergeOffsets(head.chords, tail.chords),
+    lyrics: mergeOffsets(head.lyrics, tail.lyrics),
+  };
+  const measures = [merged, ...score.measures.slice(2)];
+  const lineBreaks = score.lineBreaks.filter((b) => b !== 1).map((b) => (b > 1 ? b - 1 : b));
+  return { ...score, measures, lineBreaks, pickupBeats: undefined };
+}
+
+/**
+ * Creates a trailing partial closing measure: splits the last measure's
+ * content at `splitBeat` (a beat position within that measure, captured from
+ * the current seek bar position) into a fresh full-capacity measure — inserted
+ * just before it — holding everything before the split, and a short trailing
+ * measure holding the rest, kept as the new last measure. Mirrors
+ * splitPickupMeasure at the other end of the piece.
+ */
+export function splitTrailingMeasure(score: Score, splitBeat: number): Score {
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const clamped = Math.min(capacity - 0.01, Math.max(0.01, splitBeat));
+  const lastIndex = score.measures.length - 1;
+  const original = score.measures[lastIndex];
+  if (!original) return score;
+  const { head, tail } = splitMeasureContent(original, clamped, capacity);
+  const headMeasure: Measure = { id: nextId('m'), ...head };
+  const trailingMeasure: Measure = { id: original.id, ...tail };
+  const measures = [...score.measures.slice(0, lastIndex), headMeasure, trailingMeasure];
+  return { ...score, measures, trailingBeats: capacity - clamped };
+}
+
+/** Undoes splitTrailingMeasure: merges the trailing measure and the one before it back into one normal last measure. */
+export function clearTrailingMeasure(score: Score): Score {
+  if (score.trailingBeats === undefined || score.measures.length < 2) return { ...score, trailingBeats: undefined };
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const lastIndex = score.measures.length - 1;
+  const head = score.measures[lastIndex - 1];
+  const tail = score.measures[lastIndex];
+  const splitBeat = capacity - score.trailingBeats;
+  const frac = Math.min(0.999, Math.max(0.001, splitBeat / capacity));
+  function mergeOffsets<T extends { offset: number }>(headItems: T[], tailItems: T[]): T[] {
+    return [
+      ...headItems.map((it) => ({ ...it, offset: clampMeasureOffset(it.offset * frac) })),
+      ...tailItems.map((it) => ({ ...it, offset: clampMeasureOffset(frac + it.offset * (1 - frac)) })),
+    ];
+  }
+  const merged: Measure = {
+    id: tail.id,
+    treble: { notes: [...head.treble.notes, ...tail.treble.notes] },
+    bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
+    chords: mergeOffsets(head.chords, tail.chords),
+    lyrics: mergeOffsets(head.lyrics, tail.lyrics),
+  };
+  const measures = [...score.measures.slice(0, lastIndex - 1), merged];
+  return { ...score, measures, trailingBeats: undefined };
 }
 
 function emptyStaffMeasure(): StaffMeasure {
@@ -547,6 +704,42 @@ export function computeRows(measureCount: number, lineBreaks: number[], maxPerRo
     }
   }
   if (row.length > 0 || rows.length === 0) rows.push(row);
+  return rows;
+}
+
+/**
+ * Like computeRows, but pickup/trailing-aware: a 못갖춘마디 (pickup) first
+ * measure rides along as an extra slot on the first row (pickup + up to 4
+ * regular measures) instead of competing for one of the 4 regular slots, and
+ * a trailing partial closing measure is never left alone on the last row —
+ * it's pulled back into the row before it (up to 4 regular + the trailing
+ * measure). See the "못갖춘마디" toggle in Toolbar.
+ */
+export function computeScoreRows(
+  measureCount: number,
+  lineBreaks: number[],
+  hasPickup: boolean,
+  hasTrailing: boolean,
+  maxPerRow = 4,
+): number[][] {
+  const firstRowCap = hasPickup ? maxPerRow + 1 : maxPerRow;
+  const breaks = new Set(lineBreaks.filter((i) => i >= 0 && i < measureCount - 1));
+  const rows: number[][] = [];
+  let row: number[] = [];
+  for (let i = 0; i < measureCount; i++) {
+    row.push(i);
+    const cap = rows.length === 0 ? firstRowCap : maxPerRow;
+    if (breaks.has(i) || row.length >= cap) {
+      rows.push(row);
+      row = [];
+    }
+  }
+  if (row.length > 0 || rows.length === 0) rows.push(row);
+
+  if (hasTrailing && rows.length >= 2 && rows[rows.length - 1].length === 1) {
+    const trailingRow = rows.pop()!;
+    rows[rows.length - 1] = [...rows[rows.length - 1], ...trailingRow];
+  }
   return rows;
 }
 

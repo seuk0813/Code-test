@@ -12,6 +12,8 @@ import {
   addNoteToScore,
   adjacentIndexAfterDelete,
   CHORD_QUALITY_SUFFIX,
+  clearPickupMeasure,
+  clearTrailingMeasure,
   createEmptyMeasure,
   createEmptyScore,
   createNote,
@@ -33,7 +35,9 @@ import {
   removeLyricFromScore,
   removeMeasure,
   removeNoteFromScore,
+  splitPickupMeasure,
   splitPitchFromNote,
+  splitTrailingMeasure,
   togglePitchInNote,
   updateNoteInScore,
 } from './lib/scoreUtils';
@@ -475,6 +479,25 @@ function App() {
   const handleFocusMeasure = useCallback((measureIndex: number) => {
     setFocusedMeasureIndex(measureIndex);
   }, []);
+
+  /** 못갖춘마디 toggle: splits the first measure at the current seek bar
+   * position into a short pickup + a fresh normal measure holding the rest
+   * (or, if a pickup already exists, merges them back together). Toolbar
+   * validates the seek bar is actually positioned inside the first measure
+   * before calling this. */
+  const handleTogglePickupMeasure = useCallback(() => {
+    setScore((prev) => (prev.pickupBeats !== undefined ? clearPickupMeasure(prev) : splitPickupMeasure(prev, playbackStartBeat)));
+  }, [playbackStartBeat, setScore]);
+
+  /** Mirrors handleTogglePickupMeasure for a trailing partial closing measure at the end of the piece. */
+  const handleToggleTrailingMeasure = useCallback(() => {
+    setScore((prev) => {
+      if (prev.trailingBeats !== undefined) return clearTrailingMeasure(prev);
+      const lastIndex = prev.measures.length - 1;
+      const splitBeat = playbackStartBeat - measureStartBeat(prev, lastIndex);
+      return splitTrailingMeasure(prev, splitBeat);
+    });
+  }, [playbackStartBeat, setScore]);
 
   /** Sets (or clears, when finger is null) the fingering number on the selected
    * note's pitch — the narrowed pitch if one is picked out, else the primary. */
@@ -1206,6 +1229,8 @@ function App() {
           cKeyBasedAccidentals={cKeyBasedAccidentals}
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
           seekBeat={playbackStartBeat}
+          onTogglePickupMeasure={handleTogglePickupMeasure}
+          onToggleTrailingMeasure={handleToggleTrailingMeasure}
         />
       </div>
       <div className="status-line">

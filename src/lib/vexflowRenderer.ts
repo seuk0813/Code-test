@@ -2,7 +2,7 @@ import { Beam, Curve, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote
 import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
-  computeRows,
+  computeScoreRows,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   measureCapacityBeats,
@@ -447,7 +447,13 @@ export function renderScore(
   const effectiveSelected = playingLocations ? null : selected;
   container.innerHTML = '';
 
-  const rows = computeRows(score.measures.length, score.lineBreaks, MEASURES_PER_ROW);
+  const rows = computeScoreRows(
+    score.measures.length,
+    score.lineBreaks,
+    score.pickupBeats !== undefined,
+    score.trailingBeats !== undefined,
+    MEASURES_PER_ROW,
+  );
 
   const rowWidths = rows.map((row) =>
     row.reduce((sum, _, localIndex) => sum + (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH), 20),

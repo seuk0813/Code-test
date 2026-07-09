@@ -262,6 +262,12 @@
   display: block;
 }
 
+.pickup-mismatch-warning {
+  font-size: 12px;
+  color: #c92a2a;
+  white-space: nowrap;
+}
+
 .tool-glyph {
   font-size: 17px;
   line-height: 1;
