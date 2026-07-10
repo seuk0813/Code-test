@@ -105,18 +105,18 @@ export function measureStartBeat(score: Score, measureIndex: number): number {
 }
 
 /**
- * True when a 못갖춘마디(pickup) is set but its beats, combined with the last
- * measure's (its declared `trailingBeats` if it's also been marked as a
- * partial closing measure, else the full time-signature capacity), don't add
- * up to one full measure's worth of beats — the classical convention that a
- * pickup "borrows" beats from the piece's closing measure. Surfaced as a
- * warning in Toolbar next to the 못갖춘마디 toggle.
+ * True only when BOTH a 못갖춘마디(pickup) and a trailing partial closing
+ * measure are set, but their beats don't add up to one full measure's worth
+ * — the classical convention that a pickup "borrows" beats from the piece's
+ * closing measure. A pickup with no trailing measure has nothing to borrow
+ * from, so it's never flagged (the mismatch only makes sense once the user
+ * has deliberately paired the two). Surfaced as a warning in Toolbar next to
+ * the 못갖춘마디 toggle.
  */
 export function pickupTrailingMismatch(score: Score): boolean {
-  if (score.pickupBeats === undefined) return false;
+  if (score.pickupBeats === undefined || score.trailingBeats === undefined) return false;
   const capacity = measureCapacityBeats(score.timeSignature);
-  const lastBeats = score.trailingBeats ?? capacity;
-  return Math.abs(score.pickupBeats + lastBeats - capacity) > 1e-6;
+  return Math.abs(score.pickupBeats + score.trailingBeats - capacity) > 1e-6;
 }
 
 function clampMeasureOffset(x: number): number {
