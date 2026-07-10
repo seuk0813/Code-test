@@ -370,6 +370,23 @@ export function pitchToLine(clef: Clef, letter: Pitch['letter'], octave: number)
 }
 
 /**
+ * Derives the melody-staff notes shown by the lead-sheet layout (see
+ * Score.showMelodyStaff): the same rhythm as the treble staff, but chords
+ * collapsed to just their highest pitch (the customary "top line" of a piano
+ * part's right hand). Rests and already-single-pitch notes pass through
+ * unchanged. Purely a rendering-time view — never stored or edited directly.
+ */
+export function deriveMelodyNotes(notes: NoteEvent[]): NoteEvent[] {
+  return notes.map((note) => {
+    if (note.isRest || note.pitches.length <= 1) return note;
+    const top = note.pitches.reduce((best, p) =>
+      pitchToLine('treble', p.letter, p.octave) > pitchToLine('treble', best.letter, best.octave) ? p : best,
+    );
+    return { ...note, pitches: [top] };
+  });
+}
+
+/**
  * VexFlow's own autoStem rule (see calculateOptimalStemDirection): a note
  * whose stave line is below 3 (the space just above the middle line) points
  * up; line 3 and above points down. Exposed so the UI can explain the exact

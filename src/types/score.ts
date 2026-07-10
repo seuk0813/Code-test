@@ -135,6 +135,15 @@ export interface Score {
    * which flags it when they don't.
    */
   trailingBeats?: number;
+  /**
+   * When true, each row additionally shows a standalone melody staff above
+   * the piano grand staff — chords above it, lyrics below it — mirroring the
+   * top note of each treble chord (see deriveMelodyNotes). The piano staff
+   * itself keeps its notes; this is a display-only lead-sheet-style layout
+   * toggle, not a separate composition. Undefined/false = the original
+   * layout (chords/lyrics directly on the piano treble staff).
+   */
+  showMelodyStaff?: boolean;
 }
 
 export interface NoteLocation {

@@ -1,8 +1,9 @@
-import { Beam, Curve, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, StaveTie, Voice } from 'vexflow';
+import { Accidental as VexAccidental, Beam, Curve, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, StaveTie, Voice } from 'vexflow';
 import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeScoreRows,
+  deriveMelodyNotes,
   isStaffMeasureFull,
   measureCapacityBeats,
   noteBeats,
@@ -146,18 +147,19 @@ function measureSlotXRange(indexInRow: number): { x0: number; x1: number } {
 
 /**
  * Per-slot widths for one row. Normally each slot just uses its fixed base
- * width. But a row holding the pickup or trailing partial measure has
- * MEASURES_PER_ROW + 1 slots — one more than a normal row — so if every slot
- * kept its base width, that row would render wider than the rest and stick
- * out past the normal right edge. Instead the partial slot is shrunk toward
- * its beat fraction of a full measure (with a floor so glyphs/notes still
- * fit) and the freed width is redistributed across the row's other slots,
- * proportional to their own base widths, so the row's total width always
- * matches a normal MEASURES_PER_ROW-measure row.
+ * width. But a row holding the pickup or trailing partial measure needs that
+ * one slot narrower (proportional to its own beat fraction, not a full
+ * measure's worth) — with the freed width redistributed across the row's
+ * OTHER measures so they stay evenly sized, whatever their own count.
+ * Applies regardless of how many measures the row happens to hold: a row
+ * squeezed to MEASURES_PER_ROW + 1 slots (the pickup/trailing measure plus a
+ * full normal row) targets the SAME total width as any other full row, so it
+ * doesn't stick out past the normal right edge; a shorter row (fewer total
+ * measures in the piece) just keeps its own natural total width instead of
+ * being artificially stretched to match a full row.
  */
 function computeRowMeasureWidths(row: number[], score: Score, capacity: number): number[] {
   const baseWidths = row.map((_, localIndex) => (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH));
-  if (row.length <= MEASURES_PER_ROW) return baseWidths;
 
   const lastScoreIndex = score.measures.length - 1;
   const partialLocalIndex = row.findIndex((measureIndex, localIndex) => {
@@ -178,9 +180,13 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
   const minWidth = partialLocalIndex === 0 ? 150 : 90;
   const partialWidth = Math.max(partialBase * fraction, minWidth);
 
-  const targetRowWidth = FIRST_MEASURE_WIDTH + (MEASURES_PER_ROW - 1) * MEASURE_WIDTH;
-  const remaining = targetRowWidth - partialWidth;
   const otherBaseSum = baseWidths.reduce((sum, w, i) => (i === partialLocalIndex ? sum : sum + w), 0);
+  if (otherBaseSum <= 0) return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w));
+
+  const naturalTotal = baseWidths.reduce((sum, w) => sum + w, 0);
+  const targetRowWidth =
+    row.length > MEASURES_PER_ROW ? FIRST_MEASURE_WIDTH + (MEASURES_PER_ROW - 1) * MEASURE_WIDTH : naturalTotal;
+  const remaining = targetRowWidth - partialWidth;
 
   return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w * (remaining / otherBaseSum)));
 }
@@ -193,6 +199,18 @@ const CHORD_BAND_Y = 58;
 const TREBLE_Y = 60;
 const BASS_Y = 185;
 const STAVE_TOP_MARGIN = 40;
+/**
+ * Lead-sheet layout (Score.showMelodyStaff): extra vertical space added to
+ * each row for the standalone melody staff (chord band + staff + lyric
+ * band) that sits above the piano grand staff, which itself shifts down by
+ * this same amount. See MELODY_CHORD_Y/MELODY_STAFF_Y below; the lyric band
+ * is positioned dynamically off the melody Stave's own geometry instead (its
+ * constructor Y sits up near the clef glyph, not the actual staff lines).
+ */
+const MELODY_BLOCK_HEIGHT = 150;
+/** Mirrors CHORD_BAND_Y's relationship to TREBLE_Y, but for the melody staff. */
+const MELODY_CHORD_Y = 58;
+const MELODY_STAFF_Y = 60;
 const NOTE_HIT_RADIUS = 16;
 export const MEASURES_PER_ROW = 4;
 /** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the title font size (see drawHeading's font-size). */
@@ -423,6 +441,27 @@ function buildStaveNotes(
   });
 }
 
+/**
+ * Builds StaveNotes for the read-only lead-sheet melody staff (see
+ * Score.showMelodyStaff / deriveMelodyNotes) — a simplified version of
+ * buildStaveNotes with none of the selection/drag/playback styling, since
+ * this staff is never clicked or edited directly. Accidentals are attached
+ * as real VexFlow modifiers here (unlike the treble/bass staves' manual
+ * text-based accidentals) because there's no free-X dragging on this staff
+ * to keep stable — VexFlow's own modifier layout is simpler and fine.
+ */
+function buildMelodyStaveNotes(notes: NoteEvent[]): StaveNote[] {
+  return notes.map((note) => {
+    const keys = note.isRest ? [REST_KEY.treble] : note.pitches.map(pitchToVexKey);
+    const staveNote = new StaveNote({ clef: 'treble', keys, duration: vexDurationString(note), autoStem: true });
+    if (note.dotted) Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
+    if (!note.isRest && note.pitches[0]?.accidental) {
+      staveNote.addModifier(new VexAccidental(note.pitches[0].accidental), 0);
+    }
+    return staveNote;
+  });
+}
+
 export interface DraggingNote {
   measureIndex: number;
   clef: Clef;
@@ -500,7 +539,9 @@ export function renderScore(
   // area (titleHitbox below) stays sized to just TITLE_BAND so the two don't
   // swallow each other's clicks.
   const titleBand = TITLE_BAND + COMPOSER_BAND;
-  const height = rows.length * ROW_HEIGHT + titleBand;
+  const leadSheet = score.showMelodyStaff === true;
+  const rowHeight = ROW_HEIGHT + (leadSheet ? MELODY_BLOCK_HEIGHT : 0);
+  const height = rows.length * rowHeight + titleBand;
 
   const renderer = new Renderer(container, Renderer.Backends.SVG);
   renderer.resize(width, height);
@@ -522,10 +563,11 @@ export function renderScore(
   };
 
   rows.forEach((row, rowIndex) => {
-    const rowY = rowIndex * ROW_HEIGHT + titleBand;
-    const chordY = rowY + CHORD_BAND_Y;
-    const trebleY = rowY + TREBLE_Y;
-    const bassY = rowY + BASS_Y;
+    const rowY = rowIndex * rowHeight + titleBand;
+    const chordY = rowY + (leadSheet ? MELODY_CHORD_Y : CHORD_BAND_Y);
+    const trebleY = rowY + (leadSheet ? TREBLE_Y + MELODY_BLOCK_HEIGHT : TREBLE_Y);
+    const bassY = rowY + (leadSheet ? BASS_Y + MELODY_BLOCK_HEIGHT : BASS_Y);
+    const melodyY = rowY + MELODY_STAFF_Y;
 
     let x = 10;
     row.forEach((measureIndex, localIndex) => {
@@ -553,6 +595,36 @@ export function renderScore(
 
       trebleStave.setContext(context).draw();
       bassStave.setContext(context).draw();
+
+      let melodyStave: Stave | null = null;
+      if (leadSheet) {
+        melodyStave = new Stave(x, melodyY, measureWidth);
+        if (isRowStart) {
+          melodyStave.addClef('treble');
+          if (score.keySignature !== 'C') melodyStave.addKeySignature(score.keySignature);
+        }
+        if (isPieceStart) {
+          melodyStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+        }
+        melodyStave.setContext(context).draw();
+
+        const melodyNotes = deriveMelodyNotes(measure.treble.notes);
+        const melodyStaveNotes = buildMelodyStaveNotes(melodyNotes);
+        if (melodyStaveNotes.length > 0) {
+          const melodyVoice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
+          melodyVoice.addTickables(melodyStaveNotes);
+          new Formatter().joinVoices([melodyVoice]).format([melodyVoice], measureWidth - (isRowStart ? 108 : 28));
+          melodyVoice.draw(context, melodyStave);
+          try {
+            const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+            const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
+            const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats);
+            beamGroups.map((group) => new Beam(group, true)).forEach((b) => b.setContext(context).draw());
+          } catch {
+            // Beaming is a visual nicety; ignore failures on unusual groupings.
+          }
+        }
+      }
 
       if (isRowStart) {
         new StaveConnector(trebleStave, bassStave).setType('brace').setContext(context).draw();
@@ -777,8 +849,13 @@ export function renderScore(
         measureWidth,
       });
 
-      // Lyric syllables in the band between the two staves.
-      const lyricY = midY + 5;
+      // Lyric syllables: below the standalone melody staff in lead-sheet
+      // layout, or in the band between the two piano staves otherwise.
+      // getYForLine(4) is the melody staff's own bottom line — computed from
+      // the real Stave geometry (like midY below), not a hardcoded offset
+      // from its constructor Y, since that Y sits up near the clef glyph's
+      // top rather than the actual staff lines.
+      const lyricY = leadSheet && melodyStave ? melodyStave.getYForLine(4) + 20 : midY + 5;
       (measure.lyrics ?? []).forEach((syllable: LyricSyllable) => {
         lyricHitboxes.push({
           measureIndex,
