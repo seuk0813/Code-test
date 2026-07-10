@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DURATION_LABELS, pickupTrailingMismatch } from '../lib/scoreUtils';
+import type { Accidental, ChordQuality, DurationValue, Pitch, ScaleDegreeLabel, Score } from '../types/score';
+import { CHORD_QUALITY_LABELS, DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
@@ -11,6 +11,21 @@ const ACCIDENTALS: { value: Accidental; label: string }[] = [
   { value: 'b', label: '♭' },
   { value: 'n', label: '♮' },
 ];
+
+/** Checkbox labels for the 음정 도수 표기 panel — see ScaleDegreeLabel. */
+const SCALE_DEGREE_LABEL_TEXT: Record<ScaleDegreeLabel, string> = {
+  '1': '1음',
+  '2': '2음',
+  '3': '3음',
+  '4': '4음',
+  '5': '5음',
+  '6': '6음',
+  '7': '7음',
+  b9: 'b9',
+  b5: 'b5',
+  '#5': '#5',
+  dim7: '디미니시7',
+};
 
 /** Note-shape parameters for each duration, drawn as a small inline SVG icon. */
 const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: number }> = {
@@ -324,6 +339,37 @@ export function Toolbar({
           >
             C키 기준 임시표
           </button>
+        )}
+        {showKeyOptions && (
+          <button
+            className={`tool-icon-btn ${score.showScaleDegrees ? 'active' : ''}`}
+            onClick={() => onScoreMetaChange({ showScaleDegrees: !score.showScaleDegrees })}
+            aria-label="음정 도수 표기"
+            title="켜면 각 음표 위에 그 순간의 코드를 기준으로 한 음정 도수(1,2,3...)를 표시합니다"
+          >
+            음정 도수 표기
+          </button>
+        )}
+        {showKeyOptions && score.showScaleDegrees && (
+          <div className="scale-degree-checkboxes">
+            {SCALE_DEGREE_LABELS.map((label) => {
+              const enabled = (score.scaleDegreeLabels ?? DEFAULT_SCALE_DEGREE_LABELS).includes(label);
+              return (
+                <label key={label} className="scale-degree-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={() => {
+                      const current = score.scaleDegreeLabels ?? DEFAULT_SCALE_DEGREE_LABELS;
+                      const next = enabled ? current.filter((l) => l !== label) : [...current, label];
+                      onScoreMetaChange({ scaleDegreeLabels: next });
+                    }}
+                  />
+                  {SCALE_DEGREE_LABEL_TEXT[label]}
+                </label>
+              );
+            })}
+          </div>
         )}
         <label className="tempo-field">
           템포

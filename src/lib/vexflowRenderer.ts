@@ -17,6 +17,7 @@ import {
 import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
+  computeScaleDegreeLabels,
   computeScoreRows,
   deriveMelodyNotes,
   isStaffMeasureFull,
@@ -141,6 +142,31 @@ function drawFingeringMarks(svg: SVGSVGElement, marks: FingeringMark[]): void {
     text.setAttribute('stroke', 'none');
     text.setAttribute('fill', mark.color ?? '#333');
     text.textContent = String(mark.finger);
+    svg.appendChild(text);
+  });
+}
+
+interface DegreeMark {
+  x: number;
+  y: number;
+  text: string;
+}
+
+/** Scale-degree labels (see Score.showScaleDegrees / scoreUtils.scaleDegreeFor),
+ * drawn just above each note's highest pitch — a small analysis annotation,
+ * not part of the note glyph itself. */
+function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
+  marks.forEach((mark) => {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(mark.x));
+    text.setAttribute('y', String(mark.y - 10));
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '12');
+    text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('stroke', 'none');
+    text.setAttribute('fill', '#2f9e44');
+    text.textContent = mark.text;
     svg.appendChild(text);
   });
 }
@@ -572,7 +598,9 @@ export interface DraggingNote {
  */
 function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], pulseBeats: number): StaveNote[][] {
   const groups: StaveNote[][] = [];
+  const groupIndices: number[][] = [];
   let current: StaveNote[] = [];
+  let currentIndices: number[] = [];
   let currentPulse = -1;
   let cumulative = 0;
   notes.forEach((note, i) => {
@@ -580,15 +608,47 @@ function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], puls
     const pulseIndex = Math.floor((cumulative + 1e-6) / pulseBeats);
     if (beamable && pulseIndex === currentPulse) {
       current.push(staveNotes[i]);
+      currentIndices.push(i);
     } else {
-      if (current.length > 1) groups.push(current);
+      if (current.length > 1) {
+        groups.push(current);
+        groupIndices.push(currentIndices);
+      }
       current = beamable ? [staveNotes[i]] : [];
+      currentIndices = beamable ? [i] : [];
       currentPulse = pulseIndex;
     }
     cumulative += noteBeats(note);
   });
-  if (current.length > 1) groups.push(current);
-  return groups;
+  if (current.length > 1) {
+    groups.push(current);
+    groupIndices.push(currentIndices);
+  }
+
+  // Adjacent beat-pulse groups that are ENTIRELY plain (non-dotted) 8th
+  // notes merge into one longer beam — e.g. 4 consecutive 8ths spanning two
+  // beats read as a single run rather than 2+2, matching how lead-sheet/pop
+  // engraving usually beams a half-measure of straight 8ths. Mixed-duration
+  // or 16th-note groups (item 115's beat-completing pairs) are untouched.
+  const merged: StaveNote[][] = [];
+  const isPureEighthGroup = (indices: number[]) => indices.every((idx) => notes[idx].duration === '8' && !notes[idx].dotted);
+  groups.forEach((group, gi) => {
+    const indices = groupIndices[gi];
+    const prev = merged[merged.length - 1];
+    const prevIndices = groupIndices[gi - 1];
+    if (
+      prev &&
+      prevIndices &&
+      prevIndices[prevIndices.length - 1] + 1 === indices[0] &&
+      isPureEighthGroup(prevIndices) &&
+      isPureEighthGroup(indices)
+    ) {
+      prev.push(...group);
+    } else {
+      merged.push([...group]);
+    }
+  });
+  return merged;
 }
 
 export function renderScore(
@@ -649,6 +709,8 @@ export function renderScore(
   const lyricBandHitboxes: LyricBandHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
+  const degreeMarks: DegreeMark[] = [];
+  const degreeLabels = computeScaleDegreeLabels(score);
   const connectStubs: ConnectStubMark[] = [];
   const connectChains: Record<Clef, { event: NoteEvent; staveNote: StaveNote; rowIndex: number; ys: number[] }[]> = {
     treble: [],
@@ -981,6 +1043,11 @@ export function renderScore(
             };
             noteHitboxes.push(hb);
 
+            const degreeText = degreeLabels.get(`${clef}:${measureIndex}:${noteIndex}`);
+            if (degreeText) {
+              degreeMarks.push({ x: centerXs[noteIndex], y: Math.min(...ys), text: degreeText });
+            }
+
             if (!note.isRest) {
               const isSelected =
                 effectiveSelected &&
@@ -1187,6 +1254,7 @@ export function renderScore(
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
+    drawDegreeMarks(svg, degreeMarks);
     drawConnectStubs(svg, connectStubs);
   }
 

@@ -9,6 +9,7 @@ import type {
   NoteEvent,
   NoteLocation,
   Pitch,
+  ScaleDegreeLabel,
   Score,
   StaffMeasure,
   TimeSignature,
@@ -108,6 +109,119 @@ export function measureStartBeat(score: Score, measureIndex: number): number {
   let start = 0;
   for (let i = 0; i < measureIndex; i++) start += measureDurationBeats(score, i);
   return start;
+}
+
+/** Every selectable scale-degree label (see ScaleDegreeLabel) — the checkbox list's full contents. */
+export const SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = ['1', '2', '3', '4', '5', '6', '7', 'b9', 'b5', '#5', 'dim7'];
+/** Checked by default when 표기 is first turned on — the plain diatonic 7, no altered/extended tones. */
+export const DEFAULT_SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = ['1', '2', '3', '4', '5', '6', '7'];
+
+const LETTER_PITCH_CLASS: Record<Pitch['letter'], number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+function pitchClass(letter: Pitch['letter'], accidental: Accidental): number {
+  const shift = accidental === '#' ? 1 : accidental === 'b' ? -1 : 0;
+  return (((LETTER_PITCH_CLASS[letter] + shift) % 12) + 12) % 12;
+}
+
+/** Semitones-from-root → { checkbox key, display text } — see ScaleDegreeLabel's
+ * doc comment for why '3'/'7' cover two semitones each and 'dim7'/'6' share one. */
+const DEGREE_TABLE: Record<number, { key: ScaleDegreeLabel; text: string }> = {
+  0: { key: '1', text: '1' },
+  1: { key: 'b9', text: 'b9' },
+  2: { key: '2', text: '2' },
+  3: { key: '3', text: 'b3' },
+  4: { key: '3', text: '3' },
+  5: { key: '4', text: '4' },
+  6: { key: 'b5', text: 'b5' },
+  7: { key: '5', text: '5' },
+  8: { key: '#5', text: '#5' },
+  9: { key: '6', text: '6' },
+  10: { key: '7', text: '7' },
+  11: { key: '7', text: '세모7' },
+};
+
+/** The scale-degree label text for `pitch` against a chord rooted at
+ * (`chordRoot`, `chordRootAccidental`) — e.g. D against a C-rooted chord is
+ * "2". Returns null when that particular degree's checkbox isn't in
+ * `enabledLabels` (see ScaleDegreeLabel/SCALE_DEGREE_LABELS), so it's simply
+ * not drawn. Octave-independent (only the pitch classes matter). */
+export function scaleDegreeFor(
+  pitch: Pick<Pitch, 'letter' | 'accidental'>,
+  chordRoot: Pitch['letter'],
+  chordRootAccidental: Accidental,
+  enabledLabels: ScaleDegreeLabel[],
+): string | null {
+  const semitone = (pitchClass(pitch.letter, pitch.accidental) - pitchClass(chordRoot, chordRootAccidental) + 12) % 12;
+  if (semitone === 9) {
+    if (enabledLabels.includes('dim7')) return 'dim7';
+    return enabledLabels.includes('6') ? '6' : null;
+  }
+  const entry = DEGREE_TABLE[semitone];
+  return entry && enabledLabels.includes(entry.key) ? entry.text : null;
+}
+
+/** Every chord symbol in the score, in playing order, with its absolute beat
+ * position (see measureStartBeat) — used to find whichever chord is
+ * "active" at any given note (see activeChordAt). A measure's EARLIEST chord
+ * (by offset) is snapped to that measure's own start beat, ignoring its own
+ * small cosmetic offset (new chords default to offset 0.1, a few pixels in
+ * from the barline, purely so the symbol doesn't collide with it) — that
+ * chord is meant to govern the whole measure from beat 0, matching how a
+ * lead-sheet player reads "the chord written over this bar" (see item 7's
+ * spec: the first chord of a measure counts from that measure's downbeat).
+ * Any later chords in the same measure keep their real offset, since those
+ * genuinely mark a harmony change partway through the bar. */
+function flattenChords(score: Score): { chord: ChordSymbol; beat: number }[] {
+  const flat: { chord: ChordSymbol; beat: number }[] = [];
+  score.measures.forEach((measure, measureIndex) => {
+    const start = measureStartBeat(score, measureIndex);
+    const duration = measureDurationBeats(score, measureIndex);
+    const sorted = [...measure.chords].sort((a, b) => a.offset - b.offset);
+    sorted.forEach((chord, i) => {
+      flat.push({ chord, beat: i === 0 ? start : start + chord.offset * duration });
+    });
+  });
+  flat.sort((a, b) => a.beat - b.beat);
+  return flat;
+}
+
+/** The chord symbol sounding at `beat` (the last one at or before it, across
+ * the whole score — a chord keeps applying until the next one starts, even
+ * across measure or line breaks). Null before the first chord symbol. */
+export function activeChordAt(sortedChords: { chord: ChordSymbol; beat: number }[], beat: number): ChordSymbol | null {
+  let active: ChordSymbol | null = null;
+  for (const entry of sortedChords) {
+    if (entry.beat > beat + 1e-6) break;
+    active = entry.chord;
+  }
+  return active;
+}
+
+/** Precomputes every note's scale-degree label text (see scaleDegreeFor), for
+ * both staves across the whole score, keyed by `${clef}:${measureIndex}:${noteIndex}`.
+ * Empty when showScaleDegrees is off. */
+export function computeScaleDegreeLabels(score: Score): Map<string, string> {
+  const labels = new Map<string, string>();
+  if (!score.showScaleDegrees) return labels;
+  const enabled = score.scaleDegreeLabels ?? DEFAULT_SCALE_DEGREE_LABELS;
+  const sortedChords = flattenChords(score);
+  if (sortedChords.length === 0) return labels;
+  (['treble', 'bass'] as Clef[]).forEach((clef) => {
+    score.measures.forEach((measure, measureIndex) => {
+      let beat = measureStartBeat(score, measureIndex);
+      measure[clef].notes.forEach((note, noteIndex) => {
+        if (!note.isRest && note.pitches.length > 0) {
+          const chord = activeChordAt(sortedChords, beat);
+          if (chord) {
+            const text = scaleDegreeFor(note.pitches[0], chord.root, chord.accidental, enabled);
+            if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}`, text);
+          }
+        }
+        beat += noteBeats(note);
+      });
+    });
+  });
+  return labels;
 }
 
 /**

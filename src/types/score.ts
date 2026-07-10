@@ -154,7 +154,26 @@ export interface Score {
    * layout (chords/lyrics directly on the piano treble staff).
    */
   showMelodyStaff?: boolean;
+  /** When true, every note shows the scale degree it represents relative to
+   * whichever chord symbol is currently active at its beat (see
+   * scaleDegreeFor/activeChordAt in scoreUtils) — e.g. a D over a C chord
+   * shows "2". Toggled from the key-signature "+" panel. */
+  showScaleDegrees?: boolean;
+  /** Which degree labels are shown when showScaleDegrees is on — see
+   * SCALE_DEGREE_LABELS/DEFAULT_SCALE_DEGREE_LABELS in scoreUtils.
+   * Undefined = the default set (the basic 7). */
+  scaleDegreeLabels?: ScaleDegreeLabel[];
 }
+
+/**
+ * A note's interval from the currently-active chord's root, named the way a
+ * lead-sheet player would read it. '3'/'7' auto-alternate their displayed
+ * text (b3/3, 7/세모7) by which exact semitone the note lands on — see
+ * scoreUtils' DEGREE_TABLE — so checking "3" or "7" covers both qualities at
+ * once. 'dim7' and '6' both name the same semitone (a diminished 7th is
+ * enharmonic to a major 6th); when 'dim7' is checked it takes precedence.
+ */
+export type ScaleDegreeLabel = '1' | '2' | '3' | '4' | '5' | '6' | '7' | 'b5' | '#5' | 'b9' | 'dim7';
 
 export interface NoteLocation {
   measureIndex: number;
