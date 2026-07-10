@@ -78,12 +78,17 @@ function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature:
 
   flat.forEach(({ note, timeBeats }, i) => {
     if (note.graceNote) {
-      // Acciaccatura — "crushed" against the beat: fired just before the main
-      // note's onset (stealing a sliver of the PREVIOUS beat, never its own),
-      // clamped so it can't go negative on the very first note of the piece.
+      // "Crushed" against the beat — takes essentially no time from either
+      // note it sits between. `position: 'before'` (the default,
+      // acciaccatura) fires just before this note's onset, stealing a
+      // sliver of the PREVIOUS beat; `position: 'after'` (nachschlag) fires
+      // just before this note's own end instead, leaning into the NEXT
+      // note. Clamped so it can't go negative on the very first note.
       const graceBeats = 0.15;
+      const isAfter = note.graceNote.position === 'after';
+      const graceTimeBeats = isAfter ? timeBeats + noteBeats(note) - graceBeats : timeBeats - graceBeats;
       events.push({
-        timeBeats: Math.max(0, timeBeats - graceBeats),
+        timeBeats: Math.max(0, graceTimeBeats),
         durationSeconds: graceBeats * secondsPerBeat * 0.92,
         notes: [pitchToToneNote({ letter: note.graceNote.letter, octave: note.graceNote.octave, accidental: note.graceNote.accidental ?? '' }, keySignature)],
         synth,

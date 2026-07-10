@@ -170,6 +170,9 @@ interface ToolbarProps {
   onScoreMetaChange: (patch: Partial<Score>) => void;
   editTool: EditTool;
   onEditToolChange: (patch: Partial<EditTool>) => void;
+  /** 꾸밈음 button: with a note selected, attaches/removes a grace note on it
+   * directly; with nothing selected, falls back to toggling 꾸밈음 mode (see App). */
+  onGraceNoteButtonClick: () => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
@@ -194,6 +197,7 @@ export function Toolbar({
   onScoreMetaChange,
   editTool,
   onEditToolChange,
+  onGraceNoteButtonClick,
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
@@ -387,9 +391,9 @@ export function Toolbar({
         ))}
         <button
           className={`tool-icon-btn ${editTool.graceNoteMode ? 'active' : ''}`}
-          onClick={() => onEditToolChange({ graceNoteMode: !editTool.graceNoteMode })}
+          onClick={onGraceNoteButtonClick}
           aria-label="꾸밈음"
-          title="켜면 악보에서 음표를 클릭할 때마다 그 음표 앞에 짧은 꾸밈음(사선 꾸밈음)을 추가/제거합니다"
+          title="음표를 선택한 상태에서 누르면 그 음표에 바로 꾸밈음이 붙습니다. 선택 없이 누르면, 이후 악보에서 클릭하는 음표마다 꾸밈음을 추가/제거합니다"
         >
           꾸밈음
         </button>

@@ -50,12 +50,15 @@ export interface NoteEvent {
    */
   connectPitchIndex?: number | null;
   /**
-   * A short acciaccatura ("crushed note") grace note played just before this
-   * one — drawn small with a slash through its stem, taking essentially no
-   * time from the beat. Toggled on/off by clicking an existing note while
-   * the 꾸밈음 toolbar button is active. Rests never carry one.
+   * A short acciaccatura ("crushed note") grace note played just before (or,
+   * with `position: 'after'`, just after) this one — drawn small with a
+   * slash through its stem, taking essentially no time from the beat, and
+   * slurred to it. Toggled on/off by clicking an existing note while the
+   * 꾸밈음 toolbar button is active, or by pressing that button with a note
+   * already selected. Rests never carry one. Selectable in its own right
+   * (see App's `selectedGrace`) for pitch/position edits and deletion.
    */
-  graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental };
+  graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental; position?: 'before' | 'after' };
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */

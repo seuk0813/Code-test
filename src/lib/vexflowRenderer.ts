@@ -6,6 +6,7 @@ import {
   Formatter,
   GraceNote,
   GraceNoteGroup,
+  Modifier,
   Renderer,
   Stave,
   StaveConnector,
@@ -280,6 +281,18 @@ export interface NoteHitbox {
   xs: number[];
 }
 
+/** Click target for the small grace-note head attached to a host note (see
+ * NoteEvent.graceNote and attachGraceNote) — lets it be selected independently
+ * of its host, for pitch/position edits and deletion (see StaffEditor). */
+export interface GraceNoteHitbox {
+  measureIndex: number;
+  clef: Clef;
+  /** The HOST note's index — a grace note has no index of its own, it's a sub-object of its host. */
+  noteIndex: number;
+  x: number;
+  y: number;
+}
+
 export interface StaffHitbox {
   measureIndex: number;
   clef: Clef;
@@ -388,6 +401,7 @@ export interface RenderResult {
   melodyStaffHitboxes: StaffHitbox[];
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
+  graceNoteHitboxes: GraceNoteHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
@@ -402,9 +416,15 @@ const REST_KEY: Record<Clef, string> = {
   bass: 'd/3',
 };
 
-/** Attaches `note.graceNote` (see NoteEvent.graceNote) as a slashed acciaccatura before `staveNote`, if it has one. */
-function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef): void {
-  if (!note.graceNote || note.isRest) return;
+/** Attaches `note.graceNote` (see NoteEvent.graceNote) as a slashed,
+ * slurred acciaccatura to `staveNote` — before it (the default) or after it
+ * (`position: 'after'`, a nachschlag-style grace note leaning into the next
+ * note) — if it has one. `isSelected` recolors it red like a selected main
+ * note (see StaffEditor's grace-note selection). Returns the created
+ * GraceNote so the caller can compute its hitbox once the voice is drawn
+ * (its position isn't resolved until then), or null if there was none. */
+function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSelected: boolean): GraceNote | null {
+  if (!note.graceNote || note.isRest) return null;
   const g = note.graceNote;
   const graceStaveNote = new GraceNote({
     clef,
@@ -413,7 +433,17 @@ function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef): voi
     slash: true,
   });
   if (g.accidental) graceStaveNote.addModifier(new VexAccidental(g.accidental), 0);
-  staveNote.addModifier(new GraceNoteGroup([graceStaveNote]).beamNotes(), 0);
+  if (isSelected) {
+    graceStaveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+    graceStaveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
+  }
+  // showSlur=true draws VexFlow's own curve from the grace note to its host —
+  // real engraving, always on, matching the standard convention that a grace
+  // note is always slurred to the note it decorates.
+  const group = new GraceNoteGroup([graceStaveNote], true).beamNotes();
+  if (g.position === 'after') group.setPosition(Modifier.Position.RIGHT);
+  staveNote.addModifier(group, 0);
+  return graceStaveNote;
 }
 
 function buildStaveNotes(
@@ -425,8 +455,10 @@ function buildStaveNotes(
   hiddenPitchIndex: number | null,
   playingNoteIndex: number | null,
   selectedPitchIndex: number | null,
-): StaveNote[] {
-  return notes.map((note, noteIndex) => {
+  selectedGrace: NoteLocation | null,
+): { staveNotes: StaveNote[]; graceNotes: (GraceNote | null)[] } {
+  const graceNotes: (GraceNote | null)[] = [];
+  const staveNotes = notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY[clef]] : note.pitches.map(pitchToVexKey);
     const staveNote = new StaveNote({
       clef,
@@ -439,7 +471,12 @@ function buildStaveNotes(
       Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
     }
 
-    attachGraceNote(staveNote, note, clef);
+    const isGraceSelected =
+      !!selectedGrace &&
+      selectedGrace.measureIndex === measureIndex &&
+      selectedGrace.clef === clef &&
+      selectedGrace.noteIndex === noteIndex;
+    graceNotes.push(attachGraceNote(staveNote, note, clef, isGraceSelected));
 
     // Accidentals are NOT attached as VexFlow modifiers here — see
     // drawAccidentalMarks below for why, and how they're drawn instead.
@@ -483,6 +520,7 @@ function buildStaveNotes(
 
     return staveNote;
   });
+  return { staveNotes, graceNotes };
 }
 
 /**
@@ -505,7 +543,7 @@ function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | nul
     if (!note.isRest && note.pitches[0]?.accidental) {
       staveNote.addModifier(new VexAccidental(note.pitches[0].accidental), 0);
     }
-    attachGraceNote(staveNote, note, 'treble');
+    attachGraceNote(staveNote, note, 'treble', false);
     if (hiddenNoteIndex === noteIndex) {
       staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
     }
@@ -560,6 +598,7 @@ export function renderScore(
   draggingNote: DraggingNote | null,
   playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
   selectedPitchIndex?: number | null,
+  selectedGrace?: NoteLocation | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -603,6 +642,7 @@ export function renderScore(
   const melodyNoteHitboxes: NoteHitbox[] = [];
   const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
+  const graceNoteHitboxes: GraceNoteHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
@@ -799,7 +839,7 @@ export function renderScore(
           playingLoc && playingLoc.measureIndex === measureIndex && playingLoc.clef === clef ? playingLoc.noteIndex : null;
         const hiddenPitchIndex = hiddenNoteIndex !== null ? draggingNote?.pitchIndex ?? null : null;
         const selectedPitchIndexForClef = playingLocations ? null : selectedPitchIndex ?? null;
-        const staveNotes = buildStaveNotes(
+        const { staveNotes, graceNotes } = buildStaveNotes(
           clef,
           measureIndex,
           notes,
@@ -808,6 +848,7 @@ export function renderScore(
           hiddenPitchIndex,
           playingNoteIndex,
           selectedPitchIndexForClef,
+          playingLocations ? null : selectedGrace ?? null,
         );
 
         const refY0 = stave.getYForNote(0);
@@ -878,6 +919,23 @@ export function renderScore(
 
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
+
+          // Grace note hitboxes: only resolvable now that the host note (and
+          // therefore its attached GraceNoteGroup modifier) has an actual
+          // drawn position — see attachGraceNote/StaffEditor's grace-note
+          // selection.
+          graceNotes.forEach((gn, noteIndex) => {
+            if (!gn) return;
+            const g = notes[noteIndex].graceNote;
+            let gx = centerXs[noteIndex];
+            try {
+              gx = gn.getAbsoluteX();
+            } catch {
+              // Fall back to the host note's own position if geometry isn't measurable.
+            }
+            const gy = g ? refY0 - pitchToLine(clef, g.letter, g.octave) * spacing : refY0;
+            graceNoteHitboxes.push({ measureIndex, clef, noteIndex, x: gx, y: gy });
+          });
 
           // Collect (event, staveNote) in play order per clef so tie/slur
           // curves — drawn once at the very end, after every measure has its
@@ -1003,6 +1061,16 @@ export function renderScore(
       // the real Stave geometry (like midY below), not a hardcoded offset
       // from its constructor Y, since that Y sits up near the clef glyph's
       // top rather than the actual staff lines.
+      //
+      // In lead-sheet layout there's a wide dead zone between the melody
+      // staff's own click region (which ends at its bottom line + margin)
+      // and the piano treble staff's click region below (which starts at its
+      // top line - margin) — MELODY_BLOCK_HEIGHT carves out room for it. The
+      // band's clickable area spans that ENTIRE zone (not just a thin strip
+      // around the text) so a click anywhere in the visually-empty gap opens
+      // the lyric editor — a thin strip was too easy to miss entirely.
+      const lyricBandTop = leadSheet && melodyStave ? melodyStave.getYForLine(4) + STAVE_TOP_MARGIN : midY - 5;
+      const lyricBandBottom = leadSheet ? trebleStave.getYForLine(0) - STAVE_TOP_MARGIN : midY + 15;
       const lyricY = leadSheet && melodyStave ? melodyStave.getYForLine(4) + 20 : midY + 5;
       (measure.lyrics ?? []).forEach((syllable: LyricSyllable) => {
         lyricHitboxes.push({
@@ -1019,8 +1087,8 @@ export function renderScore(
         measureIndex,
         x0: x,
         x1: x + measureWidth,
-        y0: lyricY - 10,
-        y1: lyricY + 10,
+        y0: lyricBandTop,
+        y1: lyricBandBottom,
         y: lyricY,
         measureX: x,
         measureWidth,
@@ -1115,7 +1183,7 @@ export function renderScore(
     drawHeading(svg, score, titleHitbox);
     drawComposer(svg, score, composerHitbox);
     drawChordLabels(svg, score, chordHitboxes);
-    drawLyrics(svg, score, lyricHitboxes);
+    drawLyrics(svg, score, lyricHitboxes, lyricBandHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
@@ -1129,6 +1197,7 @@ export function renderScore(
     melodyStaffHitboxes,
     chordHitboxes,
     chordBandHitboxes,
+    graceNoteHitboxes,
     lineBreakHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
@@ -1177,7 +1246,7 @@ function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): voi
   svg.appendChild(text);
 }
 
-function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[]): void {
+function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[], lyricBandHitboxes: LyricBandHitbox[]): void {
   lyricHitboxes.forEach((hb) => {
     const syllable = (score.measures[hb.measureIndex].lyrics ?? []).find((l) => l.id === hb.lyricId);
     if (!syllable) return;
@@ -1193,6 +1262,25 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.textContent = syllable.text;
     svg.appendChild(text);
   });
+  // Lead-sheet layout's lyric band sits in an otherwise-empty gap between the
+  // melody and piano staves (see the widened lyricBandHitboxes above) — a
+  // faint placeholder marks it as clickable, the same way the title/composer
+  // fields hint at themselves, instead of leaving it looking like dead space.
+  if (score.showMelodyStaff) {
+    lyricBandHitboxes.forEach((band) => {
+      if ((score.measures[band.measureIndex].lyrics ?? []).length > 0) return;
+      const text = document.createElementNS(SVG_NS, 'text');
+      text.setAttribute('x', String(band.measureX + band.measureWidth / 2));
+      text.setAttribute('y', String(band.y));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('font-family', LYRIC_FONT);
+      text.setAttribute('font-size', '12');
+      text.setAttribute('stroke', 'none');
+      text.setAttribute('fill', PLACEHOLDER_COLOR);
+      text.textContent = '가사 입력';
+      svg.appendChild(text);
+    });
+  }
 }
 
 
@@ -1326,6 +1414,13 @@ export function findChordBandAt(result: RenderResult, x: number, y: number): Cho
 
 export function findLineBreakAt(result: RenderResult, x: number, y: number): LineBreakHitbox | null {
   return result.lineBreakHitboxes.find((m) => x >= m.x0 && x <= m.x1 && y >= m.y0 && y <= m.y1) ?? null;
+}
+
+/** Click target for a grace note's own small notehead (see GraceNoteHitbox) —
+ * checked before the host note's own hitbox so a click precisely on the
+ * grace glyph selects IT, not its host. */
+export function findGraceNoteAt(result: RenderResult, x: number, y: number): GraceNoteHitbox | null {
+  return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 9 && Math.abs(g.y - y) < 12) ?? null;
 }
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {

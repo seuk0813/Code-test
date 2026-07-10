@@ -6,6 +6,7 @@ import {
   findChordAt,
   findChordBandAt,
   findComposerAt,
+  findGraceNoteAt,
   findInsertIndex,
   findLineBreakAt,
   findLyricAt,
@@ -108,6 +109,10 @@ interface StaffEditorProps {
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
   /** Toggles a grace note (see 꾸밈음 toolbar button / editTool.graceNoteMode) on the note at `location`, at the given pitch. */
   onToggleGraceNote: (location: NoteLocation, letter: string, octave: number) => void;
+  /** The host note (see NoteEvent.graceNote) whose grace note is currently selected — mutually exclusive with the normal note `selected`. */
+  selectedGrace: NoteLocation | null;
+  /** Selects (or, with null, deselects) a note's grace note — clicking directly on its small notehead. */
+  onSelectGrace: (location: NoteLocation | null) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
@@ -274,6 +279,8 @@ function StaffEditorInner({
   onMergeNoteIntoChord,
   onTogglePitch,
   onToggleGraceNote,
+  selectedGrace,
+  onSelectGrace,
   onChangeDuration,
   onFocusMeasure,
   onAddLineBreak,
@@ -399,9 +406,14 @@ function StaffEditorInner({
   // here (instead of placing immediately); arrow keys nudge it, and a second
   // click or spacebar commits it. Held in a ref too so the keydown listener and
   // mouse handlers read the current value without stale closures.
-  const [lockedPreview, setLockedPreview] = useState<{ measureIndex: number; clef: Clef; line: number; x: number; staffOrigin: 'staff' | 'melody' } | null>(
-    null,
-  );
+  const [lockedPreview, setLockedPreview] = useState<{
+    measureIndex: number;
+    clef: Clef;
+    line: number;
+    x: number;
+    staffOrigin: 'staff' | 'melody';
+    duration: DurationValue;
+  } | null>(null);
   const lockedPreviewRef = useRef<typeof lockedPreview>(null);
   lockedPreviewRef.current = lockedPreview;
   /**
@@ -416,7 +428,7 @@ function StaffEditorInner({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex);
+    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
@@ -427,7 +439,7 @@ function StaffEditorInner({
     // current content size at whatever zoom level is already active — e.g.
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace]);
 
   // Consumes pendingChainRef (see its declaration) the moment the render
   // above has refreshed renderResultRef.current for the just-committed note
@@ -1017,7 +1029,7 @@ function StaffEditorInner({
 
   /** Draws the locked placement preview (a stronger, more opaque ghost than the
    * hover preview) at a locked position. */
-  const renderLockedGhost = (lp: { measureIndex: number; clef: Clef; line: number; x: number; staffOrigin: 'staff' | 'melody' }) => {
+  const renderLockedGhost = (lp: { measureIndex: number; clef: Clef; line: number; x: number; staffOrigin: 'staff' | 'melody'; duration: DurationValue }) => {
     const result = renderResultRef.current;
     if (!result) return;
     const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
@@ -1027,7 +1039,7 @@ function StaffEditorInner({
       kind: 'note',
       x: lp.x,
       y: staff.refY0 - lp.line * staff.spacing,
-      duration: editTool.duration,
+      duration: lp.duration,
       isRest: editTool.isRest && !isChord,
       stemUp: stemPointsUp(lp.line),
       accidental: editTool.accidental,
@@ -1037,7 +1049,11 @@ function StaffEditorInner({
     });
   };
 
-  /** Commits the locked preview into a real note using the active toolbar tool. */
+  /** Commits the locked preview into a real note, using the preview's own
+   * duration — frozen at whatever it was when the preview was locked (either
+   * the toolbar's armed duration for a quick click, or the longer duration
+   * reached by a hold — see renderLockedGhost / the mousedown 'add' hold
+   * cycle), not necessarily today's toolbar duration. */
   const commitLockedPreview = () => {
     const lp = lockedPreviewRef.current;
     const result = renderResultRef.current;
@@ -1046,7 +1062,7 @@ function StaffEditorInner({
       return;
     }
     const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
-    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, editTool.duration);
+    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, lp.duration);
     setLockedPreview(null);
     clearGhost(overlayRef.current);
   };
@@ -1089,7 +1105,7 @@ function StaffEditorInner({
     }
     nx = Math.min(targetStaff.noteStartX + targetStaff.noteAreaWidth, Math.max(targetStaff.noteStartX, nx));
     onFocusMeasure(measureIndex);
-    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx, staffOrigin: 'staff' });
+    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx, staffOrigin: 'staff', duration: editTool.duration });
     return true;
   };
 
@@ -1105,7 +1121,7 @@ function StaffEditorInner({
     if (!result || !note || !targetStaff) return false;
     const line = note.pitches.length > 0 ? pitchToLine(location.clef, note.pitches[0].letter, note.pitches[0].octave) : 0;
     onFocusMeasure(targetMeasureIndex);
-    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX, staffOrigin: 'staff' });
+    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX, staffOrigin: 'staff', duration: editTool.duration });
     return true;
   };
 
@@ -1525,7 +1541,10 @@ function StaffEditorInner({
       // again ON THAT SAME PREVIEW commits it (spacebar/arrow keys handle it
       // in between); clicking anywhere else instead MOVES the lock there —
       // so the preview always follows the most recent click, and only a
-      // deliberate second click on the same spot places the note.
+      // deliberate second click on the same spot places the note. Holding
+      // (instead of a quick click) cycles gesture.duration once per tick (see
+      // the mousedown 'add' hold interval) — that held duration, not
+      // whatever's armed in the toolbar, is what gets locked/committed here.
       const lp = lockedPreviewRef.current;
       const sameSpot =
         !!lp &&
@@ -1537,9 +1556,19 @@ function StaffEditorInner({
       // so a plain click marks "paste starts here" even before any note is placed.
       onFocusMeasure(gesture.measureIndex);
       if (sameSpot) {
-        commitLockedPreview();
+        const staff = staffGeometryFor(result, gesture.measureIndex, gesture.clef, gesture.staffOrigin);
+        if (staff) commitAdd(gesture.measureIndex, gesture.clef, staff, gesture.line, gesture.x, gesture.duration);
+        setLockedPreview(null);
+        clearGhost(overlayRef.current);
       } else {
-        setLockedPreview({ measureIndex: gesture.measureIndex, clef: gesture.clef, line: gesture.line, x: gesture.x, staffOrigin: gesture.staffOrigin });
+        setLockedPreview({
+          measureIndex: gesture.measureIndex,
+          clef: gesture.clef,
+          line: gesture.line,
+          x: gesture.x,
+          staffOrigin: gesture.staffOrigin,
+          duration: gesture.duration,
+        });
       }
       suppressClickRef.current = true;
       return;
@@ -1572,7 +1601,8 @@ function StaffEditorInner({
       setDraggingNote(null);
       clearGhost(overlayRef.current);
     } else if (gesture.mode === 'durationCycle') {
-      onChangeDuration(gesture.location, gesture.cycleDuration);
+      // Already applied directly to the note on every hold tick (see
+      // startNoteHoldCycle) — nothing left to commit here.
       suppressClickRef.current = true;
       clearGhost(overlayRef.current);
     } else {
@@ -1582,7 +1612,12 @@ function StaffEditorInner({
     }
   };
 
-  /** Hold on a selected note: cycle its duration once per second, previewing in a red ghost. */
+  /** Hold on a selected note: cycle its duration once per second. Mouse applies
+   * each tick directly to the real note (same immediate motion as the
+   * right-click-hold shortening) — no separate preview layout. Touch still
+   * previews in a red ghost and only commits on release (no separate
+   * "confirm" gesture exists there, so a stray hold shouldn't mutate the
+   * score until the finger lifts). */
   const startNoteHoldCycle = (isTouch: boolean) => {
     const tick = () => {
       const g = isTouch ? touchGestureRef.current : mouseGestureRef.current;
@@ -1590,6 +1625,10 @@ function StaffEditorInner({
       if (!g || g.kind !== 'note' || g.mode === 'drag' || !result) return;
       g.mode = 'durationCycle';
       g.cycleDuration = cycleDurationLonger(g.cycleDuration);
+      if (!isTouch) {
+        onChangeDuration(g.location, g.cycleDuration);
+        return;
+      }
       const staff = staffGeometryFor(result, g.location.measureIndex, g.location.clef, g.staffOrigin);
       const note = score.measures[g.location.measureIndex][g.location.clef].notes[g.location.noteIndex];
       const noteHitbox = noteHitboxesFor(result, g.staffOrigin).find(
@@ -1751,12 +1790,24 @@ function StaffEditorInner({
       return;
     }
 
+    // A click precisely on a grace note's own small notehead selects IT
+    // (see selectedGrace) instead of its host note — checked before the
+    // host's own click resolution below so the smaller glyph wins.
+    const graceHit = findGraceNoteAt(result, point.x, point.y);
+    if (graceHit && !editTool.graceNoteMode) {
+      onSelectGrace({ measureIndex: graceHit.measureIndex, clef: graceHit.clef, noteIndex: graceHit.noteIndex });
+      onDeselectNote();
+      suppressClickRef.current = true;
+      return;
+    }
+
     const click = resolveClickPreferSelect(result, point.x, point.y);
     if (!click) {
       if (lockedPreviewRef.current) {
         setLockedPreview(null);
         clearGhost(overlayRef.current);
       }
+      onSelectGrace(null);
       onDeselectNote();
       return;
     }
@@ -1778,11 +1829,13 @@ function StaffEditorInner({
     }
 
     if (click.type === 'select') {
-      // Selecting an existing note cancels any locked placement preview.
+      // Selecting an existing note cancels any locked placement preview
+      // (and any grace-note selection — the two are mutually exclusive).
       if (lockedPreviewRef.current) {
         setLockedPreview(null);
         clearGhost(overlayRef.current);
       }
+      onSelectGrace(null);
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
       const staffOrigin = originOfPoint(result, point.x, point.y) ?? 'staff';
@@ -1817,6 +1870,7 @@ function StaffEditorInner({
     // add
     const staff = findAnyStaffAt(result, point.x, point.y);
     if (!staff) return;
+    onSelectGrace(null);
     const { snappedLine } = pitchAt(click.clef, staff, point.y);
     const isChord = chordMergeTargetAt(click.measureIndex, click.clef, point.x) !== null;
     mouseGestureRef.current = {

@@ -11,6 +11,7 @@ import {
   addMeasure,
   addNoteToScore,
   adjacentIndexAfterDelete,
+  attachOrRemoveGraceNote,
   CHORD_QUALITY_SUFFIX,
   clearPickupMeasure,
   clearTrailingMeasure,
@@ -35,14 +36,17 @@ import {
   pitchToVexKey,
   removeChordFromScore,
   removeLyricFromScore,
+  removeGraceNote,
   removeMeasure,
   removeNoteFromScore,
   resizePickupMeasure,
   resizeTrailingMeasure,
+  setGraceNotePitch,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
   toggleGraceNote,
+  toggleGraceNotePosition,
   togglePitchInNote,
   updateNoteInScore,
 } from './lib/scoreUtils';
@@ -88,6 +92,9 @@ function App() {
   // clicking an already-selected chord's specific notehead again sets this;
   // clicking a different note or deselecting always clears it back to null.
   const [selectedPitchIndex, setSelectedPitchIndex] = useState<number | null>(null);
+  // The host note whose grace note is selected (see NoteEvent.graceNote) —
+  // mutually exclusive with `selected`: selecting either clears the other.
+  const [selectedGrace, setSelectedGrace] = useState<NoteLocation | null>(null);
   // Toggled by re-clicking the active duration button while nothing is
   // selected (Toolbar's "새 음표 배치" highlight toggle). While true and no
   // note is selected, clicking the staff prefers selecting the nearest
@@ -234,6 +241,7 @@ function App() {
     (location: NoteLocation, pitchIndex?: number) => {
       setSelected(location);
       setSelectedPitchIndex(pitchIndex ?? null);
+      setSelectedGrace(null);
       setMarquee([]);
       setMarqueeChords([]);
       setMarqueeLyrics([]);
@@ -432,6 +440,15 @@ function App() {
     [score, setScore, accidentalAfterMove],
   );
 
+  /** Selects (or, with null, deselects) a note's grace note — mutually exclusive with the main note selection. */
+  const handleSelectGrace = useCallback((location: NoteLocation | null) => {
+    setSelectedGrace(location);
+    if (location) {
+      setSelected(null);
+      setSelectedPitchIndex(null);
+    }
+  }, []);
+
   /** Toggles a grace note (see StaffEditor's 꾸밈음 mode) on the note at `location`, at the clicked pitch. */
   const handleToggleGraceNote = useCallback(
     (location: NoteLocation, letter: string, octave: number) => {
@@ -439,6 +456,51 @@ function App() {
     },
     [setScore],
   );
+
+  /** The 꾸밈음 toolbar button: with a note already selected, attaches/removes
+   * a grace note on it directly (at its own top pitch) instead of requiring
+   * the older click-at-a-chosen-pitch 꾸밈음 mode — selects the new grace
+   * note right after, ready for further pitch/position edits. With nothing
+   * selected, falls back to that older mode (click a note at a pitch). */
+  const handleGraceNoteButtonClick = useCallback(() => {
+    if (selected) {
+      const location = selected;
+      const hadGrace = !!score.measures[location.measureIndex][location.clef].notes[location.noteIndex]?.graceNote;
+      setScore((prev) => attachOrRemoveGraceNote(prev, location));
+      handleSelectGrace(hadGrace ? null : location);
+      return;
+    }
+    setEditTool((t) => ({ ...t, graceNoteMode: !t.graceNoteMode }));
+  }, [selected, score, setScore, handleSelectGrace]);
+
+  /** Arrow Up/Down on a selected grace note: diatonic pitch step, same
+   * key-signature-aware accidental derivation as handleStepPitch. */
+  const handleStepGracePitch = useCallback(
+    (dir: 1 | -1) => {
+      if (!selectedGrace) return;
+      const note = score.measures[selectedGrace.measureIndex][selectedGrace.clef].notes[selectedGrace.noteIndex];
+      const g = note?.graceNote;
+      if (!g) return;
+      const line = pitchToLine(selectedGrace.clef, g.letter, g.octave) + dir * 0.5;
+      const { letter, octave } = lineToPitch(selectedGrace.clef, line);
+      const { accidental } = accidentalAfterMove(g.letter, g.accidental ?? '', false, letter as Pitch['letter']);
+      setScore((prev) => setGraceNotePitch(prev, selectedGrace, letter as Pitch['letter'], octave, accidental));
+    },
+    [selectedGrace, score, setScore, accidentalAfterMove],
+  );
+
+  /** Arrow Left/Right on a selected grace note: flip it before/after its host note. */
+  const handleToggleSelectedGracePosition = useCallback(() => {
+    if (!selectedGrace) return;
+    setScore((prev) => toggleGraceNotePosition(prev, selectedGrace));
+  }, [selectedGrace, setScore]);
+
+  /** Delete/Backspace on a selected grace note: removes it and clears the selection. */
+  const handleDeleteSelectedGrace = useCallback(() => {
+    if (!selectedGrace) return;
+    setScore((prev) => removeGraceNote(prev, selectedGrace));
+    setSelectedGrace(null);
+  }, [selectedGrace, setScore]);
 
   const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
     setScore((prev) => updateNoteInScore(prev, location, (note) => ({ ...note, duration })));
@@ -746,6 +808,26 @@ function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      // A selected grace note claims arrow keys (pitch / before-after
+      // position) and Delete (removal) before any of the main-note handling
+      // below, since selectedGrace and selected are mutually exclusive.
+      if (selectedGrace) {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          handleStepGracePitch(e.key === 'ArrowUp' ? 1 : -1);
+          return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          handleToggleSelectedGracePosition();
+          return;
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          handleDeleteSelectedGrace();
+          return;
+        }
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) handleRedo();
@@ -825,7 +907,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes]);
+  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -852,6 +934,7 @@ function App() {
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
     setSelectedPitchIndex(null);
+    setSelectedGrace(null);
     setMarquee([]);
     setMarqueeChords([]);
     setMarqueeLyrics([]);
@@ -1344,6 +1427,7 @@ function App() {
           onScoreMetaChange={handleScoreMetaChange}
           editTool={editTool}
           onEditToolChange={handleEditToolChange}
+          onGraceNoteButtonClick={handleGraceNoteButtonClick}
           hasSelection={!!selected}
           onDeleteSelected={handleDeleteSelected}
           onDeselectNote={handleDeselectNote}
@@ -1385,6 +1469,8 @@ function App() {
         onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}
         onToggleGraceNote={handleToggleGraceNote}
+        selectedGrace={selectedGrace}
+        onSelectGrace={handleSelectGrace}
         onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}
         onAddLineBreak={handleAddLineBreak}

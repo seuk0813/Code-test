@@ -962,6 +962,43 @@ export function toggleGraceNote(score: Score, location: NoteLocation, letter: Pi
 }
 
 /**
+ * Toggles a grace note directly onto/off the note at `location`, at that
+ * note's own top pitch — the one-click flow from pressing the 꾸밈음 toolbar
+ * button while a note is already selected (see App's handleGraceNoteButton),
+ * as opposed to toggleGraceNote's click-at-a-chosen-pitch flow (꾸밈음 mode).
+ */
+export function attachOrRemoveGraceNote(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => {
+    if (note.isRest) return note;
+    if (note.graceNote) return { ...note, graceNote: undefined };
+    const top = note.pitches[topPitchIndex(note.pitches)];
+    if (!top) return note;
+    return { ...note, graceNote: { letter: top.letter, octave: top.octave, position: 'before' } };
+  });
+}
+
+/** Removes the grace note at `location`, if any — used by Delete on a selected grace note. */
+export function removeGraceNote(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) => (note.graceNote ? { ...note, graceNote: undefined } : note));
+}
+
+/** Flips a grace note between leading into its host note (before, the
+ * default acciaccatura) and trailing off it (after, a nachschlag-style
+ * grace note leaning toward the next note). */
+export function toggleGraceNotePosition(score: Score, location: NoteLocation): Score {
+  return updateNoteInScore(score, location, (note) =>
+    note.graceNote ? { ...note, graceNote: { ...note.graceNote, position: note.graceNote.position === 'after' ? 'before' : 'after' } } : note,
+  );
+}
+
+/** Sets a grace note's pitch directly (see App's handleStepGracePitch for diatonic stepping). */
+export function setGraceNotePitch(score: Score, location: NoteLocation, letter: Pitch['letter'], octave: number, accidental: Accidental): Score {
+  return updateNoteInScore(score, location, (note) =>
+    note.graceNote ? { ...note, graceNote: { ...note.graceNote, letter, octave, accidental } } : note,
+  );
+}
+
+/**
  * Finds the note immediately following `location` in the same clef, crossing
  * into the next measure(s) if the current one has no more notes. Used for
  * tie/slur connections, which always join to "the next note in the staff"
