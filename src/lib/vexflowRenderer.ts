@@ -42,6 +42,15 @@ const ACCIDENTAL_GAP = 2;
 const FINGER_FONT_SIZE = 16;
 /** Gap between a notehead's right edge and its fingering number. */
 const FINGER_GAP = 4;
+const DEGREE_GAP = 10;
+/** Empty space kept clear right after a splittable note's own notehead, so
+ * the scissors zone starts past the note's own click region — a plain
+ * click right on the notehead still just selects it. */
+const SPLIT_ZONE_DEADZONE = 16;
+/** Below this width there's not enough visible empty staff space to safely
+ * offer the scissors gesture (too easy to fat-finger a click meant for
+ * whatever comes right after). */
+const SPLIT_ZONE_MIN_WIDTH = 20;
 
 /**
  * Accidentals are drawn as plain SVG text (like the chord/lyric/title labels
@@ -153,14 +162,14 @@ interface DegreeMark {
 }
 
 /** Scale-degree labels (see Score.showScaleDegrees / scoreUtils.scaleDegreeFor),
- * drawn just above each note's highest pitch — a small analysis annotation,
- * not part of the note glyph itself. */
+ * drawn just to the right of each note's highest pitch — like a numeric-
+ * keypad entry sitting next to the note it annotates, not above the glyph. */
 function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
   marks.forEach((mark) => {
     const text = document.createElementNS(SVG_NS, 'text');
     text.setAttribute('x', String(mark.x));
-    text.setAttribute('y', String(mark.y - 10));
-    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('y', String(mark.y + 4));
+    text.setAttribute('text-anchor', 'start');
     text.setAttribute('font-size', '12');
     text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
     text.setAttribute('font-weight', '700');
@@ -319,6 +328,23 @@ export interface GraceNoteHitbox {
   y: number;
 }
 
+/** Click/hover target for the scissors-cursor split gesture (see
+ * splitNoteInScore) — a strip of empty staff space right after a long
+ * (half/dotted-half/whole) note that has no following note crowding it,
+ * distinct from the notehead's own click region so a normal click there
+ * still just selects the note. */
+export interface SplitZoneHitbox {
+  measureIndex: number;
+  clef: Clef;
+  noteIndex: number;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  /** How many equal quarter notes splitNoteInScore would produce. */
+  pieces: number;
+}
+
 export interface StaffHitbox {
   measureIndex: number;
   clef: Clef;
@@ -428,6 +454,7 @@ export interface RenderResult {
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   graceNoteHitboxes: GraceNoteHitbox[];
+  splitZoneHitboxes: SplitZoneHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
@@ -703,6 +730,7 @@ export function renderScore(
   const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
+  const splitZoneHitboxes: SplitZoneHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
@@ -747,6 +775,18 @@ export function renderScore(
         trebleStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
         bassStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
       }
+
+      // The treble clef glyph is wider than the bass clef glyph (and either
+      // can carry a key/time signature independently), so each stave's own
+      // auto-computed note-start X can differ by several pixels even though
+      // both measures hold the exact same beats — a same-beat note in one
+      // clef then renders slightly left/right of its counterpart in the
+      // other. Pin both staves to the wider of the two so every beat lines
+      // up vertically across the grand staff, matching how real engraving
+      // aligns simultaneous notes between clefs.
+      const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX());
+      trebleStave.setNoteStartX(sharedNoteStartX);
+      bassStave.setNoteStartX(sharedNoteStartX);
 
       trebleStave.setContext(context).draw();
       bassStave.setContext(context).draw();
@@ -1043,9 +1083,25 @@ export function renderScore(
             };
             noteHitboxes.push(hb);
 
-            const degreeText = degreeLabels.get(`${clef}:${measureIndex}:${noteIndex}`);
-            if (degreeText) {
-              degreeMarks.push({ x: centerXs[noteIndex], y: Math.min(...ys), text: degreeText });
+            if (!note.isRest) {
+              const beats = noteBeats(note);
+              if (Number.isInteger(beats) && beats >= 2 && beats <= 4) {
+                const nextX = noteIndex + 1 < centerXs.length ? centerXs[noteIndex + 1] : noteStartX + noteAreaWidth;
+                const zoneX0 = centerXs[noteIndex] + SPLIT_ZONE_DEADZONE;
+                const zoneX1 = nextX - 4;
+                if (zoneX1 - zoneX0 >= SPLIT_ZONE_MIN_WIDTH) {
+                  splitZoneHitboxes.push({
+                    measureIndex,
+                    clef,
+                    noteIndex,
+                    x0: zoneX0,
+                    x1: zoneX1,
+                    y0: Math.min(...ys) - 12,
+                    y1: Math.max(...ys) + 12,
+                    pieces: beats,
+                  });
+                }
+              }
             }
 
             if (!note.isRest) {
@@ -1061,6 +1117,16 @@ export function renderScore(
               } catch {
                 // Some note shapes have no measurable glyph width; fall back to centerX.
               }
+
+              const degreeText = degreeLabels.get(`${clef}:${measureIndex}:${noteIndex}`);
+              if (degreeText) {
+                // Placed to the right of the notehead, like a numeric-keypad
+                // scale-degree entry sits next to the note it annotates —
+                // matches where fingering marks go (see FINGER_GAP below),
+                // just a bit further out so the two don't collide.
+                degreeMarks.push({ x: noteheadRightX + DEGREE_GAP, y: Math.min(...ys), text: degreeText });
+              }
+
               note.pitches.forEach((pitch, pitchIndex) => {
                 if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
                 if (!pitch.accidental && pitch.finger === undefined) return;
@@ -1138,7 +1204,12 @@ export function renderScore(
       // the lyric editor — a thin strip was too easy to miss entirely.
       const lyricBandTop = leadSheet && melodyStave ? melodyStave.getYForLine(4) + STAVE_TOP_MARGIN : midY - 5;
       const lyricBandBottom = leadSheet ? trebleStave.getYForLine(0) - STAVE_TOP_MARGIN : midY + 15;
-      const lyricY = leadSheet && melodyStave ? melodyStave.getYForLine(4) + 20 : midY + 5;
+      // Pushed further down from the melody staff's bottom line than before
+      // (was +20, which sat close enough to catch descending stems/ledger
+      // lines from low melody notes) — now centered in the gap carved out by
+      // MELODY_BLOCK_HEIGHT so it clears the notes above without crowding
+      // the piano treble staff below.
+      const lyricY = leadSheet && melodyStave ? melodyStave.getYForLine(4) + 55 : midY + 5;
       (measure.lyrics ?? []).forEach((syllable: LyricSyllable) => {
         lyricHitboxes.push({
           measureIndex,
@@ -1266,6 +1337,7 @@ export function renderScore(
     chordHitboxes,
     chordBandHitboxes,
     graceNoteHitboxes,
+    splitZoneHitboxes,
     lineBreakHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
@@ -1489,6 +1561,11 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
  * grace glyph selects IT, not its host. */
 export function findGraceNoteAt(result: RenderResult, x: number, y: number): GraceNoteHitbox | null {
   return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 9 && Math.abs(g.y - y) < 12) ?? null;
+}
+
+/** Hover/click target for the scissors-cursor split gesture (see SplitZoneHitbox). */
+export function findSplitZoneAt(result: RenderResult, x: number, y: number): SplitZoneHitbox | null {
+  return result.splitZoneHitboxes.find((z) => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1) ?? null;
 }
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {

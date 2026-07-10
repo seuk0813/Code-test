@@ -194,6 +194,36 @@ async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGE
 /** Measures per PDF page — a new page starts every 16 measures (4 rows of the standard 4-per-row layout). */
 const MEASURES_PER_PDF_PAGE = 16;
 
+/** True when a measure has nothing in it (no notes/rests, no chord symbols, no lyrics). */
+function isBlankMeasure(measure: Measure): boolean {
+  return (
+    measure.treble.notes.length === 0 &&
+    measure.bass.notes.length === 0 &&
+    measure.chords.length === 0 &&
+    measure.lyrics.length === 0
+  );
+}
+
+/**
+ * Drops wholly-empty measures off the END of the score before PDF export.
+ * Composing often leaves a few blank "scratch" measures added via the + FAB
+ * but never filled in — left in, they render as empty trailing staff rows
+ * that inflate the page's height for no visual content, which throws off
+ * drawPngFitToA4Page's fit-to-page math (a page padded with blank rows looks
+ * "taller" than its real content, so the fit shrinks it by width and leaves
+ * unusually wide left/right margins). Trimming them means a page's margins
+ * only ever reflect its actual notation, matching a page that never had any
+ * trailing blank staves in the first place. Never trims below 1 measure.
+ */
+function trimTrailingBlankMeasures(score: Score): Score {
+  let end = score.measures.length;
+  while (end > 1 && isBlankMeasure(score.measures[end - 1])) end--;
+  if (end === score.measures.length) return score;
+  const measures = score.measures.slice(0, end);
+  const lineBreaks = score.lineBreaks.filter((b) => b < end - 1);
+  return { ...score, measures, lineBreaks };
+}
+
 /**
  * Splits a score into page-sized chunks of measures for PDF export. Manual
  * line breaks are kept only where they fall inside their chunk and reindexed
@@ -296,7 +326,7 @@ function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: 
  * measures (see MEASURES_PER_PDF_PAGE), each its own single A4 page.
  */
 export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
-  const pages = chunkScoreForPdf(score);
+  const pages = chunkScoreForPdf(trimTrailingBlankMeasures(score));
   const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
 

@@ -12,6 +12,7 @@ import {
   findLyricAt,
   findLyricBandAt,
   findNearbyNotesAt,
+  findSplitZoneAt,
   findStaffAt,
   findTitleAt,
   lineAt,
@@ -69,6 +70,11 @@ const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
 const DRAG_COLOR = '#d6432b';
 
+/** Cursor shown while hovering a splittable note's scissors zone (see SplitZoneHitbox/findSplitZoneAt). */
+const SCISSOR_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><text x='1' y='17' font-size='18'>✂</text></svg>`,
+)}") 2 18, pointer`;
+
 interface StaffEditorProps {
   score: Score;
   selected: NoteLocation | null;
@@ -103,6 +109,8 @@ interface StaffEditorProps {
     x?: number,
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
+  /** Scissors-cursor gesture (see SplitZoneHitbox): splits the note at `location` into `pieces` equal quarter notes. */
+  onSplitNote: (location: NoteLocation, pieces: number) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
@@ -275,6 +283,7 @@ function StaffEditorInner({
   onSelectNote,
   onAddNote,
   onDeleteNote,
+  onSplitNote,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -1348,6 +1357,58 @@ function StaffEditorInner({
       const result = renderResultRef.current;
       if (!result) return;
 
+      // Shift+Tab mirrors the forward logic below, just walking backwards —
+      // an existing chord before this position if there is one, else a fresh
+      // empty slot one step back, so a run of chords can be reviewed in
+      // either direction with just Tab/Shift+Tab.
+      if (event.shiftKey) {
+        let prevExisting: { measureIndex: number; chord: ChordSymbol } | null = null;
+        for (let mi = currentMeasureIndex; mi >= 0; mi--) {
+          const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
+          const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset < currentOffset - 1e-6) : chords;
+          if (candidates.length > 0) {
+            prevExisting = { measureIndex: mi, chord: candidates[candidates.length - 1] };
+            break;
+          }
+        }
+        if (prevExisting) {
+          const band = result.chordBandHitboxes.find((b) => b.measureIndex === prevExisting!.measureIndex);
+          if (!band) return;
+          setInlineEditor({
+            kind: 'chordEdit',
+            measureIndex: prevExisting.measureIndex,
+            chordId: prevExisting.chord.id,
+            left: band.measureX + prevExisting.chord.offset * band.measureWidth - 45,
+            top: (band.y0 + band.y1) / 2 - 8,
+            width: 90,
+            align: 'center',
+            value: chordLabel(prevExisting.chord),
+          });
+          return;
+        }
+        const step = 0.18;
+        let prevMeasureIndex = currentMeasureIndex;
+        let prevOffset = currentOffset - step;
+        if (prevOffset < 0.05) {
+          prevMeasureIndex -= 1;
+          prevOffset = 0.95;
+        }
+        if (prevMeasureIndex < 0) return;
+        const band = result.chordBandHitboxes.find((b) => b.measureIndex === prevMeasureIndex);
+        if (!band) return;
+        setInlineEditor({
+          kind: 'chordAdd',
+          measureIndex: prevMeasureIndex,
+          offset: prevOffset,
+          left: band.measureX + prevOffset * band.measureWidth - 45,
+          top: (band.y0 + band.y1) / 2 - 8,
+          width: 90,
+          align: 'center',
+          value: '',
+        });
+        return;
+      }
+
       let nextExisting: { measureIndex: number; chord: ChordSymbol } | null = null;
       for (let mi = currentMeasureIndex; mi < score.measures.length; mi++) {
         const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
@@ -1801,6 +1862,19 @@ function StaffEditorInner({
       return;
     }
 
+    // Scissors zone: the empty staff space right after a splittable long
+    // note (see SplitZoneHitbox) — clicking there cuts it into equal quarter
+    // notes instead of selecting/placing. Checked before the grace-note-mode
+    // branch below since splitting is unrelated to that mode.
+    if (!editTool.graceNoteMode) {
+      const splitZone = findSplitZoneAt(result, point.x, point.y);
+      if (splitZone) {
+        onSplitNote({ measureIndex: splitZone.measureIndex, clef: splitZone.clef, noteIndex: splitZone.noteIndex }, splitZone.pieces);
+        suppressClickRef.current = true;
+        return;
+      }
+    }
+
     const click = resolveClickPreferSelect(result, point.x, point.y);
     if (!click) {
       if (lockedPreviewRef.current) {
@@ -1926,7 +2000,12 @@ function StaffEditorInner({
     if (!result || !point) {
       clearGhost(overlayRef.current);
       clearTooltip(overlayRef.current);
+      if (containerRef.current) containerRef.current.style.cursor = '';
       return;
+    }
+
+    if (containerRef.current) {
+      containerRef.current.style.cursor = !editTool.graceNoteMode && findSplitZoneAt(result, point.x, point.y) ? SCISSOR_CURSOR : '';
     }
 
     clearTooltip(overlayRef.current);

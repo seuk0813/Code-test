@@ -42,6 +42,7 @@ import {
   resizePickupMeasure,
   resizeTrailingMeasure,
   setGraceNotePitch,
+  splitNoteInScore,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -231,6 +232,46 @@ function App() {
       setSelectedPitchIndex(null);
     },
     [score, selected, selectedPitchIndex, setScore],
+  );
+
+  /** Shift+Tab during continuous keyboard note entry: selects the note placed
+   * right before the current one (same clef, one index back — or the last
+   * note of the previous measure once index 0 is reached) exactly as if it
+   * had been clicked, so arrow keys immediately edit ITS pitch/duration
+   * instead of chaining another new placement. */
+  const handleSelectPreviousNote = useCallback(() => {
+    if (!selected) return;
+    const { measureIndex, clef, noteIndex } = selected;
+    if (noteIndex > 0) {
+      setSelected({ measureIndex, clef, noteIndex: noteIndex - 1 });
+      setSelectedPitchIndex(null);
+      setSelectedGrace(null);
+      justPlacedRef.current = false;
+      return;
+    }
+    for (let mi = measureIndex - 1; mi >= 0; mi--) {
+      const notes = score.measures[mi][clef].notes;
+      if (notes.length > 0) {
+        setSelected({ measureIndex: mi, clef, noteIndex: notes.length - 1 });
+        setSelectedPitchIndex(null);
+        setSelectedGrace(null);
+        justPlacedRef.current = false;
+        return;
+      }
+    }
+  }, [selected, score]);
+
+  /** Scissors-cursor gesture (see StaffEditor's SCISSOR_CURSOR): cuts a long
+   * note into `pieces` equal quarter notes, then selects the first piece. */
+  const handleSplitNote = useCallback(
+    (location: NoteLocation, pieces: number) => {
+      setScore((prev) => splitNoteInScore(prev, location, pieces));
+      setSelected(location);
+      setSelectedPitchIndex(null);
+      setSelectedGrace(null);
+      justPlacedRef.current = false;
+    },
+    [setScore],
   );
 
   const handleScoreMetaChange = useCallback((patch: Partial<Score>) => {
@@ -888,14 +929,20 @@ function App() {
         handleStepDuration(e.key === 'ArrowLeft' ? 1 : -1);
         return;
       }
-      // Tab/Shift+Tab jump straight to the start of the next/previous measure
-      // (same clef and pitch) instead of arrow-stepping through the rest of
-      // the current one — handy once a measure is done and you want to keep
-      // placing notes right into the next.
+      // Tab jumps straight to the start of the next measure (same clef and
+      // pitch) instead of arrow-stepping through the rest of the current one
+      // — handy once a measure is done and you want to keep placing notes
+      // right into the next. Shift+Tab instead steps BACK to the previously
+      // placed note and selects it for editing (see handleSelectPreviousNote)
+      // — the natural undo-a-step move during continuous spacebar entry.
       if (selected && e.key === 'Tab') {
         e.preventDefault();
-        const targetMeasure = selected.measureIndex + (e.shiftKey ? -1 : 1);
-        if (targetMeasure >= 0) staffEditorRef.current?.openMeasurePreview(selected, targetMeasure);
+        if (e.shiftKey) {
+          handleSelectPreviousNote();
+          return;
+        }
+        const targetMeasure = selected.measureIndex + 1;
+        staffEditorRef.current?.openMeasurePreview(selected, targetMeasure);
         return;
       }
       // Fingering: with a note selected, a digit sets its fingering (0 clears).
@@ -907,7 +954,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace]);
+  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -1465,6 +1512,7 @@ function App() {
         onSelectNote={handleSelectNote}
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
+        onSplitNote={handleSplitNote}
         onMoveNote={handleMoveNote}
         onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}

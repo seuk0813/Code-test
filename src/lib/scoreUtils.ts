@@ -137,7 +137,7 @@ const DEGREE_TABLE: Record<number, { key: ScaleDegreeLabel; text: string }> = {
   8: { key: '#5', text: '#5' },
   9: { key: '6', text: '6' },
   10: { key: '7', text: '7' },
-  11: { key: '7', text: '세모7' },
+  11: { key: '7', text: '△7' },
 };
 
 /** The scale-degree label text for `pitch` against a chord rooted at
@@ -651,11 +651,16 @@ const QUALITY_PATTERNS: [RegExp, ChordQuality][] = [
   [/^(maj|M|major)?$/, 'maj'],
 ];
 
-/** Parses free-text chord input like "Cm7" or "F#dim" into root/accidental/quality. */
+/** Parses free-text chord input like "Cm7" or "F#dim" into root/accidental/quality.
+ * A trailing slash bass note ("F/A", "Bb/D") is stripped before matching the
+ * quality suffix — the root above the slash is the functional root (what
+ * scale-degree labeling and any other harmony logic should key off), the
+ * bass note itself is display-only (it's kept verbatim in the chord's raw
+ * `text`, never parsed into a separate field). */
 export function parseChordText(
   text: string,
 ): { root: Pitch['letter']; accidental: Accidental; quality: ChordQuality } | null {
-  const trimmed = text.trim();
+  const trimmed = text.trim().split('/')[0];
   const match = /^([A-Ga-g])([#b]?)(.*)$/.exec(trimmed);
   if (!match) return null;
   const root = match[1].toUpperCase() as Pitch['letter'];
@@ -1044,6 +1049,32 @@ export function togglePitchInNote(
       return { ...note, pitches: note.pitches.filter((_, i) => i !== existingIndex) };
     }
     return { ...note, pitches: [...note.pitches, { letter, accidental, octave, manualAccidental }] };
+  });
+}
+
+/**
+ * Splits the note at `location` into `pieces` consecutive quarter notes of
+ * the same pitch(es) — the scissors-cursor gesture (see findSplitZoneAt) for
+ * cutting a long note (half/dotted-half/whole) sitting alone in an otherwise
+ * sparse measure into individually editable quarter notes, instead of having
+ * to delete it and re-place several new ones by hand. Only the first piece
+ * keeps the original's grace note/tie-slur connection; a rest splits into
+ * that many quarter rests. No-op if `pieces` doesn't evenly divide the
+ * note's own beat length.
+ */
+export function splitNoteInScore(score: Score, location: NoteLocation, pieces: number): Score {
+  return updateMeasure(score, location.measureIndex, location.clef, (sm) => {
+    const note = sm.notes[location.noteIndex];
+    if (!note || pieces < 2 || Math.abs(noteBeats(note) - pieces) > 1e-6) return sm;
+    const parts: NoteEvent[] = Array.from({ length: pieces }, (_, i) => ({
+      id: nextId('n'),
+      pitches: note.pitches.map((p) => ({ ...p })),
+      duration: 'q',
+      dotted: false,
+      isRest: note.isRest,
+      ...(i === 0 ? { graceNote: note.graceNote, connectToNext: note.connectToNext, connectKind: note.connectKind, connectPitchIndex: note.connectPitchIndex } : {}),
+    }));
+    return { notes: [...sm.notes.slice(0, location.noteIndex), ...parts, ...sm.notes.slice(location.noteIndex + 1)] };
   });
 }
 
