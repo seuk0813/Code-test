@@ -1,4 +1,18 @@
-import { Accidental as VexAccidental, Beam, Curve, Dot, Formatter, Renderer, Stave, StaveConnector, StaveNote, StaveTie, Voice } from 'vexflow';
+import {
+  Accidental as VexAccidental,
+  Beam,
+  Curve,
+  Dot,
+  Formatter,
+  GraceNote,
+  GraceNoteGroup,
+  Renderer,
+  Stave,
+  StaveConnector,
+  StaveNote,
+  StaveTie,
+  Voice,
+} from 'vexflow';
 import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
@@ -388,6 +402,20 @@ const REST_KEY: Record<Clef, string> = {
   bass: 'd/3',
 };
 
+/** Attaches `note.graceNote` (see NoteEvent.graceNote) as a slashed acciaccatura before `staveNote`, if it has one. */
+function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef): void {
+  if (!note.graceNote || note.isRest) return;
+  const g = note.graceNote;
+  const graceStaveNote = new GraceNote({
+    clef,
+    keys: [pitchToVexKey({ letter: g.letter, accidental: g.accidental ?? '', octave: g.octave })],
+    duration: '8',
+    slash: true,
+  });
+  if (g.accidental) graceStaveNote.addModifier(new VexAccidental(g.accidental), 0);
+  staveNote.addModifier(new GraceNoteGroup([graceStaveNote]).beamNotes(), 0);
+}
+
 function buildStaveNotes(
   clef: Clef,
   measureIndex: number,
@@ -410,6 +438,8 @@ function buildStaveNotes(
     if (note.dotted) {
       Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
     }
+
+    attachGraceNote(staveNote, note, clef);
 
     // Accidentals are NOT attached as VexFlow modifiers here — see
     // drawAccidentalMarks below for why, and how they're drawn instead.
@@ -475,6 +505,7 @@ function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | nul
     if (!note.isRest && note.pitches[0]?.accidental) {
       staveNote.addModifier(new VexAccidental(note.pitches[0].accidental), 0);
     }
+    attachGraceNote(staveNote, note, 'treble');
     if (hiddenNoteIndex === noteIndex) {
       staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
     }

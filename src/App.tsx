@@ -40,6 +40,7 @@ import {
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
+  toggleGraceNote,
   togglePitchInNote,
   updateNoteInScore,
 } from './lib/scoreUtils';
@@ -59,7 +60,7 @@ import {
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
-const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '' };
+const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '', graceNoteMode: false };
 
 /** Ordered shortest -> longest, interleaving dotted values, for arrow-key duration stepping. */
 const DURATION_LADDER: { duration: DurationValue; dotted: boolean }[] = [
@@ -427,6 +428,14 @@ function App() {
       setSelectedPitchIndex(null);
     },
     [score, setScore, accidentalAfterMove],
+  );
+
+  /** Toggles a grace note (see StaffEditor's 꾸밈음 mode) on the note at `location`, at the clicked pitch. */
+  const handleToggleGraceNote = useCallback(
+    (location: NoteLocation, letter: string, octave: number) => {
+      setScore((prev) => toggleGraceNote(prev, location, letter as Pitch['letter'], octave));
+    },
+    [setScore],
   );
 
   const handleChangeDuration = useCallback((location: NoteLocation, duration: DurationValue) => {
@@ -1317,6 +1326,7 @@ function App() {
         onMoveNote={handleMoveNote}
         onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}
+        onToggleGraceNote={handleToggleGraceNote}
         onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}
         onAddLineBreak={handleAddLineBreak}

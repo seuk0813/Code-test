@@ -105,6 +105,8 @@ interface StaffEditorProps {
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
+  /** Toggles a grace note (see 꾸밈음 toolbar button / editTool.graceNoteMode) on the note at `location`, at the given pitch. */
+  onToggleGraceNote: (location: NoteLocation, letter: string, octave: number) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
@@ -268,6 +270,7 @@ function StaffEditorInner({
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
+  onToggleGraceNote,
   onChangeDuration,
   onFocusMeasure,
   onAddLineBreak,
@@ -1700,6 +1703,22 @@ function StaffEditorInner({
       return;
     }
 
+    // 꾸밈음 mode: a click on an existing note toggles a grace note on it
+    // (at the clicked pitch) instead of the usual select/place behavior;
+    // a click on empty staff is simply ignored (grace notes need a host note).
+    if (editTool.graceNoteMode) {
+      if (click.type === 'select') {
+        const staff = findAnyStaffAt(result, point.x, point.y);
+        if (staff) {
+          const { snappedLine } = pitchAt(click.clef, staff, point.y);
+          const { letter, octave } = lineToPitch(click.clef, snappedLine);
+          onToggleGraceNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex }, letter, octave);
+        }
+      }
+      suppressClickRef.current = true;
+      return;
+    }
+
     if (click.type === 'select') {
       // Selecting an existing note cancels any locked placement preview.
       if (lockedPreviewRef.current) {
@@ -2009,6 +2028,20 @@ function StaffEditorInner({
     }
 
     const click = resolveClickPreferSelect(result, point.x, point.y);
+
+    if (editTool.graceNoteMode) {
+      if (click?.type === 'select') {
+        event.preventDefault();
+        const staff = findAnyStaffAt(result, point.x, point.y);
+        if (staff) {
+          const { snappedLine } = pitchAt(click.clef, staff, point.y);
+          const { letter, octave } = lineToPitch(click.clef, snappedLine);
+          onToggleGraceNote({ measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex }, letter, octave);
+        }
+      }
+      return;
+    }
+
     if (click?.type === 'select') {
       event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };

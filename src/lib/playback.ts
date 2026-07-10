@@ -77,6 +77,18 @@ function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature:
   const suppressed: Set<number>[] = flat.map(() => new Set<number>());
 
   flat.forEach(({ note, timeBeats }, i) => {
+    if (note.graceNote) {
+      // Acciaccatura — "crushed" against the beat: fired just before the main
+      // note's onset (stealing a sliver of the PREVIOUS beat, never its own),
+      // clamped so it can't go negative on the very first note of the piece.
+      const graceBeats = 0.15;
+      events.push({
+        timeBeats: Math.max(0, timeBeats - graceBeats),
+        durationSeconds: graceBeats * secondsPerBeat * 0.92,
+        notes: [pitchToToneNote({ letter: note.graceNote.letter, octave: note.graceNote.octave, accidental: note.graceNote.accidental ?? '' }, keySignature)],
+        synth,
+      });
+    }
     if (note.isRest || note.pitches.length === 0) return;
     note.pitches.forEach((pitch, pi) => {
       if (suppressed[i].has(pi)) return;

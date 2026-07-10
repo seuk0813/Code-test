@@ -161,6 +161,8 @@ export interface EditTool {
   dotted: boolean;
   isRest: boolean;
   accidental: Accidental;
+  /** When true, clicking an existing note on the staff toggles a grace note (see 꾸밈음 toolbar button) on it instead of the usual select/place behavior. */
+  graceNoteMode: boolean;
 }
 
 interface ToolbarProps {
@@ -443,6 +445,14 @@ export function Toolbar({
             <span className="tool-glyph">{a.label}</span>
           </button>
         ))}
+        <button
+          className={`tool-icon-btn ${editTool.graceNoteMode ? 'active' : ''}`}
+          onClick={() => onEditToolChange({ graceNoteMode: !editTool.graceNoteMode })}
+          aria-label="꾸밈음"
+          title="켜면 악보에서 음표를 클릭할 때마다 그 음표 앞에 짧은 꾸밈음(사선 꾸밈음)을 추가/제거합니다"
+        >
+          꾸밈음
+        </button>
         <ConnectButton
           info={connectInfo}
           disabled={!hasSelection}

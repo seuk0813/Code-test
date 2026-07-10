@@ -944,6 +944,18 @@ export function updateNoteInScore(
 }
 
 /**
+ * Adds an acciaccatura grace note (see NoteEvent.graceNote) to the note at
+ * `location`, or removes it if that note already has one — a single click
+ * (in 꾸밈음 mode) toggles it on/off rather than needing a separate delete
+ * gesture. No-op on rests, which never carry a grace note.
+ */
+export function toggleGraceNote(score: Score, location: NoteLocation, letter: Pitch['letter'], octave: number): Score {
+  return updateNoteInScore(score, location, (note) =>
+    note.isRest ? note : { ...note, graceNote: note.graceNote ? undefined : { letter, octave } },
+  );
+}
+
+/**
  * Finds the note immediately following `location` in the same clef, crossing
  * into the next measure(s) if the current one has no more notes. Used for
  * tie/slur connections, which always join to "the next note in the staff"

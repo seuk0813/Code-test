@@ -49,6 +49,13 @@ export interface NoteEvent {
    * key; slurs reuse this same index (clamped) on the next note's chord.
    */
   connectPitchIndex?: number | null;
+  /**
+   * A short acciaccatura ("crushed note") grace note played just before this
+   * one — drawn small with a slash through its stem, taking essentially no
+   * time from the beat. Toggled on/off by clicking an existing note while
+   * the 꾸밈음 toolbar button is active. Rests never carry one.
+   */
+  graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental };
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */
