@@ -22,6 +22,7 @@ export function normalizeScore(score: Score): Score {
         ...m,
         chords: m.chords ?? [],
         lyrics: m.lyrics ?? [],
+        restMarks: m.restMarks ?? [],
       }),
     ),
   };

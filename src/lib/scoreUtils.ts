@@ -9,6 +9,7 @@ import type {
   NoteEvent,
   NoteLocation,
   Pitch,
+  RestMark,
   ScaleDegreeLabel,
   Score,
   StaffMeasure,
@@ -248,6 +249,7 @@ interface MeasureSplitHalf {
   bass: StaffMeasure;
   chords: ChordSymbol[];
   lyrics: LyricSyllable[];
+  restMarks: RestMark[];
 }
 
 /** Splits a measure's content at `splitBeat` (0..capacity) into a head half (everything before) and a tail half (everything from splitBeat onward). Notes split by cumulative onset; chord/lyric offsets (fractions of the whole measure) are rescaled to fractions of whichever half they land in. */
@@ -277,9 +279,10 @@ function splitMeasureContent(measure: Measure, splitBeat: number, capacity: numb
   }
   const chords = splitByOffset(measure.chords);
   const lyrics = splitByOffset(measure.lyrics);
+  const restMarks = splitByOffset(measure.restMarks ?? []);
   return {
-    head: { treble: treble.head, bass: bass.head, chords: chords.head, lyrics: lyrics.head },
-    tail: { treble: treble.tail, bass: bass.tail, chords: chords.tail, lyrics: lyrics.tail },
+    head: { treble: treble.head, bass: bass.head, chords: chords.head, lyrics: lyrics.head, restMarks: restMarks.head },
+    tail: { treble: treble.tail, bass: bass.tail, chords: chords.tail, lyrics: lyrics.tail, restMarks: restMarks.tail },
   };
 }
 
@@ -321,6 +324,7 @@ export function clearPickupMeasure(score: Score): Score {
     bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
     chords: mergeOffsets(head.chords, tail.chords),
     lyrics: mergeOffsets(head.lyrics, tail.lyrics),
+    restMarks: mergeOffsets(head.restMarks ?? [], tail.restMarks ?? []),
   };
   const measures = [merged, ...score.measures.slice(2)];
   const lineBreaks = score.lineBreaks.filter((b) => b !== 1).map((b) => (b > 1 ? b - 1 : b));
@@ -369,6 +373,7 @@ export function clearTrailingMeasure(score: Score): Score {
     bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
     chords: mergeOffsets(head.chords, tail.chords),
     lyrics: mergeOffsets(head.lyrics, tail.lyrics),
+    restMarks: mergeOffsets(head.restMarks ?? [], tail.restMarks ?? []),
   };
   const measures = [...score.measures.slice(0, lastIndex - 1), merged];
   return { ...score, measures, trailingBeats: undefined };
@@ -414,6 +419,7 @@ export function createEmptyMeasure(): Measure {
     bass: emptyStaffMeasure(),
     chords: [],
     lyrics: [],
+    restMarks: [],
   };
 }
 
@@ -888,6 +894,25 @@ export function removeLyricFromScore(score: Score, measureIndex: number, lyricId
   return { ...score, measures };
 }
 
+/**
+ * Adds a visual-only rest mark (see RestMark / #187) at an exact clicked
+ * position — the "sketch a rest on top of a full staff" gesture. Unlike a
+ * real NoteEvent this never checks beat capacity: it's explicitly meant to
+ * be droppable even where a staff is already full.
+ */
+export function addRestMarkAt(score: Score, measureIndex: number, clef: Clef, offset: number, line: number): Score {
+  const mark: RestMark = { id: nextId('rm'), clef, offset: Math.min(0.97, Math.max(0.03, offset)), line };
+  const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, restMarks: [...(m.restMarks ?? []), mark] } : m));
+  return { ...score, measures };
+}
+
+export function removeRestMark(score: Score, measureIndex: number, restMarkId: string): Score {
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...m, restMarks: (m.restMarks ?? []).filter((r) => r.id !== restMarkId) } : m,
+  );
+  return { ...score, measures };
+}
+
 // --- Line breaks (systems / rows) -------------------------------------------
 
 export function addLineBreak(score: Score, afterMeasureIndex: number): Score {
@@ -981,6 +1006,7 @@ export function cloneMeasure(measure: Measure): Measure {
     bass: { notes: cloneNotes(measure.bass.notes) },
     chords: measure.chords.map((c) => ({ ...c, id: nextId('c') })),
     lyrics: measure.lyrics.map((l) => ({ ...l, id: nextId('ly') })),
+    restMarks: (measure.restMarks ?? []).map((r) => ({ ...r, id: nextId('rm') })),
   };
 }
 

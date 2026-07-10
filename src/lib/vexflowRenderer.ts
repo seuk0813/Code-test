@@ -180,6 +180,27 @@ function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
   });
 }
 
+/** Visual-only rest marks (see RestMark / #187) — a small quarter-rest glyph
+ * sketched wherever the user dropped it, drawn in a muted tone precisely so
+ * it doesn't read as a real, played rest (which would be a black notehead
+ * flag like every other note). Purely an annotation: never affects beat
+ * capacity, playback, or MusicXML/MIDI export. */
+function drawRestMarks(svg: SVGSVGElement, marks: RestMarkHitbox[]): void {
+  marks.forEach((mark) => {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(mark.x));
+    text.setAttribute('y', String(mark.y));
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '24');
+    text.setAttribute('font-family', 'Bravura');
+    text.setAttribute('stroke', 'none');
+    text.setAttribute('fill', '#8a7dc2');
+    text.setAttribute('opacity', '0.75');
+    text.textContent = '';
+    svg.appendChild(text);
+  });
+}
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -345,6 +366,14 @@ export interface SplitZoneHitbox {
   pieces: number;
 }
 
+/** Click target for a visual-only rest mark (see RestMark / #187). */
+export interface RestMarkHitbox {
+  measureIndex: number;
+  restMarkId: string;
+  x: number;
+  y: number;
+}
+
 export interface StaffHitbox {
   measureIndex: number;
   clef: Clef;
@@ -455,6 +484,7 @@ export interface RenderResult {
   chordBandHitboxes: ChordBandHitbox[];
   graceNoteHitboxes: GraceNoteHitbox[];
   splitZoneHitboxes: SplitZoneHitbox[];
+  restMarkHitboxes: RestMarkHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
@@ -731,6 +761,7 @@ export function renderScore(
   const chordHitboxes: ChordHitbox[] = [];
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
   const splitZoneHitboxes: SplitZoneHitbox[] = [];
+  const restMarkHitboxes: RestMarkHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
@@ -960,6 +991,15 @@ export function renderScore(
         // Once a measure is full it auto-formats (free X positions ignored) so
         // the score tidies itself; until then notes sit where they were placed.
         const full = isStaffMeasureFull({ notes }, score.timeSignature);
+
+        (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
+          restMarkHitboxes.push({
+            measureIndex,
+            restMarkId: r.id,
+            x: x + r.offset * measureWidth,
+            y: refY0 - r.line * spacing,
+          });
+        });
 
         if (staveNotes.length > 0) {
           const voice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
@@ -1327,6 +1367,7 @@ export function renderScore(
     drawFingeringMarks(svg, fingeringMarks);
     drawDegreeMarks(svg, degreeMarks);
     drawConnectStubs(svg, connectStubs);
+    drawRestMarks(svg, restMarkHitboxes);
   }
 
   return {
@@ -1338,6 +1379,7 @@ export function renderScore(
     chordBandHitboxes,
     graceNoteHitboxes,
     splitZoneHitboxes,
+    restMarkHitboxes,
     lineBreakHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
@@ -1566,6 +1608,11 @@ export function findGraceNoteAt(result: RenderResult, x: number, y: number): Gra
 /** Hover/click target for the scissors-cursor split gesture (see SplitZoneHitbox). */
 export function findSplitZoneAt(result: RenderResult, x: number, y: number): SplitZoneHitbox | null {
   return result.splitZoneHitboxes.find((z) => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1) ?? null;
+}
+
+/** Click target for a visual-only rest mark (see RestMarkHitbox / #187), for right-click deletion. */
+export function findRestMarkAt(result: RenderResult, x: number, y: number): RestMarkHitbox | null {
+  return result.restMarkHitboxes.find((r) => Math.abs(r.x - x) < 12 && Math.abs(r.y - y) < 14) ?? null;
 }
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {

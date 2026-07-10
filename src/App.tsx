@@ -10,6 +10,7 @@ import {
   addLyricsToScoreAt,
   addMeasure,
   addNoteToScore,
+  addRestMarkAt,
   adjacentIndexAfterDelete,
   attachOrRemoveGraceNote,
   CHORD_QUALITY_SUFFIX,
@@ -37,6 +38,7 @@ import {
   removeChordFromScore,
   removeLyricFromScore,
   removeGraceNote,
+  removeRestMark,
   removeMeasure,
   removeNoteFromScore,
   resizePickupMeasure,
@@ -339,6 +341,7 @@ function App() {
       insertIndex: number,
       durationOverride?: DurationValue,
       x?: number,
+      selectAfterAdd = true,
     ) => {
       // Only an explicitly-armed accidental (button pressed with nothing
       // selected) counts as the user's choice for a brand-new note/tone —
@@ -354,19 +357,40 @@ function App() {
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
+        // A full staff normally just refuses the add — but with the 쉼표
+        // tool armed, drop a lightweight visual rest mark instead (see
+        // RestMark/#187): it sketches a rest on top of the existing notes
+        // rather than genuinely adding a new beat, so it stays droppable
+        // even where a real note/rest can't fit any more.
+        if (editTool.isRest) {
+          const line = pitchToLine(clef, letter as Pitch['letter'], octave);
+          setScore((prev) => addRestMarkAt(prev, measureIndex, clef, x ?? 0.5, line));
+          setRestArmed(false);
+          return;
+        }
         window.alert('마디가 가득 찼습니다. "마디 추가" 버튼으로 새 마디를 만들어주세요.');
         return;
       }
       setScore(result.score);
-      setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
-      setSelectedPitchIndex(null);
+      if (selectAfterAdd) {
+        setSelected({ measureIndex, clef, noteIndex: result.noteIndex });
+        setSelectedPitchIndex(null);
+        // This note is now eligible to chain into the next one via Left/Right
+        // (see justPlacedRef) — cleared as soon as the selection moves away
+        // from it through any other path.
+        justPlacedRef.current = true;
+      } else {
+        // Keyboard-driven commit (spacebar chaining) — stays unselected (see
+        // item 3), and any note selected from before this chain started
+        // (e.g. the mouse-placed note that kicked it off) stops looking
+        // selected too, so at most one thing is ever highlighted red.
+        setSelected(null);
+        setSelectedPitchIndex(null);
+        justPlacedRef.current = false;
+      }
       setMarquee([]);
       setMarqueeChords([]);
       setMarqueeLyrics([]);
-      // This note is now eligible to chain into the next one via Left/Right
-      // (see justPlacedRef) — cleared as soon as the selection moves away
-      // from it through any other path.
-      justPlacedRef.current = true;
       // One-shot: a newly placed note consumes the armed accidental/rest, so
       // it doesn't silently keep applying to every note placed after it.
       if (editTool.accidental || editTool.isRest) {
@@ -929,20 +953,28 @@ function App() {
         handleStepDuration(e.key === 'ArrowLeft' ? 1 : -1);
         return;
       }
-      // Tab jumps straight to the start of the next measure (same clef and
-      // pitch) instead of arrow-stepping through the rest of the current one
-      // — handy once a measure is done and you want to keep placing notes
-      // right into the next. Shift+Tab instead steps BACK to the previously
-      // placed note and selects it for editing (see handleSelectPreviousNote)
-      // — the natural undo-a-step move during continuous spacebar entry.
+      // Tab (a note selected, no preview open): opens a placement preview
+      // right after it — same "ready for the next note" blue layout spacebar
+      // opens, just reachable without needing an existing selection to also
+      // be the thing that gets re-armed for the toolbar. A SECOND Tab, while
+      // that preview is already open (nothing selected), jumps it to the
+      // start of the next measure instead — see StaffEditor's own
+      // lockedPreview keydown handler for that half of this state machine.
+      // Shift+Tab steps BACK to the previously placed note and selects it
+      // for editing (see handleSelectPreviousNote) — the natural undo-a-step
+      // move during continuous spacebar entry.
       if (selected && e.key === 'Tab') {
         e.preventDefault();
         if (e.shiftKey) {
           handleSelectPreviousNote();
           return;
         }
-        const targetMeasure = selected.measureIndex + 1;
-        staffEditorRef.current?.openMeasurePreview(selected, targetMeasure);
+        const opened = staffEditorRef.current?.openAdjacentPreview(selected, 1);
+        if (opened) {
+          setSelected(null);
+          setSelectedPitchIndex(null);
+          justPlacedRef.current = false;
+        }
         return;
       }
       // Fingering: with a note selected, a digit sets its fingering (0 clears).
@@ -1278,6 +1310,10 @@ function App() {
     setScore((prev) => removeLyricFromScore(prev, measureIndex, lyricId));
   }, [setScore]);
 
+  const handleDeleteRestMark = useCallback((measureIndex: number, restMarkId: string) => {
+    setScore((prev) => removeRestMark(prev, measureIndex, restMarkId));
+  }, [setScore]);
+
   const handlePlay = useCallback(async () => {
     if (isPlaying) return;
     setIsPlaying(true);
@@ -1352,6 +1388,12 @@ function App() {
         const opened = staffEditorRef.current?.openAdjacentPreview(selected, 1);
         if (opened) {
           e.preventDefault();
+          // The preview (blue) takes over from here — the note that opened
+          // it stops looking selected/red (see item 4's "nothing stays red
+          // once the blue layout is up" flow).
+          setSelected(null);
+          setSelectedPitchIndex(null);
+          justPlacedRef.current = false;
           return;
         }
       }
@@ -1526,6 +1568,7 @@ function App() {
         onDeleteChord={handleDeleteChord}
         onMoveLyric={handleMoveLyric}
         onDeleteLyric={handleDeleteLyric}
+        onDeleteRestMark={handleDeleteRestMark}
         onDeselectNote={handleDeselectNote}
         onSetTitle={handleSetTitle}
         onSetComposer={handleSetComposer}

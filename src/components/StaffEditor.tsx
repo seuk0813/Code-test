@@ -12,6 +12,7 @@ import {
   findLyricAt,
   findLyricBandAt,
   findNearbyNotesAt,
+  findRestMarkAt,
   findSplitZoneAt,
   findStaffAt,
   findTitleAt,
@@ -107,10 +108,14 @@ interface StaffEditorProps {
     insertIndex: number,
     durationOverride?: DurationValue,
     x?: number,
+    /** False for a keyboard-driven commit (spacebar chaining) — the new note stays unselected. Defaults to true. */
+    selectAfterAdd?: boolean,
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
   /** Scissors-cursor gesture (see SplitZoneHitbox): splits the note at `location` into `pieces` equal quarter notes. */
   onSplitNote: (location: NoteLocation, pieces: number) => void;
+  /** Right-click deletes a visual-only rest mark (see RestMark / #187). */
+  onDeleteRestMark: (measureIndex: number, restMarkId: string) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
@@ -284,6 +289,7 @@ function StaffEditorInner({
   onAddNote,
   onDeleteNote,
   onSplitNote,
+  onDeleteRestMark,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -573,6 +579,38 @@ function StaffEditorInner({
       } else if (e.code === 'Space' || e.key === 'Enter') {
         e.preventDefault();
         commitLockedPreview();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // Select the note this preview was chained off of (immediately
+          // before it, same measure/clef — or the previous measure's last
+          // note if the preview sits at this one's very start), closing the
+          // preview — the "edit what I just typed" move (item 5).
+          const insertIdx = findInsertIndex(result, lp.measureIndex, lp.clef, lp.x);
+          let prevLoc: NoteLocation | null = null;
+          if (insertIdx > 0) {
+            prevLoc = { measureIndex: lp.measureIndex, clef: lp.clef, noteIndex: insertIdx - 1 };
+          } else {
+            for (let mi = lp.measureIndex - 1; mi >= 0; mi--) {
+              const notes = score.measures[mi]?.[lp.clef].notes ?? [];
+              if (notes.length > 0) {
+                prevLoc = { measureIndex: mi, clef: lp.clef, noteIndex: notes.length - 1 };
+                break;
+              }
+            }
+          }
+          setLockedPreview(null);
+          clearGhost(overlayRef.current);
+          if (prevLoc) onSelectNote(prevLoc);
+        } else {
+          // A second Tab, while the preview is already open — jump it to the
+          // start of the next measure instead of just nudging it (item 7).
+          const nextStaff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex + 1 && s.clef === lp.clef);
+          if (nextStaff) {
+            onFocusMeasure(lp.measureIndex + 1);
+            setLockedPreview({ ...lp, measureIndex: lp.measureIndex + 1, x: nextStaff.noteStartX });
+          }
+        }
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setLockedPreview(null);
@@ -1015,8 +1053,13 @@ function StaffEditorInner({
     });
   };
 
-  /** Place a note at the given staff position — stacking onto a near note as a chord, or a new note. */
-  const commitAdd = (measureIndex: number, clef: Clef, staff: StaffHitbox, snappedLine: number, x: number, duration: DurationValue) => {
+  /** Place a note at the given staff position — stacking onto a near note as a chord, or a new note.
+   * `select` controls whether the newly placed note becomes the selected
+   * (red) note: true for a deliberate mouse/touch tap (see item 2 — a click
+   * should visibly select what it just created), false for a keyboard-driven
+   * commit (spacebar chaining — see item 3, those stay unselected/black so a
+   * run of typed notes doesn't flash red one after another). */
+  const commitAdd = (measureIndex: number, clef: Clef, staff: StaffHitbox, snappedLine: number, x: number, duration: DurationValue, select: boolean) => {
     const result = renderResultRef.current;
     if (!result) return;
     const { letter, octave } = lineToPitch(clef, snappedLine);
@@ -1027,7 +1070,7 @@ function StaffEditorInner({
       onTogglePitch({ measureIndex, clef, noteIndex: chordTarget }, letter, octave);
     } else {
       noteIndex = findInsertIndex(result, measureIndex, clef, x);
-      onAddNote(measureIndex, clef, letter, octave, noteIndex, duration, xFractionAt(staff, x));
+      onAddNote(measureIndex, clef, letter, octave, noteIndex, duration, xFractionAt(staff, x), select);
     }
     onFocusMeasure(measureIndex);
     // Chains continuous note entry: once the next render has this note's
@@ -1071,7 +1114,9 @@ function StaffEditorInner({
       return;
     }
     const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
-    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, lp.duration);
+    // Keyboard-driven commit (spacebar/Enter) — the new note stays
+    // unselected/black (see item 3) instead of taking over `selected`.
+    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, lp.duration, false);
     setLockedPreview(null);
     clearGhost(overlayRef.current);
   };
@@ -1618,7 +1663,8 @@ function StaffEditorInner({
       onFocusMeasure(gesture.measureIndex);
       if (sameSpot) {
         const staff = staffGeometryFor(result, gesture.measureIndex, gesture.clef, gesture.staffOrigin);
-        if (staff) commitAdd(gesture.measureIndex, gesture.clef, staff, gesture.line, gesture.x, gesture.duration);
+        // A deliberate mouse click commit selects the note it just created (see item 2).
+        if (staff) commitAdd(gesture.measureIndex, gesture.clef, staff, gesture.line, gesture.x, gesture.duration, true);
         setLockedPreview(null);
         clearGhost(overlayRef.current);
       } else {
@@ -2026,7 +2072,11 @@ function StaffEditorInner({
   };
 
   const handleMouseLeave = () => {
-    if (!mouseGestureRef.current) {
+    // A locked preview (blue) is a committed placement-in-progress, not a
+    // hover hint — it must stay on screen even once the pointer leaves the
+    // staff (e.g. to click a toolbar button or the mouse leaves the page
+    // entirely) until the user explicitly commits or cancels it.
+    if (!mouseGestureRef.current && !lockedPreviewRef.current) {
       clearGhost(overlayRef.current);
       clearTooltip(overlayRef.current);
     }
@@ -2060,6 +2110,12 @@ function StaffEditorInner({
     const lyricHit = findLyricAt(result, point.x, point.y);
     if (lyricHit) {
       onDeleteLyric(lyricHit.measureIndex, lyricHit.lyricId);
+      return;
+    }
+
+    const restMarkHit = findRestMarkAt(result, point.x, point.y);
+    if (restMarkHit) {
+      onDeleteRestMark(restMarkHit.measureIndex, restMarkHit.restMarkId);
     }
   };
 
@@ -2089,7 +2145,8 @@ function StaffEditorInner({
     const result = renderResultRef.current;
     if (!preview || !result) return;
     const staff = staffGeometryFor(result, preview.measureIndex, preview.clef, preview.staffOrigin);
-    if (staff) commitAdd(preview.measureIndex, preview.clef, staff, preview.line, preview.x, preview.duration);
+    // A deliberate tap commit selects the note it just created (mirrors the mouse click case — item 2).
+    if (staff) commitAdd(preview.measureIndex, preview.clef, staff, preview.line, preview.x, preview.duration, true);
     pendingPreviewRef.current = null;
     clearGhost(overlayRef.current);
   };

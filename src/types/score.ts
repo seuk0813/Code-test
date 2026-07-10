@@ -98,6 +98,24 @@ export interface StaffMeasure {
   notes: NoteEvent[];
 }
 
+/**
+ * A purely visual rest marker (see #187) — lets a rest be sketched in on top
+ * of an already-full staff (where a real NoteEvent can't fit any more beats)
+ * as a small annotation glyph. Deliberately NOT a NoteEvent: it carries no
+ * duration, isn't part of the note sequence, and is ignored by playback,
+ * beat-capacity checks, and MusicXML/MIDI export — true second-voice
+ * polyphony (a real overlapping rest that plays/exports) is a much larger,
+ * separate effort than this lightweight overlay covers.
+ */
+export interface RestMark {
+  id: string;
+  clef: Clef;
+  /** Horizontal position within the measure, 0 (start) .. 1 (end). */
+  offset: number;
+  /** Vertical staff line position — same units as scoreUtils.pitchToLine. */
+  line: number;
+}
+
 export interface Measure {
   id: string;
   treble: StaffMeasure;
@@ -106,6 +124,8 @@ export interface Measure {
   chords: ChordSymbol[];
   /** Lyric syllables shown in the band between the treble and bass staves. */
   lyrics: LyricSyllable[];
+  /** Visual-only rest annotations layered over existing notes (see RestMark / #187). */
+  restMarks: RestMark[];
 }
 
 export interface TimeSignature {
