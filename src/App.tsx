@@ -1230,6 +1230,14 @@ function App() {
 
   return (
     <div className="app">
+      <button
+        className={`melody-staff-toggle ${score.showMelodyStaff ? 'active' : ''}`}
+        onClick={() => handleScoreMetaChange({ showMelodyStaff: !score.showMelodyStaff })}
+        aria-label="멜로디+가사 보표 형식"
+        title="켜면 피아노 보표 위에 코드/가사가 붙은 별도의 멜로디 보표가 추가됩니다 (악보집 형식). 끄면 원래대로 피아노 보표에 코드/가사가 직접 표시됩니다"
+      >
+        멜로디+가사 보표
+      </button>
       <div className="sticky-controls">
         <div className="app-header">
           <div className="quick-actions">

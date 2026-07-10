@@ -348,14 +348,6 @@ export function Toolbar({
             ⚠ 못갖춘마디+마지막 마디 박자 불일치
           </span>
         )}
-        <button
-          className={`tool-icon-btn ${score.showMelodyStaff ? 'active' : ''}`}
-          onClick={() => onScoreMetaChange({ showMelodyStaff: !score.showMelodyStaff })}
-          aria-label="멜로디+가사 보표 형식"
-          title="켜면 피아노 보표 위에 코드/가사가 붙은 별도의 멜로디 보표가 추가됩니다 (악보집 형식). 끄면 원래대로 피아노 보표에 코드/가사가 직접 표시됩니다"
-        >
-          멜로디+가사 보표
-        </button>
         <label>
           조표
           <select

@@ -6,6 +6,39 @@
   gap: 12px;
 }
 
+/* Deliberately outside the ivory toolbar box, pinned to the screen's
+   top-left corner regardless of scroll — the user wanted this toggle
+   separated from the other toolbar controls. */
+.melody-staff-toggle {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 30;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.melody-staff-toggle:hover {
+  border-color: var(--accent);
+  filter: brightness(1.05);
+}
+
+.melody-staff-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
 /* Groups the header and toolbar into one sticky unit so they stack in
    document order without needing to know each other's rendered height.
    A solid background (pulled out over the app's padding with negative
