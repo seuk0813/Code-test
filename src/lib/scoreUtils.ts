@@ -256,25 +256,31 @@ export function clearTrailingMeasure(score: Score): Score {
 
 /**
  * Moves an already-created 못갖춘마디's end boundary to a new beat position
- * (dragging the handle at the barline after it) — implemented as merge then
- * re-split so notes get reassigned to whichever side of the new boundary
- * their onset now falls on, same as creating it fresh. No-op if there's no
- * pickup measure to resize.
+ * (dragging the handle at the barline after it). Only the declared beat
+ * count changes — the notes/chords/lyrics already placed in the pickup and
+ * the measure after it stay exactly where they are, so nothing jumps
+ * measures mid-drag. No-op if there's no pickup measure to resize.
  */
 export function resizePickupMeasure(score: Score, newPickupBeats: number): Score {
   if (score.pickupBeats === undefined) return score;
-  return splitPickupMeasure(clearPickupMeasure(score), newPickupBeats);
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const clamped = Math.min(capacity - 0.01, Math.max(0.01, newPickupBeats));
+  return { ...score, pickupBeats: clamped };
 }
 
 /**
  * Mirrors resizePickupMeasure for the trailing partial closing measure's
  * start boundary. `splitBeat` is measured the same way as splitTrailingMeasure
- * expects (a beat position within the merged pair, not the resulting
- * trailing length). No-op if there's no trailing measure to resize.
+ * expects (a beat position within the full measure, not the resulting
+ * trailing length) — only the declared trailingBeats changes; existing
+ * note/chord/lyric content is left untouched. No-op if there's no trailing
+ * measure to resize.
  */
 export function resizeTrailingMeasure(score: Score, splitBeat: number): Score {
   if (score.trailingBeats === undefined) return score;
-  return splitTrailingMeasure(clearTrailingMeasure(score), splitBeat);
+  const capacity = measureCapacityBeats(score.timeSignature);
+  const clamped = Math.min(capacity - 0.01, Math.max(0.01, splitBeat));
+  return { ...score, trailingBeats: capacity - clamped };
 }
 
 function emptyStaffMeasure(): StaffMeasure {
