@@ -575,13 +575,36 @@ export function editChordText(score: Score, measureIndex: number, chordId: strin
   return { ...score, measures };
 }
 
-export function moveChordInScore(score: Score, measureIndex: number, chordId: string, offset: number): Score {
+/**
+ * Repositions a chord symbol, optionally moving it into a different measure
+ * (dragging past a measure's edge) — mirrors moveLyricInScore. When the
+ * target measure differs from the source, the chord is spliced out of the
+ * source's list and appended to the target's.
+ */
+export function moveChordInScore(
+  score: Score,
+  measureIndex: number,
+  chordId: string,
+  offset: number,
+  toMeasureIndex: number = measureIndex,
+): Score {
   const clamped = Math.min(0.95, Math.max(0.05, offset));
-  const measures = score.measures.map((m, i) =>
-    i === measureIndex
-      ? { ...m, chords: m.chords.map((c) => (c.id === chordId ? { ...c, offset: clamped } : c)) }
-      : m,
-  );
+  if (toMeasureIndex === measureIndex) {
+    const measures = score.measures.map((m, i) =>
+      i === measureIndex
+        ? { ...m, chords: m.chords.map((c) => (c.id === chordId ? { ...c, offset: clamped } : c)) }
+        : m,
+    );
+    return { ...score, measures };
+  }
+  const source = score.measures[measureIndex]?.chords ?? [];
+  const chord = source.find((c) => c.id === chordId);
+  if (!chord) return score;
+  const measures = score.measures.map((m, i) => {
+    if (i === measureIndex) return { ...m, chords: source.filter((c) => c.id !== chordId) };
+    if (i === toMeasureIndex) return { ...m, chords: [...m.chords, { ...chord, offset: clamped }] };
+    return m;
+  });
   return { ...score, measures };
 }
 

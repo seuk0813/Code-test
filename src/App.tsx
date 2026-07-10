@@ -1059,9 +1059,12 @@ function App() {
     setScore((prev) => editChordText(prev, measureIndex, chordId, text));
   }, [setScore]);
 
-  const handleMoveChord = useCallback((measureIndex: number, chordId: string, offset: number) => {
-    setScore((prev) => moveChordInScore(prev, measureIndex, chordId, offset));
-  }, [setScore]);
+  const handleMoveChord = useCallback(
+    (measureIndex: number, chordId: string, offset: number, toMeasureIndex: number) => {
+      setScore((prev) => moveChordInScore(prev, measureIndex, chordId, offset, toMeasureIndex));
+    },
+    [setScore],
+  );
 
   const handleDeleteChord = useCallback((measureIndex: number, chordId: string) => {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));

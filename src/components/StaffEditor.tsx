@@ -108,7 +108,7 @@ interface StaffEditorProps {
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
-  onMoveChord: (measureIndex: number, chordId: string, offset: number) => void;
+  onMoveChord: (measureIndex: number, chordId: string, offset: number, toMeasureIndex: number) => void;
   onDeleteChord: (measureIndex: number, chordId: string) => void;
   onMoveLyric: (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => void;
   onDeleteLyric: (measureIndex: number, lyricId: string) => void;
@@ -1043,8 +1043,12 @@ function StaffEditorInner({
 
   // --- Chord / lyric symbol dragging (shared by mouse and touch) --------------
 
+  // The dragged item still physically lives in its origin measure's data
+  // until the drag commits (crossing into another measure only moves the
+  // ghost, not the score yet) — look it up there even while the ghost is
+  // hovering over a different measure, or the label would blank out mid-drag.
   const symbolLabel = (drag: SymbolDrag): string => {
-    const measure = score.measures[drag.measureIndex];
+    const measure = score.measures[drag.originMeasureIndex];
     if (drag.kind === 'chordSymbol') {
       const chord = measure.chords.find((c) => c.id === drag.id);
       return chord ? chordLabel(chord) : '';
@@ -1056,16 +1060,20 @@ function StaffEditorInner({
     if (!drag.moved && Math.abs(point.x - drag.startX) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
 
-    // Lyrics can cross into whichever measure the finger/cursor is currently
-    // over; chord symbols stay confined to their origin measure.
-    if (drag.kind === 'lyric') {
-      const result = renderResultRef.current;
-      const staff = result && findStaffAt(result, point.x, drag.y);
-      if (staff && staff.measureIndex !== drag.measureIndex) {
-        drag.measureIndex = staff.measureIndex;
-        drag.measureX = staff.x0;
-        drag.measureWidth = staff.x1 - staff.x0;
-      }
+    // Both chord symbols and lyrics can cross into whichever measure the
+    // finger/cursor is currently over (dragging past a measure's edge).
+    // findStaffAt needs a y strictly inside a staff's hitbox range, but the
+    // chord band's own y sits just 2px above the treble hitbox's y0 (they're
+    // computed independently, see CHORD_BAND_Y vs TREBLE_Y) — nudge down a
+    // few px so it reliably lands inside the treble (chords) or bass
+    // (lyrics, which already sit safely mid-band) hitbox instead of missing
+    // every measure's y-range and silently never crossing.
+    const result = renderResultRef.current;
+    const staff = result && findStaffAt(result, point.x, drag.y + 5);
+    if (staff && staff.measureIndex !== drag.measureIndex) {
+      drag.measureIndex = staff.measureIndex;
+      drag.measureX = staff.x0;
+      drag.measureWidth = staff.x1 - staff.x0;
     }
 
     const offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
@@ -1082,7 +1090,7 @@ function StaffEditorInner({
 
   const commitSymbolDrag = (drag: SymbolDrag) => {
     if (!drag.moved) return;
-    if (drag.kind === 'chordSymbol') onMoveChord(drag.measureIndex, drag.id, drag.pendingOffset);
+    if (drag.kind === 'chordSymbol') onMoveChord(drag.originMeasureIndex, drag.id, drag.pendingOffset, drag.measureIndex);
     else onMoveLyric(drag.originMeasureIndex, drag.id, drag.pendingOffset, drag.measureIndex);
   };
 
