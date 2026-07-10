@@ -4,7 +4,6 @@ import {
   chordLabel,
   computeScoreRows,
   isStaffMeasureFull,
-  isStaffMeasureOverflow,
   measureCapacityBeats,
   noteBeats,
   pitchToLine,
@@ -207,9 +206,6 @@ const TITLE_BAND = 82;
  * this project already hit once before).
  */
 const COMPOSER_BAND = 22;
-const OVERFLOW_MARK_RADIUS = 8;
-/** Extra slack added to the overflow marker's hit-test so a small marker is still easy to hover/tap. */
-const OVERFLOW_HIT_SLACK = 8;
 
 /**
  * Font stacks for the printed-score text elements. Korean chord-sheet images
@@ -341,13 +337,6 @@ export interface ComposerHitbox {
   y: number;
 }
 
-export interface OverflowHitbox {
-  measureIndex: number;
-  x: number;
-  y: number;
-  radius: number;
-}
-
 export interface RenderResult {
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
@@ -356,7 +345,6 @@ export interface RenderResult {
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
-  overflowHitboxes: OverflowHitbox[];
   titleHitbox: TitleHitbox;
   composerHitbox: ComposerHitbox;
   width: number;
@@ -525,7 +513,6 @@ export function renderScore(
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
   const lyricBandHitboxes: LyricBandHitbox[] = [];
-  const overflowHitboxes: OverflowHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
   const connectStubs: ConnectStubMark[] = [];
@@ -814,14 +801,6 @@ export function renderScore(
         measureWidth,
       });
 
-      // Beat-overflow warning marker for either staff of this measure.
-      if (
-        isStaffMeasureOverflow(measure.treble, score.timeSignature) ||
-        isStaffMeasureOverflow(measure.bass, score.timeSignature)
-      ) {
-        overflowHitboxes.push({ measureIndex, x: x + measureWidth - 12, y: trebleY - 14, radius: OVERFLOW_MARK_RADIUS });
-      }
-
       // Rows now wrap automatically every MEASURES_PER_ROW measures (see
       // computeRows), so no manual "next line" marker is drawn.
 
@@ -913,7 +892,6 @@ export function renderScore(
     drawChordLabels(svg, score, chordHitboxes);
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
-    drawOverflowMarks(svg, overflowHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
     drawConnectStubs(svg, connectStubs);
@@ -925,7 +903,6 @@ export function renderScore(
     chordHitboxes,
     chordBandHitboxes,
     lineBreakHitboxes,
-    overflowHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
     titleHitbox,
@@ -988,34 +965,6 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.setAttribute('fill', '#333');
     text.textContent = syllable.text;
     svg.appendChild(text);
-  });
-}
-
-/** White marker (red outline + red "!") so it stands out clearly against the staff. */
-function drawOverflowMarks(svg: SVGSVGElement, marks: OverflowHitbox[]): void {
-  marks.forEach((m) => {
-    const g = document.createElementNS(SVG_NS, 'g');
-    const title = document.createElementNS(SVG_NS, 'title');
-    title.textContent = '마디가 가득 찼습니다 (박자 초과)';
-    g.appendChild(title);
-    const circle = document.createElementNS(SVG_NS, 'circle');
-    circle.setAttribute('cx', String(m.x));
-    circle.setAttribute('cy', String(m.y));
-    circle.setAttribute('r', String(m.radius));
-    circle.setAttribute('fill', '#ffffff');
-    circle.setAttribute('stroke', '#e03131');
-    circle.setAttribute('stroke-width', '2');
-    g.appendChild(circle);
-    const bang = document.createElementNS(SVG_NS, 'text');
-    bang.setAttribute('x', String(m.x));
-    bang.setAttribute('y', String(m.y + 4));
-    bang.setAttribute('text-anchor', 'middle');
-    bang.setAttribute('font-size', '12');
-    bang.setAttribute('font-weight', '800');
-    bang.setAttribute('fill', '#e03131');
-    bang.textContent = '!';
-    g.appendChild(bang);
-    svg.appendChild(g);
   });
 }
 
@@ -1156,12 +1105,6 @@ export function findTitleAt(result: RenderResult, x: number, y: number): boolean
 export function findComposerAt(result: RenderResult, x: number, y: number): boolean {
   const hb = result.composerHitbox;
   return x >= hb.x0 && x <= hb.x1 && y >= hb.y0 && y <= hb.y1;
-}
-
-export function findOverflowMarkAt(result: RenderResult, x: number, y: number): OverflowHitbox | null {
-  return (
-    result.overflowHitboxes.find((m) => Math.hypot(m.x - x, m.y - y) < m.radius + OVERFLOW_HIT_SLACK) ?? null
-  );
 }
 
 /** Index of the pitch (within a note's own `pitches`) nearest a point — used to narrow a chord selection to a specific pitch. */

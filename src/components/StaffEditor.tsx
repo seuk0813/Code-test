@@ -10,7 +10,6 @@ import {
   findLyricAt,
   findLyricBandAt,
   findNearbyNotesAt,
-  findOverflowMarkAt,
   findStaffAt,
   findTitleAt,
   lineAt,
@@ -48,7 +47,6 @@ import {
   renderPickupHandles,
   renderPlayback,
   renderSeekBar,
-  renderTooltip,
 } from '../lib/ghostOverlay';
 import type { EditTool } from './Toolbar';
 
@@ -1760,12 +1758,6 @@ function StaffEditorInner({
       return;
     }
 
-    const overflowHit = findOverflowMarkAt(result, point.x, point.y);
-    if (overflowHit) {
-      clearGhost(overlayRef.current);
-      renderTooltip(overlayRef.current, { x: overflowHit.x, y: overflowHit.y, text: '마디가 가득 찼습니다' });
-      return;
-    }
     clearTooltip(overlayRef.current);
 
     const click = resolveClickPreferSelect(result, point.x, point.y);
@@ -1928,14 +1920,6 @@ function StaffEditorInner({
       pendingPreviewRef.current = null;
       clearGhost(overlayRef.current);
       onAddLineBreak(lineBreak.afterMeasureIndex);
-      return;
-    }
-
-    const overflowHit = findOverflowMarkAt(result, point.x, point.y);
-    if (overflowHit) {
-      event.preventDefault();
-      renderTooltip(overlayRef.current, { x: overflowHit.x, y: overflowHit.y, text: '마디가 가득 찼습니다' });
-      window.setTimeout(() => clearTooltip(overlayRef.current), 2000);
       return;
     }
 
