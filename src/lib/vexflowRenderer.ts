@@ -701,15 +701,28 @@ export function renderScore(
             });
           }
 
-          melodyVoice.draw(context, melodyStave);
-          try {
-            const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
-            const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
-            const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats);
-            beamGroups.map((group) => new Beam(group, true)).forEach((b) => b.setContext(context).draw());
-          } catch {
-            // Beaming is a visual nicety; ignore failures on unusual groupings.
+          // Beams must be built BEFORE the voice is drawn — same reasoning as
+          // the treble/bass staves below: creating a Beam marks its notes so
+          // they skip drawing their own individual flag. Building it after
+          // voice.draw() left every note showing its own flag (the beam
+          // can't retroactively suppress glyphs already drawn) — the melody
+          // staff's 16th/8th-note runs never looked beamed at all. Only beam
+          // once the measure is full (free-placed notes' arbitrary X spacing
+          // would produce misshapen beams) — same gating as the treble/bass
+          // staves below.
+          let melodyBeams: Beam[] = [];
+          if (melodyFull) {
+            try {
+              const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+              const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
+              const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats);
+              melodyBeams = beamGroups.map((group) => new Beam(group, true));
+            } catch {
+              // Beaming is a visual nicety; ignore failures on unusual groupings.
+            }
           }
+          melodyVoice.draw(context, melodyStave);
+          melodyBeams.forEach((b) => b.setContext(context).draw());
 
           melodyStaveNotes.forEach((sn, noteIndex) => {
             const note = melodyNotes[noteIndex];

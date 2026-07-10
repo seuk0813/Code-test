@@ -26,6 +26,7 @@ import {
 import {
   chordLabel,
   cycleDurationLonger,
+  cycleDurationShorter,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
@@ -124,6 +125,8 @@ interface StaffEditorProps {
   onResizePickupMeasure: (newPickupBeats: number) => void;
   /** Mirrors onResizePickupMeasure for the boundary before the trailing partial closing measure — `splitBeat` is measured the same way as when the trailing measure was first created (see splitTrailingMeasure). Only meaningful while score.trailingBeats is set. */
   onResizeTrailingMeasure: (splitBeat: number) => void;
+  /** Right-clicking the seek bar handle calls this to create/clear a 못갖춘마디(pickup) or trailing partial measure at the seek bar's current position (replaces the old always-visible toolbar toggle). */
+  onTogglePickupOrTrailing: () => void;
   /** Inline editing directly on the score: title, composer, and adding/editing chords & lyrics in place. */
   onSetTitle: (title: string) => void;
   onSetComposer: (composer: string) => void;
@@ -284,6 +287,7 @@ function StaffEditorInner({
   onSeekBeat,
   onResizePickupMeasure,
   onResizeTrailingMeasure,
+  onTogglePickupOrTrailing,
   onSetTitle,
   onSetComposer,
   onAddChordAt,
@@ -365,13 +369,15 @@ function StaffEditorInner({
 
   const mouseGestureRef = useRef<MouseGesture>(null);
   const mouseHoldRef = useRef<number | null>(null);
-  // Right-mouse hold-to-lower-pitch on an existing note (mirrors the left
-  // mouse's hold-to-cycle-duration): held down, it steps the note's pitch
-  // down once per HOLD_CYCLE_MS tick. A quick right click (the hold never
-  // fires) still deletes the note as before — see handleContextMenu.
+  // Right-mouse hold-to-shorten on an existing note (mirrors the left
+  // mouse's hold-to-cycle-LONGER): held down, it steps the note's duration
+  // one notch shorter once per HOLD_CYCLE_MS tick. A quick right click (the
+  // hold never fires) still deletes the note as before — see handleContextMenu.
   const rightHoldLocationRef = useRef<NoteLocation | null>(null);
   const rightHoldFiredRef = useRef(false);
   const rightHoldIntervalRef = useRef<number | null>(null);
+  /** The duration being cycled down through on this right-mouse hold — tracked locally (not re-read from score) so each tick reliably steps one further notch shorter than the last. */
+  const rightHoldDurationRef = useRef<DurationValue | null>(null);
 
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const touchGestureRef = useRef<TouchGesture>(null);
@@ -398,6 +404,15 @@ function StaffEditorInner({
   );
   const lockedPreviewRef = useRef<typeof lockedPreview>(null);
   lockedPreviewRef.current = lockedPreview;
+  /**
+   * Set by commitAdd right after a locked-preview commit (plain note or
+   * chord-tone stack) lands in the score — consumed by the effect below,
+   * once the NEXT render has refreshed renderResultRef.current with the new
+   * note's real geometry, to immediately open the next placement preview
+   * right after it. This chains continuous note entry off a single
+   * spacebar press (commit + advance) instead of needing a second keypress.
+   */
+  const pendingChainRef = useRef<NoteLocation | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -414,25 +429,47 @@ function StaffEditorInner({
     syncZoomSpacerSize();
   }, [score, selected, draggingNote, playingLocations, selectedPitchIndex]);
 
-  // Green checkmark that flashes over a measure the instant its beat count
-  // exactly fills the time signature (editing further past that, or back out
-  // of it, doesn't re-trigger it — only the false→true transition does).
-  const prevCompleteMeasuresRef = useRef<Set<number>>(new Set());
-  const [measureFlashes, setMeasureFlashes] = useState<{ id: number; measureIndex: number }[]>([]);
+  // Consumes pendingChainRef (see its declaration) the moment the render
+  // above has refreshed renderResultRef.current for the just-committed note
+  // — opening the next placement preview right after it, so a single
+  // spacebar press both commits a note (or chord tone) AND advances to the
+  // next slot, no second keypress needed.
+  useEffect(() => {
+    const loc = pendingChainRef.current;
+    if (!loc) return;
+    pendingChainRef.current = null;
+    openAdjacentPreview(loc, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [score]);
+
+  // Green checkmark that flashes over a STAFF (treble or bass independently)
+  // the instant its own beat count exactly fills the time signature (editing
+  // further past that, or back out of it, doesn't re-trigger it — only the
+  // false→true transition does). Tracked per (measureIndex, clef) rather
+  // than per measure so a bass-only completion gets its own checkmark right
+  // over the bass staff, not just a shared one anchored to the treble staff.
+  const prevCompleteStavesRef = useRef<Set<string>>(new Set());
+  const [measureFlashes, setMeasureFlashes] = useState<{ id: number; measureIndex: number; clef: Clef }[]>([]);
   const flashIdRef = useRef(0);
 
   useEffect(() => {
-    const current = new Set<number>();
+    const current = new Set<string>();
     score.measures.forEach((measure, measureIndex) => {
-      const staffComplete = (sm: typeof measure.treble) =>
-        isStaffMeasureFull(sm, score.timeSignature) && !isStaffMeasureOverflow(sm, score.timeSignature);
-      if (staffComplete(measure.treble) || staffComplete(measure.bass)) current.add(measureIndex);
+      (['treble', 'bass'] as const).forEach((clef) => {
+        const sm = measure[clef];
+        if (isStaffMeasureFull(sm, score.timeSignature) && !isStaffMeasureOverflow(sm, score.timeSignature)) {
+          current.add(`${measureIndex}:${clef}`);
+        }
+      });
     });
-    const prev = prevCompleteMeasuresRef.current;
-    const newlyCompleted = [...current].filter((mi) => !prev.has(mi));
-    prevCompleteMeasuresRef.current = current;
+    const prev = prevCompleteStavesRef.current;
+    const newlyCompleted = [...current].filter((key) => !prev.has(key));
+    prevCompleteStavesRef.current = current;
     if (newlyCompleted.length === 0) return;
-    const additions = newlyCompleted.map((measureIndex) => ({ id: flashIdRef.current++, measureIndex }));
+    const additions = newlyCompleted.map((key) => {
+      const [measureIndex, clef] = key.split(':');
+      return { id: flashIdRef.current++, measureIndex: Number(measureIndex), clef: clef as Clef };
+    });
     setMeasureFlashes((prevFlashes) => [...prevFlashes, ...additions]);
     additions.forEach(({ id }) => {
       window.setTimeout(() => {
@@ -445,9 +482,14 @@ function StaffEditorInner({
     const result = renderResultRef.current;
     if (!overlayRef.current || !result) return;
     const specs = measureFlashes
-      .map(({ id, measureIndex }) => {
-        const treble = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
-        return treble ? { id, x: treble.x1 - 12, y: treble.y0 - 14 } : null;
+      .map(({ id, measureIndex, clef }) => {
+        const staff = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === clef);
+        // staff.y0 is the click-region's top edge, which for the bass staff
+        // sits at the shared midpoint between the two staves (not near the
+        // bass staff itself) — refY0 (the staff's own top-line reference,
+        // used for pitch math) anchors correctly to whichever staff actually
+        // completed, treble or bass.
+        return staff ? { id, x: staff.x1 - 12, y: staff.refY0 - 54 } : null;
       })
       .filter((s): s is { id: number; x: number; y: number } => s !== null);
     renderMeasureCompleteFlashes(overlayRef.current, specs);
@@ -958,13 +1000,19 @@ function StaffEditorInner({
     if (!result) return;
     const { letter, octave } = lineToPitch(clef, snappedLine);
     const chordTarget = chordMergeTargetAt(measureIndex, clef, x);
+    let noteIndex: number;
     if (chordTarget !== null) {
+      noteIndex = chordTarget;
       onTogglePitch({ measureIndex, clef, noteIndex: chordTarget }, letter, octave);
     } else {
-      const insertIndex = findInsertIndex(result, measureIndex, clef, x);
-      onAddNote(measureIndex, clef, letter, octave, insertIndex, duration, xFractionAt(staff, x));
+      noteIndex = findInsertIndex(result, measureIndex, clef, x);
+      onAddNote(measureIndex, clef, letter, octave, noteIndex, duration, xFractionAt(staff, x));
     }
     onFocusMeasure(measureIndex);
+    // Chains continuous note entry: once the next render has this note's
+    // real geometry (see the effect that reads this ref), immediately open
+    // a placement preview right after it — no second keypress needed.
+    pendingChainRef.current = { measureIndex, clef, noteIndex };
   };
 
   /** Draws the locked placement preview (a stronger, more opaque ghost than the
@@ -1583,6 +1631,13 @@ function StaffEditorInner({
       const point = eventPoint(event);
       if (!result || !point) return;
       event.preventDefault();
+      // Right-clicking the seek bar handle creates/clears a 못갖춘마디 (or
+      // trailing partial measure) at wherever it currently sits — see
+      // onTogglePickupOrTrailing (replaces the old always-visible toolbar toggle).
+      if (nearSeekHandle(point)) {
+        onTogglePickupOrTrailing();
+        return;
+      }
       const click = resolveClick(result, point.x, point.y);
       if (click?.type !== 'select') return;
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
@@ -1590,9 +1645,12 @@ function StaffEditorInner({
       if (!note || note.isRest || note.pitches.length === 0) return;
       rightHoldLocationRef.current = location;
       rightHoldFiredRef.current = false;
+      rightHoldDurationRef.current = note.duration;
       rightHoldIntervalRef.current = window.setInterval(() => {
         rightHoldFiredRef.current = true;
-        onMoveNote(location, -0.5);
+        const next = cycleDurationShorter(rightHoldDurationRef.current ?? note.duration);
+        rightHoldDurationRef.current = next;
+        onChangeDuration(location, next);
       }, HOLD_CYCLE_MS);
       document.addEventListener('mouseup', handleRightMouseUp);
       return;

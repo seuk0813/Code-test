@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Accidental, ChordQuality, DurationValue, Pitch, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DURATION_LABELS, measureCapacityBeats, measureDurationBeats, measureStartBeat, pickupTrailingMismatch } from '../lib/scoreUtils';
+import { CHORD_QUALITY_LABELS, DURATION_LABELS, pickupTrailingMismatch } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
@@ -187,12 +187,6 @@ interface ToolbarProps {
   /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
   cKeyBasedAccidentals: boolean;
   onToggleCKeyBasedAccidentals: () => void;
-  /** Current seek/playback bar position in beats from the start of the score — the "못갖춘마디"/"마지막 마디" toggles capture this as the split point when pressed. */
-  seekBeat: number;
-  /** Splits/merges the first measure into a 못갖춘마디 (pickup) at the current seek bar position. */
-  onTogglePickupMeasure: () => void;
-  /** Mirrors onTogglePickupMeasure for a trailing partial closing measure at the end of the piece. */
-  onToggleTrailingMeasure: () => void;
 }
 
 export function Toolbar({
@@ -211,9 +205,6 @@ export function Toolbar({
   onAddChord,
   cKeyBasedAccidentals,
   onToggleCKeyBasedAccidentals,
-  seekBeat,
-  onTogglePickupMeasure,
-  onToggleTrailingMeasure,
 }: ToolbarProps) {
   const [chordRootIndex, setChordRootIndex] = useState(0);
   const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
@@ -268,54 +259,6 @@ export function Toolbar({
     onEditToolChange({ duration });
   };
 
-  /**
-   * Single 못갖춘마디 toggle covering both ends of the piece: whichever
-   * measure the seek bar currently sits in — the first or the last — is the
-   * one this press acts on. If that measure is already split, pressing
-   * merges it back to full length; otherwise the seek bar's position within
-   * it becomes the new split point. If the seek bar isn't inside either end
-   * measure, this just tells the user where to move it instead of guessing.
-   */
-  const handleTogglePickupMeasure = () => {
-    const lastIndex = score.measures.length - 1;
-    // With only one measure, "the end of the first measure" is the end of
-    // the piece (there's no measure 1 to ask measureStartBeat for).
-    const firstMeasureEnd = lastIndex === 0 ? measureCapacityBeats(score.timeSignature) : measureStartBeat(score, 1);
-    const lastMeasureStart = measureStartBeat(score, lastIndex);
-    const inFirstMeasure = lastIndex === 0 || seekBeat < firstMeasureEnd - 1e-6;
-    const inLastMeasure = lastIndex > 0 && seekBeat >= lastMeasureStart - 1e-6;
-
-    if (inFirstMeasure && !inLastMeasure) {
-      if (score.pickupBeats !== undefined) {
-        onTogglePickupMeasure();
-        return;
-      }
-      if (seekBeat <= 1e-6 || seekBeat >= firstMeasureEnd - 1e-6) {
-        window.alert('먼저 재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 다시 눌러주세요.');
-        return;
-      }
-      onTogglePickupMeasure();
-      return;
-    }
-
-    if (inLastMeasure) {
-      if (score.trailingBeats !== undefined) {
-        onToggleTrailingMeasure();
-        return;
-      }
-      const within = seekBeat - lastMeasureStart;
-      const lastMeasureLength = measureDurationBeats(score, lastIndex);
-      if (within <= 1e-6 || within >= lastMeasureLength - 1e-6) {
-        window.alert('먼저 재생 바를 마지막 마디 안의 원하는 위치로 옮긴 뒤 다시 눌러주세요.');
-        return;
-      }
-      onToggleTrailingMeasure();
-      return;
-    }
-
-    window.alert('재생 바를 첫 마디 또는 마지막 마디 안으로 옮긴 뒤 다시 눌러주세요.');
-  };
-
   const pickupMismatch = pickupTrailingMismatch(score);
 
   return (
@@ -337,14 +280,11 @@ export function Toolbar({
             ))}
           </select>
         </label>
-        <button
-          className={`tool-icon-btn ${score.pickupBeats !== undefined || score.trailingBeats !== undefined ? 'active' : ''}`}
-          onClick={handleTogglePickupMeasure}
-          aria-label="못갖춘마디"
-          title="재생 바를 첫 마디 또는 마지막 마디 안의 원하는 위치로 옮긴 뒤 누르면, 그 위치에서 마디가 나뉘어 못갖춘마디(또는 마지막 마디)가 됩니다. 이미 나뉜 마디 안에 재생 바가 있을 때 다시 누르면 해제됩니다"
-        >
-          못갖춘마디
-        </button>
+        {(score.pickupBeats !== undefined || score.trailingBeats !== undefined) && (
+          <span className="tool-icon-btn active" title="재생 바가 있는 첫/마지막 마디를 우클릭하면 못갖춘마디를 조정/해제할 수 있습니다">
+            못갖춘마디
+          </span>
+        )}
         {pickupMismatch && (
           <span className="pickup-mismatch-warning" title="못갖춘마디와 마지막 마디의 박자를 합치면 한 마디 박자와 같아야 합니다">
             ⚠ 못갖춘마디+마지막 마디 박자 불일치

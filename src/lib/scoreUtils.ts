@@ -50,6 +50,12 @@ export function cycleDurationLonger(duration: DurationValue): DurationValue {
   return DURATION_ORDER[Math.min(idx + 1, DURATION_ORDER.length - 1)];
 }
 
+/** Next shorter duration, or the same value if already a 16th note. */
+export function cycleDurationShorter(duration: DurationValue): DurationValue {
+  const idx = DURATION_ORDER.indexOf(duration);
+  return DURATION_ORDER[Math.max(idx - 1, 0)];
+}
+
 export function measureCapacityBeats(timeSignature: TimeSignature): number {
   return timeSignature.numerator * (4 / timeSignature.denominator);
 }

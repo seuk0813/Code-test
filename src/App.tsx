@@ -22,6 +22,8 @@ import {
   insertMeasureAfter,
   keySignatureAccidentalFor,
   lineToPitch,
+  measureCapacityBeats,
+  measureDurationBeats,
   measureStartBeat,
   mergeNoteIntoChord,
   moveChordInScore,
@@ -527,6 +529,53 @@ function App() {
     }
   }, [score, playbackStartBeat, setScore]);
 
+  /**
+   * Decides which of the two (pickup vs trailing) the seek bar's current
+   * position means and toggles that one — the single entry point now
+   * triggered by a right-click on the seek bar instead of a toolbar button
+   * (see StaffEditor's nearSeekHandle right-click handling). Mirrors the
+   * validation the old toolbar button used to do: alerts if the seek bar
+   * isn't actually positioned inside the first or last measure, or sits
+   * right on a boundary.
+   */
+  const handleTogglePickupOrTrailing = useCallback(() => {
+    const lastIndex = score.measures.length - 1;
+    const firstMeasureEnd = lastIndex === 0 ? measureCapacityBeats(score.timeSignature) : measureStartBeat(score, 1);
+    const lastMeasureStart = measureStartBeat(score, lastIndex);
+    const inFirstMeasure = lastIndex === 0 || playbackStartBeat < firstMeasureEnd - 1e-6;
+    const inLastMeasure = lastIndex > 0 && playbackStartBeat >= lastMeasureStart - 1e-6;
+
+    if (inFirstMeasure && !inLastMeasure) {
+      if (score.pickupBeats !== undefined) {
+        handleTogglePickupMeasure();
+        return;
+      }
+      if (playbackStartBeat <= 1e-6 || playbackStartBeat >= firstMeasureEnd - 1e-6) {
+        window.alert('먼저 재생 바를 첫 마디 안의 원하는 위치로 옮긴 뒤 다시 시도해주세요.');
+        return;
+      }
+      handleTogglePickupMeasure();
+      return;
+    }
+
+    if (inLastMeasure) {
+      if (score.trailingBeats !== undefined) {
+        handleToggleTrailingMeasure();
+        return;
+      }
+      const within = playbackStartBeat - lastMeasureStart;
+      const lastMeasureLength = measureDurationBeats(score, lastIndex);
+      if (within <= 1e-6 || within >= lastMeasureLength - 1e-6) {
+        window.alert('먼저 재생 바를 마지막 마디 안의 원하는 위치로 옮긴 뒤 다시 시도해주세요.');
+        return;
+      }
+      handleToggleTrailingMeasure();
+      return;
+    }
+
+    window.alert('재생 바를 첫 마디 또는 마지막 마디 안으로 옮긴 뒤 다시 시도해주세요.');
+  }, [score, playbackStartBeat, handleTogglePickupMeasure, handleToggleTrailingMeasure]);
+
   /** Drags the boundary right after the 못갖춘마디 to a new beat position (StaffEditor's onResizePickupMeasure). */
   const handleResizePickupMeasure = useCallback(
     (newPickupBeats: number) => {
@@ -753,7 +802,8 @@ function App() {
           const opened = staffEditorRef.current?.openAdjacentPreview(selected, e.key === 'ArrowRight' ? 1 : -1);
           if (opened) return;
         }
-        handleStepDuration(e.key === 'ArrowRight' ? 1 : -1);
+        // Left = longer, Right = shorter.
+        handleStepDuration(e.key === 'ArrowLeft' ? 1 : -1);
         return;
       }
       // Tab/Shift+Tab jump straight to the start of the next/previous measure
@@ -1154,9 +1204,13 @@ function App() {
     setPlaybackStartBeat(0);
   }, []);
 
-  // Spacebar toggles playback: plays from wherever the seek bar sits, and
-  // pressing it again while playing pauses (parking the bar on the current
-  // note — see handlePause). Ignored while typing in a field or on a button.
+  // Spacebar: with a note selected (and no locked preview already in
+  // progress), opens a placement preview right after it — continuous
+  // keyboard note entry (select/place, space, place, space, …) without
+  // needing an extra arrow-key press first. With nothing selected it falls
+  // back to its other job, toggling playback (plays from wherever the seek
+  // bar sits; pressing it again while playing pauses — see handlePause).
+  // Ignored while typing in a field or on a button.
   useEffect(() => {
     const onSpace = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1164,13 +1218,20 @@ function App() {
       if (e.code !== 'Space') return;
       // A locked placement preview claims spacebar to commit itself.
       if (previewLockedRef.current) return;
+      if (selected) {
+        const opened = staffEditorRef.current?.openAdjacentPreview(selected, 1);
+        if (opened) {
+          e.preventDefault();
+          return;
+        }
+      }
       e.preventDefault();
       if (isPlaying) handlePause();
       else void handlePlay();
     };
     document.addEventListener('keydown', onSpace);
     return () => document.removeEventListener('keydown', onSpace);
-  }, [isPlaying, handlePlay, handlePause]);
+  }, [isPlaying, handlePlay, handlePause, selected]);
 
   const handleExportMusicXml = useCallback(() => {
     const xml = exportMusicXml(score);
@@ -1294,9 +1355,6 @@ function App() {
           onAddChord={handleAddChordTool}
           cKeyBasedAccidentals={cKeyBasedAccidentals}
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
-          seekBeat={playbackStartBeat}
-          onTogglePickupMeasure={handleTogglePickupMeasure}
-          onToggleTrailingMeasure={handleToggleTrailingMeasure}
         />
       </div>
       <div className="status-line">
@@ -1346,6 +1404,7 @@ function App() {
         onSeekBeat={setPlaybackStartBeat}
         onResizePickupMeasure={handleResizePickupMeasure}
         onResizeTrailingMeasure={handleResizeTrailingMeasure}
+        onTogglePickupOrTrailing={handleTogglePickupOrTrailing}
       />
       <div className="measure-end-toggle-row">
         <button
