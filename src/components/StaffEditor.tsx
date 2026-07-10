@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { ForwardedRef } from 'react';
 import type { Accidental, ChordSymbol, Clef, DurationValue, NoteLocation, Score } from '../types/score';
 import {
+  findAnyStaffAt,
   findChordAt,
   findChordBandAt,
   findComposerAt,
@@ -34,6 +35,7 @@ import {
   noteBeats,
   pitchToLine,
   stemPointsUp,
+  topPitchIndex,
 } from '../lib/scoreUtils';
 import {
   clearGhost,
@@ -177,6 +179,7 @@ type MouseGesture =
       line: number;
       x: number; // pixel X of the press (fixed placement point)
       duration: DurationValue;
+      staffOrigin: 'staff' | 'melody';
     }
   | {
       kind: 'note';
@@ -189,6 +192,8 @@ type MouseGesture =
       narrowedPitchIndex?: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
+      /** Which staff the press actually landed on — the real treble/bass staff, or the lead-sheet melody staff (see Score.showMelodyStaff), which mirrors the treble staff's own notes at different on-screen geometry. Ongoing drag math (Y→pitch-line) must keep reading whichever staff's geometry the gesture started on, since the mouse stays in that staff's pixel space for the whole gesture. */
+      staffOrigin: 'staff' | 'melody';
     }
   | {
       /** Shift+drag rubber-band that multi-selects every notehead inside it. */
@@ -211,6 +216,7 @@ interface PendingPreview {
   duration: DurationValue;
   /** Index of an existing note this placement would stack onto (chord), else null. */
   chordTarget: number | null;
+  staffOrigin: 'staff' | 'melody';
 }
 
 type TouchGesture =
@@ -226,6 +232,7 @@ type TouchGesture =
       startX: number;
       startY: number;
       scrolling: boolean;
+      staffOrigin: 'staff' | 'melody';
     }
   | { kind: 'confirmPreview'; cycled: boolean }
   | {
@@ -237,6 +244,7 @@ type TouchGesture =
       narrowedPitchIndex?: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
+      staffOrigin: 'staff' | 'melody';
     }
   | SymbolDrag
   | null;
@@ -382,7 +390,9 @@ function StaffEditorInner({
   // here (instead of placing immediately); arrow keys nudge it, and a second
   // click or spacebar commits it. Held in a ref too so the keydown listener and
   // mouse handlers read the current value without stale closures.
-  const [lockedPreview, setLockedPreview] = useState<{ measureIndex: number; clef: Clef; line: number; x: number } | null>(null);
+  const [lockedPreview, setLockedPreview] = useState<{ measureIndex: number; clef: Clef; line: number; x: number; staffOrigin: 'staff' | 'melody' } | null>(
+    null,
+  );
   const lockedPreviewRef = useRef<typeof lockedPreview>(null);
   lockedPreviewRef.current = lockedPreview;
 
@@ -484,7 +494,7 @@ function StaffEditorInner({
       const lp = lockedPreviewRef.current;
       const result = renderResultRef.current;
       if (!lp || !result) return;
-      const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+      const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
       if (!staff) return;
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
@@ -820,6 +830,29 @@ function StaffEditorInner({
 
   // --- Shared placement helpers -----------------------------------------------
 
+  /**
+   * Resolves the on-screen geometry a 'note' gesture's ongoing Y→pitch math
+   * should read from: the real treble/bass staff, or (see Score.showMelodyStaff)
+   * the lead-sheet melody staff the gesture actually started on — the mouse
+   * stays in that staff's own pixel space for the gesture's whole lifetime,
+   * so re-resolving via the real staff mid-drag would misread the Y position.
+   */
+  const staffGeometryFor = (result: RenderResult, measureIndex: number, clef: Clef, staffOrigin: 'staff' | 'melody'): StaffHitbox | undefined => {
+    if (staffOrigin === 'melody') return result.melodyStaffHitboxes.find((s) => s.measureIndex === measureIndex);
+    return result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === clef);
+  };
+
+  /** Note hitboxes to read (or hit-test against) for a gesture with the given origin — see staffGeometryFor. */
+  const noteHitboxesFor = (result: RenderResult, staffOrigin: 'staff' | 'melody'): RenderResult['noteHitboxes'] =>
+    staffOrigin === 'melody' ? result.melodyNoteHitboxes : result.noteHitboxes;
+
+  /** Which staff a point landed in — the real staff or the lead-sheet melody staff (see Score.showMelodyStaff) — for tagging a freshly-started 'note' gesture's staffOrigin. Real and melody staves never overlap on screen, so this is unambiguous. */
+  const originOfPoint = (result: RenderResult, x: number, y: number): 'staff' | 'melody' | null => {
+    if (findStaffAt(result, x, y)) return 'staff';
+    if (result.melodyStaffHitboxes.some((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1)) return 'melody';
+    return null;
+  };
+
   const pitchAt = (clef: Clef, staff: StaffHitbox, y: number) => {
     const snappedLine = Math.round(lineAt(staff, y) * 2) / 2;
     const { letter, octave } = lineToPitch(clef, snappedLine);
@@ -933,10 +966,10 @@ function StaffEditorInner({
 
   /** Draws the locked placement preview (a stronger, more opaque ghost than the
    * hover preview) at a locked position. */
-  const renderLockedGhost = (lp: { measureIndex: number; clef: Clef; line: number; x: number }) => {
+  const renderLockedGhost = (lp: { measureIndex: number; clef: Clef; line: number; x: number; staffOrigin: 'staff' | 'melody' }) => {
     const result = renderResultRef.current;
     if (!result) return;
-    const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+    const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
     if (!staff) return;
     const isChord = chordMergeTargetAt(lp.measureIndex, lp.clef, lp.x) !== null;
     renderGhost(overlayRef.current, {
@@ -961,7 +994,7 @@ function StaffEditorInner({
       setLockedPreview(null);
       return;
     }
-    const staff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex && s.clef === lp.clef);
+    const staff = staffGeometryFor(result, lp.measureIndex, lp.clef, lp.staffOrigin);
     if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, editTool.duration);
     setLockedPreview(null);
     clearGhost(overlayRef.current);
@@ -1005,7 +1038,7 @@ function StaffEditorInner({
     }
     nx = Math.min(targetStaff.noteStartX + targetStaff.noteAreaWidth, Math.max(targetStaff.noteStartX, nx));
     onFocusMeasure(measureIndex);
-    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx });
+    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx, staffOrigin: 'staff' });
     return true;
   };
 
@@ -1021,7 +1054,7 @@ function StaffEditorInner({
     if (!result || !note || !targetStaff) return false;
     const line = note.pitches.length > 0 ? pitchToLine(location.clef, note.pitches[0].letter, note.pitches[0].octave) : 0;
     onFocusMeasure(targetMeasureIndex);
-    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX });
+    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX, staffOrigin: 'staff' });
     return true;
   };
 
@@ -1364,14 +1397,12 @@ function StaffEditorInner({
         gesture.mode = 'drag';
         setDraggingNote({ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null });
       }
-      const staff = result.staffHitboxes.find(
-        (s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef,
-      );
+      const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
       if (!staff) return;
       const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
       const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
       // Full measures auto-align, so free X is only meaningful when not full.
-      const ghostX = staff.full ? result.noteHitboxes.find(
+      const ghostX = staff.full ? noteHitboxesFor(result, gesture.staffOrigin).find(
         (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
       )?.centerX ?? point.x : point.x;
       renderDragGhost(staff, ghostX, snappedLine, note.duration, (note.pitches[gesture.narrowedPitchIndex ?? 0]?.accidental ?? '') as Accidental);
@@ -1457,7 +1488,7 @@ function StaffEditorInner({
       if (sameSpot) {
         commitLockedPreview();
       } else {
-        setLockedPreview({ measureIndex: gesture.measureIndex, clef: gesture.clef, line: gesture.line, x: gesture.x });
+        setLockedPreview({ measureIndex: gesture.measureIndex, clef: gesture.clef, line: gesture.line, x: gesture.x, staffOrigin: gesture.staffOrigin });
       }
       suppressClickRef.current = true;
       return;
@@ -1465,9 +1496,7 @@ function StaffEditorInner({
 
     if (gesture.kind !== 'note') return;
     if (gesture.mode === 'drag') {
-      const staff = point
-        ? result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef)
-        : undefined;
+      const staff = point ? staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin) : undefined;
       if (point && staff) {
         const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
         const deltaLine = snappedLine - gesture.startLine;
@@ -1510,9 +1539,9 @@ function StaffEditorInner({
       if (!g || g.kind !== 'note' || g.mode === 'drag' || !result) return;
       g.mode = 'durationCycle';
       g.cycleDuration = cycleDurationLonger(g.cycleDuration);
-      const staff = result.staffHitboxes.find((s) => s.measureIndex === g.location.measureIndex && s.clef === g.location.clef);
+      const staff = staffGeometryFor(result, g.location.measureIndex, g.location.clef, g.staffOrigin);
       const note = score.measures[g.location.measureIndex][g.location.clef].notes[g.location.noteIndex];
-      const noteHitbox = result.noteHitboxes.find(
+      const noteHitbox = noteHitboxesFor(result, g.staffOrigin).find(
         (n) => n.measureIndex === g.location.measureIndex && n.clef === g.location.clef && n.noteIndex === g.location.noteIndex,
       );
       if (!staff || !note || note.isRest || note.pitches.length === 0) return;
@@ -1679,7 +1708,16 @@ function StaffEditorInner({
       }
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
-      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.x, point.y);
+      const staffOrigin = originOfPoint(result, point.x, point.y) ?? 'staff';
+      // A press on the melody staff only ever shows/moves the chord's
+      // highest pitch (see deriveMelodyNotes), so it always narrows to that
+      // pitch — there's no separate "whole chord" gesture available there.
+      const narrowedPitchIndex =
+        staffOrigin === 'melody'
+          ? note.pitches.length > 1
+            ? topPitchIndex(note.pitches)
+            : undefined
+          : resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gesture: Extract<MouseGesture, { kind: 'note' }> = {
         kind: 'note',
@@ -1690,6 +1728,7 @@ function StaffEditorInner({
         narrowedPitchIndex,
         mode: 'undetermined',
         cycleDuration: note.duration,
+        staffOrigin,
       };
       mouseGestureRef.current = gesture;
       if (!note.isRest) startNoteHoldCycle(false);
@@ -1699,7 +1738,7 @@ function StaffEditorInner({
     }
 
     // add
-    const staff = findStaffAt(result, point.x, point.y);
+    const staff = findAnyStaffAt(result, point.x, point.y);
     if (!staff) return;
     const { snappedLine } = pitchAt(click.clef, staff, point.y);
     const isChord = chordMergeTargetAt(click.measureIndex, click.clef, point.x) !== null;
@@ -1710,6 +1749,7 @@ function StaffEditorInner({
       line: snappedLine,
       x: point.x,
       duration: editTool.duration,
+      staffOrigin: originOfPoint(result, point.x, point.y) ?? 'staff',
     };
     // When a preview is already locked, this click is the "commit" press — keep
     // the locked ghost on screen (don't overwrite it with a fresh hover ghost or
@@ -1762,7 +1802,7 @@ function StaffEditorInner({
 
     const click = resolveClickPreferSelect(result, point.x, point.y);
     if (click?.type === 'add') {
-      const staff = findStaffAt(result, point.x, point.y);
+      const staff = findAnyStaffAt(result, point.x, point.y);
       if (!staff) {
         clearGhost(overlayRef.current);
         return;
@@ -1829,7 +1869,7 @@ function StaffEditorInner({
       clearGhost(overlayRef.current);
       return;
     }
-    const staff = result.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
+    const staff = staffGeometryFor(result, preview.measureIndex, preview.clef, preview.staffOrigin);
     if (!staff) return;
     renderAddGhost(staff, preview.x, preview.line, preview.duration, preview.chordTarget !== null);
   };
@@ -1838,7 +1878,7 @@ function StaffEditorInner({
     const preview = pendingPreviewRef.current;
     const result = renderResultRef.current;
     if (!preview || !result) return;
-    const staff = result.staffHitboxes.find((s) => s.measureIndex === preview.measureIndex && s.clef === preview.clef);
+    const staff = staffGeometryFor(result, preview.measureIndex, preview.clef, preview.staffOrigin);
     if (staff) commitAdd(preview.measureIndex, preview.clef, staff, preview.line, preview.x, preview.duration);
     pendingPreviewRef.current = null;
     clearGhost(overlayRef.current);
@@ -1973,7 +2013,13 @@ function StaffEditorInner({
       event.preventDefault();
       const location: NoteLocation = { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex };
       const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
-      const narrowedPitchIndex = resolveNarrowedPitchIndex(location, point.x, point.y);
+      const staffOrigin = originOfPoint(result, point.x, point.y) ?? 'staff';
+      const narrowedPitchIndex =
+        staffOrigin === 'melody'
+          ? note.pitches.length > 1
+            ? topPitchIndex(note.pitches)
+            : undefined
+          : resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',
@@ -1984,6 +2030,7 @@ function StaffEditorInner({
         narrowedPitchIndex,
         mode: 'undetermined',
         cycleDuration: note.duration,
+        staffOrigin,
       };
       touchGestureRef.current = gesture;
       if (!note.isRest) startNoteHoldCycle(true);
@@ -2004,6 +2051,7 @@ function StaffEditorInner({
         startX: point.x,
         startY: point.y,
         scrolling: false,
+        staffOrigin: originOfPoint(result, point.x, point.y) ?? 'staff',
       };
       return;
     }
@@ -2082,12 +2130,12 @@ function StaffEditorInner({
     }
 
     event.preventDefault();
-    const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+    const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
     if (!staff) return;
     const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
     const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
     const ghostX = staff.full
-      ? result.noteHitboxes.find(
+      ? noteHitboxesFor(result, gesture.staffOrigin).find(
           (n) => n.measureIndex === gesture.location.measureIndex && n.clef === gesture.location.clef && n.noteIndex === gesture.location.noteIndex,
         )?.centerX ?? point.x
       : point.x;
@@ -2118,7 +2166,7 @@ function StaffEditorInner({
       // A clean tap (no pan) drops the preview at the tapped spot.
       event.preventDefault();
       if (result) {
-        const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.measureIndex && s.clef === gesture.clef);
+        const staff = staffGeometryFor(result, gesture.measureIndex, gesture.clef, gesture.staffOrigin);
         if (staff) {
           pendingPreviewRef.current = {
             measureIndex: gesture.measureIndex,
@@ -2128,6 +2176,7 @@ function StaffEditorInner({
             line: gesture.line,
             duration: editTool.duration,
             chordTarget: chordMergeTargetAt(gesture.measureIndex, gesture.clef, gesture.x),
+            staffOrigin: gesture.staffOrigin,
           };
           renderPendingGhost();
         }
@@ -2147,7 +2196,7 @@ function StaffEditorInner({
     if (gesture.kind === 'note') {
       if (gesture.mode === 'drag') {
         if (point && result) {
-          const staff = result.staffHitboxes.find((s) => s.measureIndex === gesture.location.measureIndex && s.clef === gesture.location.clef);
+          const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
           if (staff) {
             const { snappedLine } = pitchAt(gesture.location.clef, staff, point.y);
             const deltaLine = snappedLine - gesture.startLine;

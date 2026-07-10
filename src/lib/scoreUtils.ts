@@ -375,19 +375,33 @@ export function pitchToLine(clef: Clef, letter: Pitch['letter'], octave: number)
   return steps / 2;
 }
 
+/** Index of a chord's highest-sounding pitch (treble-clef line order) — the one shown on the derived melody staff and the one melody-staff edits/drags apply to. */
+export function topPitchIndex(pitches: Pitch[]): number {
+  let bestIndex = 0;
+  let bestLine = -Infinity;
+  pitches.forEach((p, i) => {
+    const line = pitchToLine('treble', p.letter, p.octave);
+    if (line > bestLine) {
+      bestLine = line;
+      bestIndex = i;
+    }
+  });
+  return bestIndex;
+}
+
 /**
  * Derives the melody-staff notes shown by the lead-sheet layout (see
  * Score.showMelodyStaff): the same rhythm as the treble staff, but chords
  * collapsed to just their highest pitch (the customary "top line" of a piano
  * part's right hand). Rests and already-single-pitch notes pass through
- * unchanged. Purely a rendering-time view — never stored or edited directly.
+ * unchanged. A rendering-time view derived from the treble staff's own notes
+ * — edits made by clicking on it (see StaffEditor) are applied back to that
+ * same treble data (the highest pitch when narrowed to one), not stored separately.
  */
 export function deriveMelodyNotes(notes: NoteEvent[]): NoteEvent[] {
   return notes.map((note) => {
     if (note.isRest || note.pitches.length <= 1) return note;
-    const top = note.pitches.reduce((best, p) =>
-      pitchToLine('treble', p.letter, p.octave) > pitchToLine('treble', best.letter, best.octave) ? p : best,
-    );
+    const top = note.pitches[topPitchIndex(note.pitches)];
     return { ...note, pitches: [top] };
   });
 }

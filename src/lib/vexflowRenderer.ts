@@ -358,6 +358,20 @@ export interface ComposerHitbox {
 export interface RenderResult {
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
+  /**
+   * The lead-sheet melody staff's own note hitboxes (see Score.showMelodyStaff)
+   * — same identity (measureIndex/clef:'treble'/noteIndex) as the matching
+   * entries in `noteHitboxes` since they're the same underlying treble notes,
+   * just positioned at the melody staff's own on-screen geometry. Kept in a
+   * separate array (rather than merged into noteHitboxes/staffHitboxes) so
+   * every existing (measureIndex, clef) lookup elsewhere keeps resolving to
+   * the real piano staff unambiguously; only the spatial click/hover
+   * resolution in StaffEditor consults this one specifically. Empty when
+   * showMelodyStaff is off.
+   */
+  melodyNoteHitboxes: NoteHitbox[];
+  /** Mirrors melodyNoteHitboxes for the melody staff's own stave hit-region. */
+  melodyStaffHitboxes: StaffHitbox[];
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
@@ -442,21 +456,27 @@ function buildStaveNotes(
 }
 
 /**
- * Builds StaveNotes for the read-only lead-sheet melody staff (see
- * Score.showMelodyStaff / deriveMelodyNotes) — a simplified version of
- * buildStaveNotes with none of the selection/drag/playback styling, since
- * this staff is never clicked or edited directly. Accidentals are attached
- * as real VexFlow modifiers here (unlike the treble/bass staves' manual
- * text-based accidentals) because there's no free-X dragging on this staff
- * to keep stable — VexFlow's own modifier layout is simpler and fine.
+ * Builds StaveNotes for the lead-sheet melody staff (see Score.showMelodyStaff
+ * / deriveMelodyNotes) — a simplified version of buildStaveNotes without
+ * playback/selection styling (the melody staff never plays back or holds an
+ * independent selection — edits always target the treble staff's own note),
+ * but it DOES support hiding the note currently being dragged, since a click
+ * on this staff can now start that same drag (see StaffEditor's melody-staff
+ * interaction handling). Accidentals are attached as real VexFlow modifiers
+ * here (unlike the treble/bass staves' manual text-based accidentals)
+ * because there's no free-X dragging on this staff to keep stable — VexFlow's
+ * own modifier layout is simpler and fine.
  */
-function buildMelodyStaveNotes(notes: NoteEvent[]): StaveNote[] {
-  return notes.map((note) => {
+function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | null): StaveNote[] {
+  return notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY.treble] : note.pitches.map(pitchToVexKey);
     const staveNote = new StaveNote({ clef: 'treble', keys, duration: vexDurationString(note), autoStem: true });
     if (note.dotted) Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
     if (!note.isRest && note.pitches[0]?.accidental) {
       staveNote.addModifier(new VexAccidental(note.pitches[0].accidental), 0);
+    }
+    if (hiddenNoteIndex === noteIndex) {
+      staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
     }
     return staveNote;
   });
@@ -549,6 +569,8 @@ export function renderScore(
 
   const noteHitboxes: NoteHitbox[] = [];
   const staffHitboxes: StaffHitbox[] = [];
+  const melodyNoteHitboxes: NoteHitbox[] = [];
+  const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
@@ -608,12 +630,46 @@ export function renderScore(
         }
         melodyStave.setContext(context).draw();
 
+        // The melody staff mirrors measure.treble.notes index-for-index (see
+        // deriveMelodyNotes), so its own note/staff hitboxes carry the SAME
+        // (measureIndex, clef:'treble', noteIndex) identity as the real
+        // treble hitboxes below — clicking/dragging here (see StaffEditor)
+        // resolves through these first and writes back to that same treble
+        // data, keeping both staves in sync without a separate data model.
         const melodyNotes = deriveMelodyNotes(measure.treble.notes);
-        const melodyStaveNotes = buildMelodyStaveNotes(melodyNotes);
+        const melodyHiddenNoteIndex =
+          draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === 'treble'
+            ? draggingNote.noteIndex
+            : null;
+        const melodyStaveNotes = buildMelodyStaveNotes(melodyNotes, melodyHiddenNoteIndex);
+        const melodyRefY0 = melodyStave.getYForNote(0);
+        const melodySpacing = melodyRefY0 - melodyStave.getYForNote(1);
+        const melodyNoteStartX = melodyStave.getNoteStartX();
+        const melodyNoteAreaWidth = Math.max(40, melodyStave.getX() + melodyStave.getWidth() - NOTE_AREA_RIGHT_PAD - melodyNoteStartX);
+        const melodyFull = isStaffMeasureFull({ notes: measure.treble.notes }, score.timeSignature);
+
         if (melodyStaveNotes.length > 0) {
           const melodyVoice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
           melodyVoice.addTickables(melodyStaveNotes);
           new Formatter().joinVoices([melodyVoice]).format([melodyVoice], measureWidth - (isRowStart ? 108 : 28));
+
+          melodyStaveNotes.forEach((sn) => sn.setStave(melodyStave!));
+          // Mirrors the treble staff's free-X placement below (melodyNotes[i].x
+          // carries over from the treble note it was derived from), so the two
+          // staves' X positions — and thus chord-merge/insert-index detection,
+          // which reads the treble noteHitboxes by X — line up for a click on
+          // either staff.
+          const melodyCenterXs: number[] = melodyStaveNotes.map((sn) => sn.getAbsoluteX());
+          if (!melodyFull) {
+            melodyStaveNotes.forEach((sn, i) => {
+              const fx = melodyNotes[i].x;
+              if (fx === undefined) return;
+              const desiredX = melodyNoteStartX + clamp01(fx) * melodyNoteAreaWidth;
+              sn.setXShift(desiredX - sn.getAbsoluteX());
+              melodyCenterXs[i] = desiredX;
+            });
+          }
+
           melodyVoice.draw(context, melodyStave);
           try {
             const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
@@ -623,7 +679,55 @@ export function renderScore(
           } catch {
             // Beaming is a visual nicety; ignore failures on unusual groupings.
           }
+
+          melodyStaveNotes.forEach((sn, noteIndex) => {
+            const note = melodyNotes[noteIndex];
+            const ys = note.isRest
+              ? [melodyRefY0 - 3 * melodySpacing]
+              : note.pitches.map((p) => melodyRefY0 - pitchToLine('treble', p.letter, p.octave) * melodySpacing);
+            let stemX = melodyCenterXs[noteIndex];
+            if (!note.isRest) {
+              try {
+                stemX = sn.getStemX();
+              } catch {
+                // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
+              }
+            }
+            const xs = ys.map((_, pitchIndex) => {
+              try {
+                return sn.noteHeads[pitchIndex]?.getAbsoluteX() ?? melodyCenterXs[noteIndex];
+              } catch {
+                return melodyCenterXs[noteIndex];
+              }
+            });
+            melodyNoteHitboxes.push({
+              measureIndex,
+              clef: 'treble',
+              noteIndex,
+              centerX: melodyCenterXs[noteIndex],
+              stemX,
+              ys,
+              xs,
+            });
+          });
         }
+
+        const melodyContentStartOffset = isRowStart ? 100 : 20;
+        melodyStaffHitboxes.push({
+          measureIndex,
+          clef: 'treble',
+          x0: x,
+          x1: x + measureWidth,
+          y0: melodyStave.getYForLine(0) - STAVE_TOP_MARGIN,
+          y1: melodyStave.getYForLine(4) + STAVE_TOP_MARGIN,
+          refY0: melodyRefY0,
+          spacing: melodySpacing,
+          contentX0: x + melodyContentStartOffset,
+          contentWidth: measureWidth - melodyContentStartOffset,
+          noteStartX: melodyNoteStartX,
+          noteAreaWidth: melodyNoteAreaWidth,
+          full: melodyFull,
+        });
       }
 
       if (isRowStart) {
@@ -977,6 +1081,8 @@ export function renderScore(
   return {
     noteHitboxes,
     staffHitboxes,
+    melodyNoteHitboxes,
+    melodyStaffHitboxes,
     chordHitboxes,
     chordBandHitboxes,
     lineBreakHitboxes,
@@ -1111,14 +1217,16 @@ export function findStaffAt(result: RenderResult, x: number, y: number): StaffHi
   return result.staffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) ?? null;
 }
 
-export function resolveClick(result: RenderResult, x: number, y: number): ClickResult {
-  const staff = findStaffAt(result, x, y);
-  if (!staff) return null;
+/** Like findStaffAt, but also matches the lead-sheet melody staff (see Score.showMelodyStaff) — for click/hover resolution, which should work on either staff. Kept separate from findStaffAt itself so its many other (measureIndex, clef) callers keep resolving to the real piano staff unambiguously. */
+export function findAnyStaffAt(result: RenderResult, x: number, y: number): StaffHitbox | null {
+  return findStaffAt(result, x, y) ?? result.melodyStaffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) ?? null;
+}
 
+function resolveClickOn(staff: StaffHitbox, noteHitboxes: NoteHitbox[], x: number, y: number): ClickResult {
   // A note is "hit" only near one of its noteheads (pitch-aware), so that
   // clicking clearly above or below a note falls through to an add preview.
   const yRadius = staff.spacing * 0.45;
-  const hitNote = result.noteHitboxes.find(
+  const hitNote = noteHitboxes.find(
     (n) =>
       n.measureIndex === staff.measureIndex &&
       n.clef === staff.clef &&
@@ -1130,6 +1238,16 @@ export function resolveClick(result: RenderResult, x: number, y: number): ClickR
 
   const line = (staff.refY0 - y) / staff.spacing;
   return { type: 'add', measureIndex: staff.measureIndex, clef: staff.clef, line };
+}
+
+export function resolveClick(result: RenderResult, x: number, y: number): ClickResult {
+  const staff = findStaffAt(result, x, y);
+  if (staff) return resolveClickOn(staff, result.noteHitboxes, x, y);
+
+  const melodyStaff = result.melodyStaffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1);
+  if (melodyStaff) return resolveClickOn(melodyStaff, result.melodyNoteHitboxes, x, y);
+
+  return null;
 }
 
 export function lineAt(staff: StaffHitbox, y: number): number {
@@ -1199,9 +1317,9 @@ export function nearestPitchIndexAt(hb: NoteHitbox, x: number, y: number): numbe
   return best;
 }
 
-/** All notes within a generous radius of a point, nearest first — used by note-select mode to pick the closest existing note to a tap. */
+/** All notes within a generous radius of a point, nearest first — used by note-select mode to pick the closest existing note to a tap. Searches both the real staves and the lead-sheet melody staff (see Score.showMelodyStaff), since either can be tapped. */
 export function findNearbyNotesAt(result: RenderResult, x: number, y: number, radius: number): NoteHitbox[] {
-  return result.noteHitboxes
+  return [...result.noteHitboxes, ...result.melodyNoteHitboxes]
     .map((n) => ({ n, d: Math.min(...n.ys.map((ny, i) => Math.hypot((n.xs[i] ?? n.centerX) - x, ny - y))) }))
     .filter(({ d }) => d < radius)
     .sort((a, b) => a.d - b.d)
