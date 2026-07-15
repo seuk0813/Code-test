@@ -114,6 +114,9 @@ export interface RestMark {
   offset: number;
   /** Vertical staff line position — same units as scoreUtils.pitchToLine. */
   line: number;
+  /** Which rest glyph is drawn (whole/half/quarter/8th/16th) — purely cosmetic
+   * sizing, dragged left/right to resize (see StaffEditor's rest-mark resize gesture). */
+  duration: DurationValue;
 }
 
 export interface Measure {

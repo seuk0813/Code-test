@@ -900,8 +900,15 @@ export function removeLyricFromScore(score: Score, measureIndex: number, lyricId
  * real NoteEvent this never checks beat capacity: it's explicitly meant to
  * be droppable even where a staff is already full.
  */
-export function addRestMarkAt(score: Score, measureIndex: number, clef: Clef, offset: number, line: number): Score {
-  const mark: RestMark = { id: nextId('rm'), clef, offset: Math.min(0.97, Math.max(0.03, offset)), line };
+export function addRestMarkAt(
+  score: Score,
+  measureIndex: number,
+  clef: Clef,
+  offset: number,
+  line: number,
+  duration: DurationValue = 'q',
+): Score {
+  const mark: RestMark = { id: nextId('rm'), clef, offset: Math.min(0.97, Math.max(0.03, offset)), line, duration };
   const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, restMarks: [...(m.restMarks ?? []), mark] } : m));
   return { ...score, measures };
 }
@@ -909,6 +916,14 @@ export function addRestMarkAt(score: Score, measureIndex: number, clef: Clef, of
 export function removeRestMark(score: Score, measureIndex: number, restMarkId: string): Score {
   const measures = score.measures.map((m, i) =>
     i === measureIndex ? { ...m, restMarks: (m.restMarks ?? []).filter((r) => r.id !== restMarkId) } : m,
+  );
+  return { ...score, measures };
+}
+
+/** Drag-to-resize gesture (see StaffEditor): changes a rest mark's glyph size/duration. */
+export function resizeRestMark(score: Score, measureIndex: number, restMarkId: string, duration: DurationValue): Score {
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...m, restMarks: (m.restMarks ?? []).map((r) => (r.id === restMarkId ? { ...r, duration } : r)) } : m,
   );
   return { ...score, measures };
 }

@@ -30,6 +30,7 @@ import {
   chordLabel,
   cycleDurationLonger,
   cycleDurationShorter,
+  DURATION_ORDER,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
@@ -116,6 +117,10 @@ interface StaffEditorProps {
   onSplitNote: (location: NoteLocation, pieces: number) => void;
   /** Right-click deletes a visual-only rest mark (see RestMark / #187). */
   onDeleteRestMark: (measureIndex: number, restMarkId: string) => void;
+  /** Hovering above/below an existing note with the 쉼표 tool armed sketches a rest mark there (see RestMark / #187). */
+  onAddRestMark: (measureIndex: number, clef: Clef, offset: number, line: number, duration: DurationValue) => void;
+  /** Drag-to-resize gesture on an existing rest mark (see RestMark / #187). */
+  onResizeRestMark: (measureIndex: number, restMarkId: string, duration: DurationValue) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
@@ -226,6 +231,17 @@ type MouseGesture =
       curX: number;
       curY: number;
     }
+  | {
+      /** Drag left/right on an existing rest mark (see RestMark / #187) to resize its glyph/duration. */
+      kind: 'resizeRestMark';
+      measureIndex: number;
+      restMarkId: string;
+      startX: number;
+      /** Duration at the moment the drag began — steps are measured relative to this, not to whatever's currently applied. */
+      startDuration: DurationValue;
+      /** Last duration actually applied (via onResizeRestMark) — only re-dispatch when the target duration changes. */
+      appliedDuration: DurationValue;
+    }
   | SymbolDrag
   | null;
 
@@ -290,6 +306,8 @@ function StaffEditorInner({
   onDeleteNote,
   onSplitNote,
   onDeleteRestMark,
+  onAddRestMark,
+  onResizeRestMark,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -1064,6 +1082,15 @@ function StaffEditorInner({
     if (!result) return;
     const { letter, octave } = lineToPitch(clef, snappedLine);
     const chordTarget = chordMergeTargetAt(measureIndex, clef, x);
+    if (chordTarget !== null && editTool.isRest) {
+      // Hovering above/below an existing note with the 쉼표 tool armed sketches
+      // a rest mark right there instead of adding a chord tone (#187) — a rest
+      // can be layered onto any note this way, not only when its measure is
+      // already full.
+      onAddRestMark(measureIndex, clef, xFractionAt(staff, x), snappedLine, duration);
+      onFocusMeasure(measureIndex);
+      return;
+    }
     let noteIndex: number;
     if (chordTarget !== null) {
       noteIndex = chordTarget;
@@ -1555,6 +1582,23 @@ function StaffEditorInner({
       return;
     }
 
+    if (gesture.kind === 'resizeRestMark') {
+      // Every full step (~18px) of horizontal drag moves one duration step
+      // (16th ↔ 8th ↔ quarter ↔ half ↔ whole) — right = longer/bigger, left =
+      // shorter/smaller, measured from the drag's start point so it doesn't
+      // drift with tiny mouse jitter.
+      const RESIZE_STEP_PX = 18;
+      const steps = Math.round((point.x - gesture.startX) / RESIZE_STEP_PX);
+      const startIdx = DURATION_ORDER.indexOf(gesture.startDuration);
+      const targetIdx = Math.min(DURATION_ORDER.length - 1, Math.max(0, startIdx + steps));
+      const target = DURATION_ORDER[targetIdx];
+      if (target !== gesture.appliedDuration) {
+        gesture.appliedDuration = target;
+        onResizeRestMark(gesture.measureIndex, gesture.restMarkId, target);
+      }
+      return;
+    }
+
     if (gesture.kind === 'chordSymbol' || gesture.kind === 'lyric') {
       updateSymbolDrag(gesture, point);
       return;
@@ -1894,6 +1938,25 @@ function StaffEditorInner({
     if (lyricBand) {
       openLyricAddEditor(lyricBand, point.x);
       suppressClickRef.current = true;
+      return;
+    }
+
+    // A press on an existing rest mark (see RestMark / #187) starts a
+    // click-and-drag resize instead of any of the note-placement/selection
+    // flows below — checked early so the small glyph reliably wins over
+    // whatever note/staff region happens to sit underneath it.
+    const restMarkHit = findRestMarkAt(result, point.x, point.y);
+    if (restMarkHit) {
+      mouseGestureRef.current = {
+        kind: 'resizeRestMark',
+        measureIndex: restMarkHit.measureIndex,
+        restMarkId: restMarkHit.restMarkId,
+        startX: point.x,
+        startDuration: restMarkHit.duration,
+        appliedDuration: restMarkHit.duration,
+      };
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
     }
 

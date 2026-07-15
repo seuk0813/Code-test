@@ -14,7 +14,7 @@ import {
   StaveTie,
   Voice,
 } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeScaleDegreeLabels,
@@ -180,9 +180,20 @@ function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
   });
 }
 
-/** Visual-only rest marks (see RestMark / #187) — a small quarter-rest glyph
- * sketched wherever the user dropped it, drawn in a muted tone precisely so
- * it doesn't read as a real, played rest (which would be a black notehead
+/** SMuFL (Bravura) rest codepoints, keyed by the same DurationValue used for
+ * real notes — lets a rest mark's glyph (and therefore its visual size)
+ * match whichever duration the drag-to-resize gesture last set it to. */
+const REST_MARK_GLYPH: Record<DurationValue, string> = {
+  w: String.fromCodePoint(0xe4e3),
+  h: String.fromCodePoint(0xe4e4),
+  q: String.fromCodePoint(0xe4e5),
+  '8': String.fromCodePoint(0xe4e6),
+  '16': String.fromCodePoint(0xe4e7),
+};
+
+/** Visual-only rest marks (see RestMark / #187) — a small rest glyph sketched
+ * wherever the user dropped it, drawn in a muted tone precisely so it
+ * doesn't read as a real, played rest (which would be a black notehead
  * flag like every other note). Purely an annotation: never affects beat
  * capacity, playback, or MusicXML/MIDI export. */
 function drawRestMarks(svg: SVGSVGElement, marks: RestMarkHitbox[]): void {
@@ -196,7 +207,7 @@ function drawRestMarks(svg: SVGSVGElement, marks: RestMarkHitbox[]): void {
     text.setAttribute('stroke', 'none');
     text.setAttribute('fill', '#8a7dc2');
     text.setAttribute('opacity', '0.75');
-    text.textContent = '';
+    text.textContent = REST_MARK_GLYPH[mark.duration] ?? REST_MARK_GLYPH.q;
     svg.appendChild(text);
   });
 }
@@ -369,9 +380,11 @@ export interface SplitZoneHitbox {
 /** Click target for a visual-only rest mark (see RestMark / #187). */
 export interface RestMarkHitbox {
   measureIndex: number;
+  clef: Clef;
   restMarkId: string;
   x: number;
   y: number;
+  duration: DurationValue;
 }
 
 export interface StaffHitbox {
@@ -995,9 +1008,11 @@ export function renderScore(
         (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
           restMarkHitboxes.push({
             measureIndex,
+            clef,
             restMarkId: r.id,
             x: x + r.offset * measureWidth,
             y: refY0 - r.line * spacing,
+            duration: r.duration ?? 'q',
           });
         });
 

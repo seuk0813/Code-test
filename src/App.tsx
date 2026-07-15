@@ -39,6 +39,7 @@ import {
   removeLyricFromScore,
   removeGraceNote,
   removeRestMark,
+  resizeRestMark,
   removeMeasure,
   removeNoteFromScore,
   resizePickupMeasure,
@@ -1314,6 +1315,17 @@ function App() {
     setScore((prev) => removeRestMark(prev, measureIndex, restMarkId));
   }, [setScore]);
 
+  const handleAddRestMark = useCallback(
+    (measureIndex: number, clef: Clef, offset: number, line: number, duration: DurationValue) => {
+      setScore((prev) => addRestMarkAt(prev, measureIndex, clef, offset, line, duration));
+    },
+    [setScore],
+  );
+
+  const handleResizeRestMark = useCallback((measureIndex: number, restMarkId: string, duration: DurationValue) => {
+    setScore((prev) => resizeRestMark(prev, measureIndex, restMarkId, duration));
+  }, [setScore]);
+
   const handlePlay = useCallback(async () => {
     if (isPlaying) return;
     setIsPlaying(true);
@@ -1569,6 +1581,8 @@ function App() {
         onMoveLyric={handleMoveLyric}
         onDeleteLyric={handleDeleteLyric}
         onDeleteRestMark={handleDeleteRestMark}
+        onAddRestMark={handleAddRestMark}
+        onResizeRestMark={handleResizeRestMark}
         onDeselectNote={handleDeselectNote}
         onSetTitle={handleSetTitle}
         onSetComposer={handleSetComposer}
