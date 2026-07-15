@@ -13,6 +13,7 @@ import {
   findLyricBandAt,
   findNearbyNotesAt,
   findRestMarkAt,
+  findRestMarkHandleAt,
   findSplitZoneAt,
   findStaffAt,
   findTitleAt,
@@ -30,7 +31,6 @@ import {
   chordLabel,
   cycleDurationLonger,
   cycleDurationShorter,
-  DURATION_ORDER,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
@@ -119,8 +119,13 @@ interface StaffEditorProps {
   onDeleteRestMark: (measureIndex: number, restMarkId: string) => void;
   /** Hovering above/below an existing note with the 쉼표 tool armed sketches a rest mark there (see RestMark / #187). */
   onAddRestMark: (measureIndex: number, clef: Clef, offset: number, line: number, duration: DurationValue) => void;
-  /** Drag-to-resize gesture on an existing rest mark (see RestMark / #187). */
-  onResizeRestMark: (measureIndex: number, restMarkId: string, duration: DurationValue) => void;
+  /** Currently-selected rest mark (see RestMark / #187) — click its glyph to select, click empty space to deselect. */
+  selectedRestMark: { measureIndex: number; restMarkId: string } | null;
+  onSelectRestMark: (location: { measureIndex: number; restMarkId: string } | null) => void;
+  /** Drag one of the selected mark's 4 corner handles to change its on-screen visual size (RestMark.scale). */
+  onResizeRestMarkScale: (measureIndex: number, restMarkId: string, scale: number) => void;
+  /** Drag the mark's own glyph to reposition it elsewhere on the score. */
+  onMoveRestMark: (measureIndex: number, restMarkId: string, offset: number, line: number) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
@@ -232,15 +237,27 @@ type MouseGesture =
       curY: number;
     }
   | {
-      /** Drag left/right on an existing rest mark (see RestMark / #187) to resize its glyph/duration. */
-      kind: 'resizeRestMark';
+      /** Drag one of a selected rest mark's 4 corner handles (see RestMark / #187) to change its visual scale. */
+      kind: 'resizeRestMarkScale';
       measureIndex: number;
       restMarkId: string;
-      startX: number;
-      /** Duration at the moment the drag began — steps are measured relative to this, not to whatever's currently applied. */
-      startDuration: DurationValue;
-      /** Last duration actually applied (via onResizeRestMark) — only re-dispatch when the target duration changes. */
-      appliedDuration: DurationValue;
+      /** The mark's own anchor point — distance from this drives the scale factor. */
+      centerX: number;
+      centerY: number;
+      startDist: number;
+      startScale: number;
+    }
+  | {
+      /** Drag an existing rest mark's own glyph (see RestMark / #187) to reposition it. */
+      kind: 'moveRestMark';
+      measureIndex: number;
+      clef: Clef;
+      restMarkId: string;
+      /** The mark's staff geometry, captured at drag-start so the math stays correct even if the cursor wanders outside the staff area mid-drag. */
+      staffRefY0: number;
+      staffSpacing: number;
+      staffNoteStartX: number;
+      staffNoteAreaWidth: number;
     }
   | SymbolDrag
   | null;
@@ -307,7 +324,10 @@ function StaffEditorInner({
   onSplitNote,
   onDeleteRestMark,
   onAddRestMark,
-  onResizeRestMark,
+  selectedRestMark,
+  onSelectRestMark,
+  onResizeRestMarkScale,
+  onMoveRestMark,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -461,7 +481,7 @@ function StaffEditorInner({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace);
+    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
@@ -472,7 +492,7 @@ function StaffEditorInner({
     // current content size at whatever zoom level is already active — e.g.
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace]);
+  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark]);
 
   // Consumes pendingChainRef (see its declaration) the moment the render
   // above has refreshed renderResultRef.current for the just-committed note
@@ -1582,20 +1602,22 @@ function StaffEditorInner({
       return;
     }
 
-    if (gesture.kind === 'resizeRestMark') {
-      // Every full step (~18px) of horizontal drag moves one duration step
-      // (16th ↔ 8th ↔ quarter ↔ half ↔ whole) — right = longer/bigger, left =
-      // shorter/smaller, measured from the drag's start point so it doesn't
-      // drift with tiny mouse jitter.
-      const RESIZE_STEP_PX = 18;
-      const steps = Math.round((point.x - gesture.startX) / RESIZE_STEP_PX);
-      const startIdx = DURATION_ORDER.indexOf(gesture.startDuration);
-      const targetIdx = Math.min(DURATION_ORDER.length - 1, Math.max(0, startIdx + steps));
-      const target = DURATION_ORDER[targetIdx];
-      if (target !== gesture.appliedDuration) {
-        gesture.appliedDuration = target;
-        onResizeRestMark(gesture.measureIndex, gesture.restMarkId, target);
-      }
+    if (gesture.kind === 'resizeRestMarkScale') {
+      // Dragging a corner handle away from the mark's own center enlarges it,
+      // dragging toward the center shrinks it — a direct distance ratio, not
+      // a step-through-durations gesture (that's unrelated to visual size).
+      const dist = Math.hypot(point.x - gesture.centerX, point.y - gesture.centerY);
+      const ratio = gesture.startDist > 4 ? dist / gesture.startDist : 1;
+      onResizeRestMarkScale(gesture.measureIndex, gesture.restMarkId, gesture.startScale * ratio);
+      return;
+    }
+
+    if (gesture.kind === 'moveRestMark') {
+      // Follows the cursor directly (same feel as chord/lyric symbol drag)
+      // rather than a delta from the press point.
+      const offset = Math.min(1, Math.max(0, (point.x - gesture.staffNoteStartX) / gesture.staffNoteAreaWidth));
+      const line = (gesture.staffRefY0 - point.y) / gesture.staffSpacing;
+      onMoveRestMark(gesture.measureIndex, gesture.restMarkId, offset, line);
       return;
     }
 
@@ -1941,24 +1963,56 @@ function StaffEditorInner({
       return;
     }
 
-    // A press on an existing rest mark (see RestMark / #187) starts a
-    // click-and-drag resize instead of any of the note-placement/selection
-    // flows below — checked early so the small glyph reliably wins over
-    // whatever note/staff region happens to sit underneath it.
-    const restMarkHit = findRestMarkAt(result, point.x, point.y);
-    if (restMarkHit) {
+    // A press on one of a selected rest mark's 4 corner handles (see RestMark
+    // / #187) starts a resize-the-visual-scale drag — checked before the
+    // mark's own body hit-test so the tiny handle reliably wins when both
+    // overlap near the glyph's edge.
+    const restMarkHandleHit = findRestMarkHandleAt(result, point.x, point.y);
+    if (restMarkHandleHit) {
+      const mark = result.restMarkHitboxes.find((r) => r.restMarkId === restMarkHandleHit.restMarkId);
       mouseGestureRef.current = {
-        kind: 'resizeRestMark',
-        measureIndex: restMarkHit.measureIndex,
-        restMarkId: restMarkHit.restMarkId,
-        startX: point.x,
-        startDuration: restMarkHit.duration,
-        appliedDuration: restMarkHit.duration,
+        kind: 'resizeRestMarkScale',
+        measureIndex: restMarkHandleHit.measureIndex,
+        restMarkId: restMarkHandleHit.restMarkId,
+        centerX: restMarkHandleHit.centerX,
+        centerY: restMarkHandleHit.centerY,
+        startDist: Math.hypot(point.x - restMarkHandleHit.centerX, point.y - restMarkHandleHit.centerY),
+        startScale: mark?.scale ?? 1,
       };
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
     }
+
+    // A press directly on an existing rest mark's own glyph selects it (so
+    // its corner handles appear) and starts a click-and-drag reposition —
+    // checked early so the small glyph reliably wins over whatever
+    // note/staff region happens to sit underneath it.
+    const restMarkHit = findRestMarkAt(result, point.x, point.y);
+    if (restMarkHit) {
+      onSelectRestMark({ measureIndex: restMarkHit.measureIndex, restMarkId: restMarkHit.restMarkId });
+      const staff = result.staffHitboxes.find((s) => s.measureIndex === restMarkHit.measureIndex && s.clef === restMarkHit.clef);
+      if (staff) {
+        mouseGestureRef.current = {
+          kind: 'moveRestMark',
+          measureIndex: restMarkHit.measureIndex,
+          clef: restMarkHit.clef,
+          restMarkId: restMarkHit.restMarkId,
+          staffRefY0: staff.refY0,
+          staffSpacing: staff.spacing,
+          staffNoteStartX: staff.noteStartX,
+          staffNoteAreaWidth: staff.noteAreaWidth,
+        };
+        document.addEventListener('mousemove', handleDocumentMouseMove);
+        document.addEventListener('mouseup', handleDocumentMouseUp);
+      }
+      suppressClickRef.current = true;
+      return;
+    }
+
+    // Neither the handles nor the body of any rest mark were hit this press —
+    // any currently-selected one loses its selection (and corner handles).
+    if (selectedRestMark) onSelectRestMark(null);
 
     // A click precisely on a grace note's own small notehead selects IT
     // (see selectedGrace) instead of its host note — checked before the
@@ -2179,6 +2233,7 @@ function StaffEditorInner({
     const restMarkHit = findRestMarkAt(result, point.x, point.y);
     if (restMarkHit) {
       onDeleteRestMark(restMarkHit.measureIndex, restMarkHit.restMarkId);
+      if (selectedRestMark?.restMarkId === restMarkHit.restMarkId) onSelectRestMark(null);
     }
   };
 

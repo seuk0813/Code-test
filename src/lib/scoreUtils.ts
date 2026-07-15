@@ -920,10 +920,23 @@ export function removeRestMark(score: Score, measureIndex: number, restMarkId: s
   return { ...score, measures };
 }
 
-/** Drag-to-resize gesture (see StaffEditor): changes a rest mark's glyph size/duration. */
-export function resizeRestMark(score: Score, measureIndex: number, restMarkId: string, duration: DurationValue): Score {
+/** Drag-a-corner-handle gesture (see StaffEditor): changes a selected rest
+ * mark's on-screen visual size (RestMark.scale), independent of its duration/glyph. */
+export function setRestMarkScale(score: Score, measureIndex: number, restMarkId: string, scale: number): Score {
+  const clamped = Math.min(3.5, Math.max(0.4, scale));
   const measures = score.measures.map((m, i) =>
-    i === measureIndex ? { ...m, restMarks: (m.restMarks ?? []).map((r) => (r.id === restMarkId ? { ...r, duration } : r)) } : m,
+    i === measureIndex ? { ...m, restMarks: (m.restMarks ?? []).map((r) => (r.id === restMarkId ? { ...r, scale: clamped } : r)) } : m,
+  );
+  return { ...score, measures };
+}
+
+/** Drag-the-glyph-body gesture (see StaffEditor): repositions a rest mark elsewhere on the score. */
+export function moveRestMark(score: Score, measureIndex: number, restMarkId: string, offset: number, line: number): Score {
+  const clampedOffset = Math.min(0.97, Math.max(0.03, offset));
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex
+      ? { ...m, restMarks: (m.restMarks ?? []).map((r) => (r.id === restMarkId ? { ...r, offset: clampedOffset, line } : r)) }
+      : m,
   );
   return { ...score, measures };
 }

@@ -181,8 +181,8 @@ function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
 }
 
 /** SMuFL (Bravura) rest codepoints, keyed by the same DurationValue used for
- * real notes — lets a rest mark's glyph (and therefore its visual size)
- * match whichever duration the drag-to-resize gesture last set it to. */
+ * real notes — picks which rest glyph shape is drawn (set once at placement
+ * time). The glyph's on-screen SIZE is a separate concern, see RestMark.scale. */
 const REST_MARK_GLYPH: Record<DurationValue, string> = {
   w: String.fromCodePoint(0xe4e3),
   h: String.fromCodePoint(0xe4e4),
@@ -191,24 +191,64 @@ const REST_MARK_GLYPH: Record<DurationValue, string> = {
   '16': String.fromCodePoint(0xe4e7),
 };
 
-/** Visual-only rest marks (see RestMark / #187) — a small rest glyph sketched
- * wherever the user dropped it, drawn in a muted tone precisely so it
- * doesn't read as a real, played rest (which would be a black notehead
- * flag like every other note). Purely an annotation: never affects beat
- * capacity, playback, or MusicXML/MIDI export. */
-function drawRestMarks(svg: SVGSVGElement, marks: RestMarkHitbox[]): void {
+/** Base rendered font-size (px) for a rest mark glyph at scale 1. */
+const REST_MARK_BASE_FONT_SIZE = 40;
+
+function restMarkFontSize(scale: number): number {
+  return REST_MARK_BASE_FONT_SIZE * scale;
+}
+
+/** Half-width/height of a rest mark's rough bounding box at a given font-size
+ * — shared by hitbox generation and drawing so the 4 corner handles line up
+ * exactly with what's drawn. */
+function restMarkHalfExtent(fontSize: number): { halfW: number; halfH: number } {
+  return { halfW: fontSize * 0.42, halfH: fontSize * 0.58 };
+}
+
+/** Visual-only rest marks (see RestMark / #187) — a rest glyph sketched
+ * wherever the user dropped it. Drawn boldly (not faint) so it's clearly
+ * visible, but in a distinct color so it doesn't read as a real, played rest
+ * (which would be a black notehead flag like every other note). Purely an
+ * annotation: never affects beat capacity, playback, or MusicXML/MIDI export.
+ * A selected mark additionally gets a soft highlight disc and 4 tiny corner
+ * handles (drag one to resize, see RestMarkHandleHitbox / setRestMarkScale). */
+function drawRestMarks(svg: SVGSVGElement, marks: RestMarkHitbox[], handles: RestMarkHandleHitbox[]): void {
   marks.forEach((mark) => {
+    const fontSize = restMarkFontSize(mark.scale);
+    if (mark.selected) {
+      const { halfW, halfH } = restMarkHalfExtent(fontSize);
+      const highlight = document.createElementNS(SVG_NS, 'rect');
+      highlight.setAttribute('x', String(mark.x - halfW - 4));
+      highlight.setAttribute('y', String(mark.y - halfH - 4));
+      highlight.setAttribute('width', String((halfW + 4) * 2));
+      highlight.setAttribute('height', String((halfH + 4) * 2));
+      highlight.setAttribute('rx', '6');
+      highlight.setAttribute('fill', '#5b3fa0');
+      highlight.setAttribute('opacity', '0.14');
+      svg.appendChild(highlight);
+    }
     const text = document.createElementNS(SVG_NS, 'text');
     text.setAttribute('x', String(mark.x));
     text.setAttribute('y', String(mark.y));
     text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('font-size', '24');
+    text.setAttribute('font-size', String(fontSize));
     text.setAttribute('font-family', 'Bravura');
     text.setAttribute('stroke', 'none');
-    text.setAttribute('fill', '#8a7dc2');
-    text.setAttribute('opacity', '0.75');
+    text.setAttribute('fill', mark.selected ? '#c0392b' : '#5b3fa0');
+    text.setAttribute('opacity', '1');
     text.textContent = REST_MARK_GLYPH[mark.duration] ?? REST_MARK_GLYPH.q;
     svg.appendChild(text);
+  });
+
+  handles.forEach((h) => {
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('cx', String(h.x));
+    dot.setAttribute('cy', String(h.y));
+    dot.setAttribute('r', '4');
+    dot.setAttribute('fill', '#ffffff');
+    dot.setAttribute('stroke', '#c0392b');
+    dot.setAttribute('stroke-width', '1.5');
+    svg.appendChild(dot);
   });
 }
 
@@ -385,6 +425,23 @@ export interface RestMarkHitbox {
   x: number;
   y: number;
   duration: DurationValue;
+  /** On-screen visual size multiplier (RestMark.scale, default 1) — independent of duration. */
+  scale: number;
+  selected: boolean;
+}
+
+/** One of the 4 tiny corner dots shown on a selected rest mark — dragging it
+ * changes RestMarkHitbox.scale (see setRestMarkScale in scoreUtils). */
+export interface RestMarkHandleHitbox {
+  measureIndex: number;
+  clef: Clef;
+  restMarkId: string;
+  corner: 'nw' | 'ne' | 'sw' | 'se';
+  x: number;
+  y: number;
+  /** The rest mark's own anchor point — the handle drag measures distance from this. */
+  centerX: number;
+  centerY: number;
 }
 
 export interface StaffHitbox {
@@ -498,6 +555,8 @@ export interface RenderResult {
   graceNoteHitboxes: GraceNoteHitbox[];
   splitZoneHitboxes: SplitZoneHitbox[];
   restMarkHitboxes: RestMarkHitbox[];
+  /** The 4 tiny drag-corners shown only on the currently-selected rest mark (see selectedRestMark param). */
+  restMarkHandleHitboxes: RestMarkHandleHitbox[];
   lineBreakHitboxes: LineBreakHitbox[];
   lyricHitboxes: LyricHitbox[];
   lyricBandHitboxes: LyricBandHitbox[];
@@ -729,6 +788,8 @@ export function renderScore(
   playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
   selectedPitchIndex?: number | null,
   selectedGrace?: NoteLocation | null,
+  /** Currently-selected rest mark (see RestMark / #187) — draws its 4 corner handles. */
+  selectedRestMark?: { measureIndex: number; restMarkId: string } | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -775,6 +836,7 @@ export function renderScore(
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
   const splitZoneHitboxes: SplitZoneHitbox[] = [];
   const restMarkHitboxes: RestMarkHitbox[] = [];
+  const restMarkHandleHitboxes: RestMarkHandleHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
   const lineBreakHitboxes: LineBreakHitbox[] = [];
   const lyricHitboxes: LyricHitbox[] = [];
@@ -1006,14 +1068,35 @@ export function renderScore(
         const full = isStaffMeasureFull({ notes }, score.timeSignature);
 
         (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
+          const scale = r.scale ?? 1;
+          const isSelected = !!selectedRestMark && selectedRestMark.measureIndex === measureIndex && selectedRestMark.restMarkId === r.id;
+          const markX = x + r.offset * measureWidth;
+          const markY = refY0 - r.line * spacing;
           restMarkHitboxes.push({
             measureIndex,
             clef,
             restMarkId: r.id,
-            x: x + r.offset * measureWidth,
-            y: refY0 - r.line * spacing,
+            x: markX,
+            y: markY,
             duration: r.duration ?? 'q',
+            scale,
+            selected: isSelected,
           });
+          if (isSelected) {
+            const { halfW, halfH } = restMarkHalfExtent(restMarkFontSize(scale));
+            (['nw', 'ne', 'sw', 'se'] as const).forEach((corner) => {
+              restMarkHandleHitboxes.push({
+                measureIndex,
+                clef,
+                restMarkId: r.id,
+                corner,
+                x: markX + (corner === 'nw' || corner === 'sw' ? -halfW : halfW),
+                y: markY + (corner === 'nw' || corner === 'ne' ? -halfH : halfH),
+                centerX: markX,
+                centerY: markY,
+              });
+            });
+          }
         });
 
         if (staveNotes.length > 0) {
@@ -1382,7 +1465,7 @@ export function renderScore(
     drawFingeringMarks(svg, fingeringMarks);
     drawDegreeMarks(svg, degreeMarks);
     drawConnectStubs(svg, connectStubs);
-    drawRestMarks(svg, restMarkHitboxes);
+    drawRestMarks(svg, restMarkHitboxes, restMarkHandleHitboxes);
   }
 
   return {
@@ -1395,6 +1478,7 @@ export function renderScore(
     graceNoteHitboxes,
     splitZoneHitboxes,
     restMarkHitboxes,
+    restMarkHandleHitboxes,
     lineBreakHitboxes,
     lyricHitboxes,
     lyricBandHitboxes,
@@ -1625,9 +1709,14 @@ export function findSplitZoneAt(result: RenderResult, x: number, y: number): Spl
   return result.splitZoneHitboxes.find((z) => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1) ?? null;
 }
 
-/** Click target for a visual-only rest mark (see RestMarkHitbox / #187), for right-click deletion. */
+/** Click target for a visual-only rest mark (see RestMarkHitbox / #187) — select, drag-to-move, or right-click-delete. Tolerance scales with the mark's own visual size. */
 export function findRestMarkAt(result: RenderResult, x: number, y: number): RestMarkHitbox | null {
-  return result.restMarkHitboxes.find((r) => Math.abs(r.x - x) < 12 && Math.abs(r.y - y) < 14) ?? null;
+  return result.restMarkHitboxes.find((r) => Math.abs(r.x - x) < 12 * r.scale && Math.abs(r.y - y) < 14 * r.scale) ?? null;
+}
+
+/** Click target for one of a selected rest mark's 4 corner drag handles (see RestMarkHandleHitbox). */
+export function findRestMarkHandleAt(result: RenderResult, x: number, y: number): RestMarkHandleHitbox | null {
+  return result.restMarkHandleHitboxes.find((h) => Math.abs(h.x - x) < 8 && Math.abs(h.y - y) < 8) ?? null;
 }
 
 export function findLyricAt(result: RenderResult, x: number, y: number): LyricHitbox | null {

@@ -114,9 +114,15 @@ export interface RestMark {
   offset: number;
   /** Vertical staff line position — same units as scoreUtils.pitchToLine. */
   line: number;
-  /** Which rest glyph is drawn (whole/half/quarter/8th/16th) — purely cosmetic
-   * sizing, dragged left/right to resize (see StaffEditor's rest-mark resize gesture). */
+  /** Which rest glyph is drawn (whole/half/quarter/8th/16th) — set once at
+   * placement time from whichever duration was armed on the toolbar. */
   duration: DurationValue;
+  /**
+   * On-screen visual size multiplier for the glyph, completely independent of
+   * `duration` — dragging one of the selected mark's 4 corner handles changes
+   * THIS, not the rest type. Undefined = 1 (normal size).
+   */
+  scale?: number;
 }
 
 export interface Measure {

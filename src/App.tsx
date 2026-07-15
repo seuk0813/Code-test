@@ -39,7 +39,8 @@ import {
   removeLyricFromScore,
   removeGraceNote,
   removeRestMark,
-  resizeRestMark,
+  setRestMarkScale,
+  moveRestMark,
   removeMeasure,
   removeNoteFromScore,
   resizePickupMeasure,
@@ -99,6 +100,10 @@ function App() {
   // The host note whose grace note is selected (see NoteEvent.graceNote) —
   // mutually exclusive with `selected`: selecting either clears the other.
   const [selectedGrace, setSelectedGrace] = useState<NoteLocation | null>(null);
+  // The currently-selected visual-only rest mark (see RestMark / #187) —
+  // shows its 4 corner resize handles; click its glyph to select, click
+  // elsewhere to deselect (see StaffEditor's rest-mark mousedown handling).
+  const [selectedRestMark, setSelectedRestMark] = useState<{ measureIndex: number; restMarkId: string } | null>(null);
   // Toggled by re-clicking the active duration button while nothing is
   // selected (Toolbar's "새 음표 배치" highlight toggle). While true and no
   // note is selected, clicking the staff prefers selecting the nearest
@@ -1322,8 +1327,12 @@ function App() {
     [setScore],
   );
 
-  const handleResizeRestMark = useCallback((measureIndex: number, restMarkId: string, duration: DurationValue) => {
-    setScore((prev) => resizeRestMark(prev, measureIndex, restMarkId, duration));
+  const handleResizeRestMarkScale = useCallback((measureIndex: number, restMarkId: string, scale: number) => {
+    setScore((prev) => setRestMarkScale(prev, measureIndex, restMarkId, scale));
+  }, [setScore]);
+
+  const handleMoveRestMark = useCallback((measureIndex: number, restMarkId: string, offset: number, line: number) => {
+    setScore((prev) => moveRestMark(prev, measureIndex, restMarkId, offset, line));
   }, [setScore]);
 
   const handlePlay = useCallback(async () => {
@@ -1582,7 +1591,10 @@ function App() {
         onDeleteLyric={handleDeleteLyric}
         onDeleteRestMark={handleDeleteRestMark}
         onAddRestMark={handleAddRestMark}
-        onResizeRestMark={handleResizeRestMark}
+        selectedRestMark={selectedRestMark}
+        onSelectRestMark={setSelectedRestMark}
+        onResizeRestMarkScale={handleResizeRestMarkScale}
+        onMoveRestMark={handleMoveRestMark}
         onDeselectNote={handleDeselectNote}
         onSetTitle={handleSetTitle}
         onSetComposer={handleSetComposer}
