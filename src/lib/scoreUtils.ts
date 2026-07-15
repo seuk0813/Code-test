@@ -145,14 +145,24 @@ const DEGREE_TABLE: Record<number, { key: ScaleDegreeLabel; text: string }> = {
  * (`chordRoot`, `chordRootAccidental`) — e.g. D against a C-rooted chord is
  * "2". Returns null when that particular degree's checkbox isn't in
  * `enabledLabels` (see ScaleDegreeLabel/SCALE_DEGREE_LABELS), so it's simply
- * not drawn. Octave-independent (only the pitch classes matter). */
+ * not drawn. Octave-independent (only the pitch classes matter).
+ *
+ * `pitch.accidental` alone isn't enough: a note with NO explicit accidental
+ * still sounds sharped/flatted whenever the key signature affects its letter
+ * (see KEY_SIGNATURE_ACCIDENTALS/effectiveAccidental) — e.g. a plain "C" in
+ * the key of A actually sounds C#. Using the raw (blank) field here used to
+ * label that C a "b3" against an A chord instead of the correct "3". An
+ * explicit accidental on the note (including 'n' cancelling the key
+ * signature) always overrides `keySignature`, matching effectiveAccidental. */
 export function scaleDegreeFor(
   pitch: Pick<Pitch, 'letter' | 'accidental'>,
   chordRoot: Pitch['letter'],
   chordRootAccidental: Accidental,
   enabledLabels: ScaleDegreeLabel[],
+  keySignature: string,
 ): string | null {
-  const semitone = (pitchClass(pitch.letter, pitch.accidental) - pitchClass(chordRoot, chordRootAccidental) + 12) % 12;
+  const soundingAccidental = pitch.accidental !== '' ? pitch.accidental : keySignatureAccidentalFor(pitch.letter, keySignature);
+  const semitone = (pitchClass(pitch.letter, soundingAccidental) - pitchClass(chordRoot, chordRootAccidental) + 12) % 12;
   if (semitone === 9) {
     if (enabledLabels.includes('dim7')) return 'dim7';
     return enabledLabels.includes('6') ? '6' : null;
@@ -214,7 +224,7 @@ export function computeScaleDegreeLabels(score: Score): Map<string, string> {
         if (!note.isRest && note.pitches.length > 0) {
           const chord = activeChordAt(sortedChords, beat);
           if (chord) {
-            const text = scaleDegreeFor(note.pitches[0], chord.root, chord.accidental, enabled);
+            const text = scaleDegreeFor(note.pitches[0], chord.root, chord.accidental, enabled, score.keySignature);
             if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}`, text);
           }
         }
@@ -662,7 +672,18 @@ const QUALITY_PATTERNS: [RegExp, ChordQuality][] = [
  * quality suffix — the root above the slash is the functional root (what
  * scale-degree labeling and any other harmony logic should key off), the
  * bass note itself is display-only (it's kept verbatim in the chord's raw
- * `text`, never parsed into a separate field). */
+ * `text`, never parsed into a separate field).
+ *
+ * The root/accidental letter always parses on its own (only the leading
+ * `[A-G][#b]?` needs to match); an unrecognized quality suffix (extended/6th
+ * chords like "Dm6", "Cadd9") no longer fails the WHOLE parse and silently
+ * keeps whatever root the chord previously had — that used to make
+ * scale-degree labeling key off a stale, unrelated root the moment someone
+ * typed a chord quality this app doesn't have a dedicated pattern for.
+ * `quality` falls back to 'maj' in that case; it's only ever used as a
+ * structured hint (e.g. for future harmony features) — the exact glyph the
+ * user typed is preserved verbatim in `text` and always wins for display
+ * (see chordLabel). */
 export function parseChordText(
   text: string,
 ): { root: Pitch['letter']; accidental: Accidental; quality: ChordQuality } | null {
@@ -677,7 +698,7 @@ export function parseChordText(
       return { root, accidental, quality };
     }
   }
-  return null;
+  return { root, accidental, quality: 'maj' };
 }
 
 function nextChordOffset(existingCount: number): number {
