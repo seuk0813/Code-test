@@ -1459,7 +1459,7 @@ export function renderScore(
     drawHeading(svg, score, titleHitbox);
     drawComposer(svg, score, composerHitbox);
     drawChordLabels(svg, score, chordHitboxes);
-    drawLyrics(svg, score, lyricHitboxes, lyricBandHitboxes);
+    drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
@@ -1527,7 +1527,7 @@ function drawComposer(svg: SVGSVGElement, score: Score, hb: ComposerHitbox): voi
   svg.appendChild(text);
 }
 
-function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[], lyricBandHitboxes: LyricBandHitbox[]): void {
+function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox[]): void {
   lyricHitboxes.forEach((hb) => {
     const syllable = (score.measures[hb.measureIndex].lyrics ?? []).find((l) => l.id === hb.lyricId);
     if (!syllable) return;
@@ -1543,25 +1543,6 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
     text.textContent = syllable.text;
     svg.appendChild(text);
   });
-  // Lead-sheet layout's lyric band sits in an otherwise-empty gap between the
-  // melody and piano staves (see the widened lyricBandHitboxes above) — a
-  // faint placeholder marks it as clickable, the same way the title/composer
-  // fields hint at themselves, instead of leaving it looking like dead space.
-  if (score.showMelodyStaff) {
-    lyricBandHitboxes.forEach((band) => {
-      if ((score.measures[band.measureIndex].lyrics ?? []).length > 0) return;
-      const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', String(band.measureX + band.measureWidth / 2));
-      text.setAttribute('y', String(band.y));
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('font-family', LYRIC_FONT);
-      text.setAttribute('font-size', '12');
-      text.setAttribute('stroke', 'none');
-      text.setAttribute('fill', PLACEHOLDER_COLOR);
-      text.textContent = '가사 입력';
-      svg.appendChild(text);
-    });
-  }
 }
 
 
