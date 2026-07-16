@@ -47,6 +47,7 @@ import {
   clearPlayback,
   clearTooltip,
   ledgerLinePositions,
+  renderChordSnapGuide,
   renderGhost,
   renderMarqueeBox,
   renderMarqueeHighlights,
@@ -58,6 +59,8 @@ import {
 import type { EditTool } from './Toolbar';
 
 const DRAG_THRESHOLD_PX = 4;
+/** A chord symbol drag within this many px of an existing note's onset snaps to it (see chordSnapCandidates) — keeps a chord's stored offset exactly matching a real beat, so scale-degree labeling (which keys a note's chord off beat boundaries) can't land on the wrong side by a hair's-width drag. */
+const CHORD_SNAP_THRESHOLD_PX = 24;
 const HOLD_CYCLE_MS = 1000;
 const TOUCH_PREVIEW_RADIUS = 22;
 /** A new note placed within this many px of an existing note's X stacks onto it as a chord tone. */
@@ -201,6 +204,8 @@ interface SymbolDrag {
   startX: number;
   moved: boolean;
   pendingOffset: number;
+  /** Pixel X the chord is currently snapped to (see chordSnapCandidates) — null while unsnapped/free, and always null for lyric drags. Drives the live guide line. */
+  snappedX?: number | null;
 }
 
 /** Mouse press gesture in progress on the staff. */
@@ -1255,6 +1260,33 @@ function StaffEditorInner({
     return (measure.lyrics ?? []).find((l) => l.id === drag.id)?.text ?? '';
   };
 
+  /**
+   * Every note's onset within `measureIndex` (both clefs), as an
+   * {offset-within-measure, on-screen x} pair — offset computed the same way
+   * flattenChords derives a non-first chord's beat (accumulated beat /
+   * measureDurationBeats), so snapping a chord drag to one of these makes its
+   * STORED offset land on an exact beat boundary, not just visually close to
+   * one. Used to snap chord-symbol drags (see updateSymbolDrag) so
+   * scale-degree labeling's beat comparison can't be thrown off by a
+   * few-pixel drag imprecision.
+   */
+  const chordSnapCandidates = (measureIndex: number): { offset: number; x: number }[] => {
+    const result = renderResultRef.current;
+    const measure = score.measures[measureIndex];
+    if (!result || !measure) return [];
+    const duration = measureDurationBeats(score, measureIndex);
+    const candidates: { offset: number; x: number }[] = [];
+    (['treble', 'bass'] as Clef[]).forEach((clef) => {
+      let beat = 0;
+      measure[clef].notes.forEach((note, noteIndex) => {
+        const hb = result.noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === clef && n.noteIndex === noteIndex);
+        if (hb) candidates.push({ offset: Math.min(0.97, Math.max(0.03, beat / duration)), x: hb.centerX });
+        beat += noteBeats(note);
+      });
+    });
+    return candidates;
+  };
+
   const updateSymbolDrag = (drag: SymbolDrag, point: { x: number; y: number }) => {
     if (!drag.moved && Math.abs(point.x - drag.startX) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
@@ -1275,16 +1307,47 @@ function StaffEditorInner({
       drag.measureWidth = staff.x1 - staff.x0;
     }
 
-    const offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
+    let offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
+    let ghostX = drag.measureX + offset * drag.measureWidth;
+    drag.snappedX = null;
+
+    // Only chord symbols carry harmonic meaning (scale-degree labeling reads
+    // their beat position) — lyrics stay freely, continuously positioned.
+    if (drag.kind === 'chordSymbol') {
+      let nearest: { offset: number; x: number } | null = null;
+      let nearestDist = CHORD_SNAP_THRESHOLD_PX;
+      for (const c of chordSnapCandidates(drag.measureIndex)) {
+        const dist = Math.abs(c.x - point.x);
+        if (dist < nearestDist) {
+          nearest = c;
+          nearestDist = dist;
+        }
+      }
+      if (nearest) {
+        offset = nearest.offset;
+        ghostX = nearest.x;
+        drag.snappedX = ghostX;
+      }
+    }
+
     drag.pendingOffset = offset;
     renderGhost(overlayRef.current, {
       kind: 'chord',
-      x: drag.measureX + offset * drag.measureWidth,
+      x: ghostX,
       y: drag.y,
       label: symbolLabel(drag),
       opacity: 0.7,
       color: drag.kind === 'chordSymbol' ? '#2f3a8f' : '#333',
     });
+
+    if (drag.kind === 'chordSymbol' && drag.snappedX != null && result) {
+      const band = result.chordBandHitboxes.find((b) => b.measureIndex === drag.measureIndex);
+      const bassStaff = result.staffHitboxes.find((s) => s.measureIndex === drag.measureIndex && s.clef === 'bass');
+      if (band && bassStaff) renderChordSnapGuide(overlayRef.current, { x: drag.snappedX, y0: band.y0, y1: bassStaff.y1 });
+      else renderChordSnapGuide(overlayRef.current, null);
+    } else {
+      renderChordSnapGuide(overlayRef.current, null);
+    }
   };
 
   const commitSymbolDrag = (drag: SymbolDrag) => {
@@ -1705,6 +1768,7 @@ function StaffEditorInner({
       if (!gesture.moved) openSymbolEditor(gesture);
       suppressClickRef.current = gesture.moved;
       clearGhost(overlayRef.current);
+      renderChordSnapGuide(overlayRef.current, null);
       return;
     }
 
@@ -2589,6 +2653,7 @@ function StaffEditorInner({
       commitSymbolDrag(gesture);
       if (!gesture.moved) openSymbolEditor(gesture);
       clearGhost(overlayRef.current);
+      renderChordSnapGuide(overlayRef.current, null);
       return;
     }
 

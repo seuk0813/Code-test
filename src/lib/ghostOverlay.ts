@@ -342,6 +342,41 @@ export function renderMarqueeBox(svg: SVGSVGElement | null, box: { x0: number; y
   );
 }
 
+const CHORD_SNAP_GUIDE_GROUP_ID = 'chord-snap-guide-group';
+
+/**
+ * A vertical dashed line spanning from the chord band down through the
+ * staff, shown live while dragging a chord symbol onto whichever note's
+ * beat it will actually attach to (see StaffEditor's chord-drag snapping) —
+ * makes the otherwise-invisible "which note is this chord governing for
+ * scale-degree purposes" alignment visible while the user drags, instead of
+ * only being able to tell after the fact from a mislabeled degree.
+ */
+export function renderChordSnapGuide(svg: SVGSVGElement | null, guide: { x: number; y0: number; y1: number } | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${CHORD_SNAP_GUIDE_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', CHORD_SNAP_GUIDE_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!guide) return;
+  group.appendChild(
+    el('line', {
+      x1: guide.x,
+      y1: guide.y0,
+      x2: guide.x,
+      y2: guide.y1,
+      stroke: '#2f9e44',
+      'stroke-width': 1.5,
+      'stroke-dasharray': '5 4',
+      opacity: 0.85,
+    }),
+  );
+}
+
 /** Persistent blue highlight blobs over each marquee-selected notehead (or chord symbol, with a wider rx/ry). */
 export function renderMarqueeHighlights(svg: SVGSVGElement | null, spots: { x: number; y: number; rx?: number; ry?: number }[]): void {
   if (!svg) return;
