@@ -1,4 +1,5 @@
-import type { Measure, Score } from '../types/score';
+import type { ChordSymbol, Measure, Score } from '../types/score';
+import { parseChordText } from './scoreUtils';
 import { renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
@@ -12,6 +13,23 @@ export interface RecentScoreEntry {
   score: Score;
 }
 
+/**
+ * A chord's root/accidental/quality are re-derived from its own `text` on
+ * every load — self-healing any stale values a chord was left with from
+ * before a parseChordText fix (e.g. an older save's "Dm6/A" whose text was
+ * typed back when an unrecognized quality suffix like "m6" made parsing fail
+ * outright, silently leaving root/accidental at whatever they'd been before
+ * — see parseChordText). Scale-degree labeling reads root/accidental, not
+ * text, so two chords that show identical text can otherwise carry
+ * different, inconsistent roots depending on when each was last edited.
+ */
+function reparseChord(chord: ChordSymbol): ChordSymbol {
+  if (chord.text === undefined) return chord;
+  const parsed = parseChordText(chord.text);
+  if (!parsed) return chord;
+  return { ...chord, root: parsed.root, accidental: parsed.accidental, quality: parsed.quality };
+}
+
 /** Backfills fields added in later versions so older saved scores load cleanly. */
 export function normalizeScore(score: Score): Score {
   return {
@@ -20,7 +38,7 @@ export function normalizeScore(score: Score): Score {
     measures: (score.measures ?? []).map(
       (m): Measure => ({
         ...m,
-        chords: m.chords ?? [],
+        chords: (m.chords ?? []).map(reparseChord),
         lyrics: m.lyrics ?? [],
         restMarks: m.restMarks ?? [],
       }),
