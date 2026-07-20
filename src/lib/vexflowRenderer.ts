@@ -22,6 +22,7 @@ import {
   deriveMelodyNotes,
   isStaffMeasureFull,
   measureCapacityBeats,
+  measureDurationBeats,
   noteBeats,
   pitchToLine,
   pitchToVexKey,
@@ -1308,13 +1309,54 @@ export function renderScore(
         });
       });
 
-      // Chord symbol band above the treble stave.
+      // Chord symbol band above the treble stave. Unlike lyrics (purely
+      // decorative), a chord's `offset` also drives which one is "active" at
+      // a given note for scale-degree labeling (see flattenChords in
+      // scoreUtils, which treats offset as a fraction of the measure's BEAT
+      // duration, i.e. of the note-content area only). Positioning the label
+      // itself the same way — relative to noteStartX/noteAreaWidth rather
+      // than the full stave span (which also includes the clef/key/time
+      // glyphs on a row-starting measure) — keeps "where the chord visually
+      // sits" and "which beat it's considered to start at" in the same
+      // coordinate space, so a chord dragged to line up with a note actually
+      // lines up with that note's beat too.
+      const chordNoteAreaWidth = Math.max(40, x + measureWidth - NOTE_AREA_RIGHT_PAD - sharedNoteStartX);
+      // A chord dropped exactly on a note (see StaffEditor's chord-drag snap)
+      // stores an offset computed from that note's BEAT, which VexFlow's own
+      // formatter doesn't necessarily lay out at a perfectly linear fraction
+      // of the note area (accidentals, varying durations etc. can shift
+      // things unevenly) — so recomputing its pixel X from the linear
+      // formula alone can drift a few/several px off the actual notehead the
+      // drag's live ghost/guide line showed. When the chord's beat exactly
+      // matches a real note's onset (in either clef), use that note's own
+      // rendered x directly so the committed position matches what was shown
+      // while dragging; otherwise (no note at that exact beat) fall back to
+      // the linear formula.
+      const measureDuration = measureDurationBeats(score, measureIndex);
+      const xForBeat = (targetBeat: number): number | null => {
+        const EPS = 1e-3;
+        for (const c of ['treble', 'bass'] as Clef[]) {
+          let beat = 0;
+          const clefNotes = measure[c].notes;
+          for (let i = 0; i < clefNotes.length; i++) {
+            if (Math.abs(beat - targetBeat) < EPS) {
+              const hb = noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === c && n.noteIndex === i);
+              if (hb) return hb.centerX;
+            }
+            beat += noteBeats(clefNotes[i]);
+          }
+        }
+        return null;
+      };
       measure.chords.forEach((chord: ChordSymbol) => {
-        const cx = x + chord.offset * measureWidth;
+        const cx = xForBeat(chord.offset * measureDuration) ?? sharedNoteStartX + chord.offset * chordNoteAreaWidth;
         chordHitboxes.push({ measureIndex, chordId: chord.id, x: cx, y: chordY, halfWidth: 20 });
       });
       chordBandHitboxes.push({
         measureIndex,
+        // The clickable "click here to add a chord" region still spans the
+        // whole band (including the space above the clef) — only the
+        // offset<->pixel mapping used for existing chords' positions changes.
         x0: x,
         x1: x + measureWidth,
         y0: chordY - 14,
@@ -1322,8 +1364,8 @@ export function renderScore(
         // chord now sits lower (CHORD_BAND_Y), so tapping just above the staff
         // to place a high note isn't swallowed by the chord band.
         y1: chordY + 3,
-        measureX: x,
-        measureWidth,
+        measureX: sharedNoteStartX,
+        measureWidth: chordNoteAreaWidth,
       });
 
       // Lyric syllables: below the standalone melody staff in lead-sheet

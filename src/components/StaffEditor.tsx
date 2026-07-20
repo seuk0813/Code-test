@@ -1303,8 +1303,19 @@ function StaffEditorInner({
     const staff = result && findStaffAt(result, point.x, drag.y + 5);
     if (staff && staff.measureIndex !== drag.measureIndex) {
       drag.measureIndex = staff.measureIndex;
-      drag.measureX = staff.x0;
-      drag.measureWidth = staff.x1 - staff.x0;
+      // A chord's offset is in the same coordinate space as its
+      // chordBandHitbox (noteStartX/noteAreaWidth — see vexflowRenderer),
+      // NOT the full stave span, so a beat-precise snap target lines up with
+      // where the chord itself is actually drawn (see chordSnapCandidates).
+      // Lyrics have no such external consumer of their offset and keep the
+      // full band span, matching their own rendering.
+      if (drag.kind === 'chordSymbol') {
+        drag.measureX = staff.noteStartX;
+        drag.measureWidth = staff.noteAreaWidth;
+      } else {
+        drag.measureX = staff.x0;
+        drag.measureWidth = staff.x1 - staff.x0;
+      }
     }
 
     let offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
