@@ -1127,32 +1127,6 @@ export function togglePitchInNote(
   });
 }
 
-/**
- * Splits the note at `location` into `pieces` consecutive quarter notes of
- * the same pitch(es) — the scissors-cursor gesture (see findSplitZoneAt) for
- * cutting a long note (half/dotted-half/whole) sitting alone in an otherwise
- * sparse measure into individually editable quarter notes, instead of having
- * to delete it and re-place several new ones by hand. Only the first piece
- * keeps the original's grace note/tie-slur connection; a rest splits into
- * that many quarter rests. No-op if `pieces` doesn't evenly divide the
- * note's own beat length.
- */
-export function splitNoteInScore(score: Score, location: NoteLocation, pieces: number): Score {
-  return updateMeasure(score, location.measureIndex, location.clef, (sm) => {
-    const note = sm.notes[location.noteIndex];
-    if (!note || pieces < 2 || Math.abs(noteBeats(note) - pieces) > 1e-6) return sm;
-    const parts: NoteEvent[] = Array.from({ length: pieces }, (_, i) => ({
-      id: nextId('n'),
-      pitches: note.pitches.map((p) => ({ ...p })),
-      duration: 'q',
-      dotted: false,
-      isRest: note.isRest,
-      ...(i === 0 ? { graceNote: note.graceNote, connectToNext: note.connectToNext, connectKind: note.connectKind, connectPitchIndex: note.connectPitchIndex } : {}),
-    }));
-    return { notes: [...sm.notes.slice(0, location.noteIndex), ...parts, ...sm.notes.slice(location.noteIndex + 1)] };
-  });
-}
-
 export function removeNoteFromScore(score: Score, location: NoteLocation): Score {
   return updateMeasure(score, location.measureIndex, location.clef, (sm) => ({
     notes: sm.notes.filter((_, i) => i !== location.noteIndex),

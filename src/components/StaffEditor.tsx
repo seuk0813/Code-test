@@ -14,7 +14,6 @@ import {
   findNearbyNotesAt,
   findRestMarkAt,
   findRestMarkHandleAt,
-  findSplitZoneAt,
   findStaffAt,
   findTitleAt,
   lineAt,
@@ -75,11 +74,6 @@ const NEW_NOTE_COLOR = '#7a5cff';
 const CHORD_COLOR = '#2f9e44';
 const DRAG_COLOR = '#d6432b';
 
-/** Cursor shown while hovering a splittable note's scissors zone (see SplitZoneHitbox/findSplitZoneAt). */
-const SCISSOR_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
-  `<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><text x='1' y='17' font-size='18'>✂</text></svg>`,
-)}") 2 18, pointer`;
-
 interface StaffEditorProps {
   score: Score;
   selected: NoteLocation | null;
@@ -116,8 +110,6 @@ interface StaffEditorProps {
     selectAfterAdd?: boolean,
   ) => void;
   onDeleteNote: (location: NoteLocation) => void;
-  /** Scissors-cursor gesture (see SplitZoneHitbox): splits the note at `location` into `pieces` equal quarter notes. */
-  onSplitNote: (location: NoteLocation, pieces: number) => void;
   /** Right-click deletes a visual-only rest mark (see RestMark / #187). */
   onDeleteRestMark: (measureIndex: number, restMarkId: string) => void;
   /** Hovering above/below an existing note with the 쉼표 tool armed sketches a rest mark there (see RestMark / #187). */
@@ -326,7 +318,6 @@ function StaffEditorInner({
   onSelectNote,
   onAddNote,
   onDeleteNote,
-  onSplitNote,
   onDeleteRestMark,
   onAddRestMark,
   selectedRestMark,
@@ -2100,19 +2091,6 @@ function StaffEditorInner({
       return;
     }
 
-    // Scissors zone: the empty staff space right after a splittable long
-    // note (see SplitZoneHitbox) — clicking there cuts it into equal quarter
-    // notes instead of selecting/placing. Checked before the grace-note-mode
-    // branch below since splitting is unrelated to that mode.
-    if (!editTool.graceNoteMode) {
-      const splitZone = findSplitZoneAt(result, point.x, point.y);
-      if (splitZone) {
-        onSplitNote({ measureIndex: splitZone.measureIndex, clef: splitZone.clef, noteIndex: splitZone.noteIndex }, splitZone.pieces);
-        suppressClickRef.current = true;
-        return;
-      }
-    }
-
     const click = resolveClickPreferSelect(result, point.x, point.y);
     if (!click) {
       if (lockedPreviewRef.current) {
@@ -2240,10 +2218,6 @@ function StaffEditorInner({
       clearTooltip(overlayRef.current);
       if (containerRef.current) containerRef.current.style.cursor = '';
       return;
-    }
-
-    if (containerRef.current) {
-      containerRef.current.style.cursor = !editTool.graceNoteMode && findSplitZoneAt(result, point.x, point.y) ? SCISSOR_CURSOR : '';
     }
 
     clearTooltip(overlayRef.current);

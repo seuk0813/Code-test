@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, LoadMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordQuality, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordQuality, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
 import {
   addChordToScore,
   addChordToScoreAt,
@@ -46,7 +46,6 @@ import {
   resizePickupMeasure,
   resizeTrailingMeasure,
   setGraceNotePitch,
-  splitNoteInScore,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -141,11 +140,18 @@ function App() {
   // came from, so a multi-measure selection pastes back across that many
   // measures instead of cramming everything into one and overflowing it.
   const [marquee, setMarquee] = useState<NoteLocation[]>([]);
-  // Chord symbols multi-selected via the same shift+drag rubber-band, for batch delete.
+  // Chord symbols multi-selected via the same shift+drag rubber-band, for
+  // batch delete AND (see chordClipboard below) batch copy/paste.
   const [marqueeChords, setMarqueeChords] = useState<{ measureIndex: number; chordId: string }[]>([]);
   // Lyric syllables multi-selected via the same shift+drag rubber-band, for batch delete.
   const [marqueeLyrics, setMarqueeLyrics] = useState<{ measureIndex: number; lyricId: string }[]>([]);
   const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent; measureOffset: number }[]>([]);
+  // Chord clipboard for batch copy (Ctrl+C) / paste (Ctrl+V) of marquee-selected
+  // chords — mirrors noteClipboard: measureOffset remembers which measure
+  // (relative to the first selected one) each chord came from, so a
+  // multi-measure selection pastes back across that many measures, anchored
+  // at whichever measure was last clicked/focused (see handlePasteChords).
+  const [chordClipboard, setChordClipboard] = useState<{ chord: ChordSymbol; measureOffset: number }[]>([]);
   // True while StaffEditor holds a locked placement preview — App's own arrow
   // and spacebar handlers yield to the preview's movement/commit when set.
   const previewLockedRef = useRef(false);
@@ -268,19 +274,6 @@ function App() {
       }
     }
   }, [selected, score]);
-
-  /** Scissors-cursor gesture (see StaffEditor's SCISSOR_CURSOR): cuts a long
-   * note into `pieces` equal quarter notes, then selects the first piece. */
-  const handleSplitNote = useCallback(
-    (location: NoteLocation, pieces: number) => {
-      setScore((prev) => splitNoteInScore(prev, location, pieces));
-      setSelected(location);
-      setSelectedPitchIndex(null);
-      setSelectedGrace(null);
-      justPlacedRef.current = false;
-    },
-    [setScore],
-  );
 
   const handleScoreMetaChange = useCallback((patch: Partial<Score>) => {
     setScore((prev) => ({ ...prev, ...patch }));
@@ -851,6 +844,49 @@ function App() {
     });
   }, [noteClipboard, focusedMeasureIndex, score.measures.length, setScore]);
 
+  /** Ctrl+C with a marquee chord selection copies those chords into the
+   * chord clipboard — mirrors handleCopyNotes exactly, just for chord
+   * symbols. Each chord remembers measureOffset, its measure relative to the
+   * first selected one, so a multi-measure selection pastes back across that
+   * same span (see handlePasteChords). */
+  const handleCopyChords = useCallback(() => {
+    if (marqueeChords.length === 0) return;
+    const minMeasure = Math.min(...marqueeChords.map((m) => m.measureIndex));
+    const ordered = [...marqueeChords].sort((a, b) => a.measureIndex - b.measureIndex);
+    const copied = ordered
+      .map(({ measureIndex, chordId }) => {
+        const chord = score.measures[measureIndex]?.chords.find((c) => c.id === chordId);
+        return chord ? { chord, measureOffset: measureIndex - minMeasure } : null;
+      })
+      .filter((x): x is { chord: ChordSymbol; measureOffset: number } => x !== null);
+    setChordClipboard(copied);
+  }, [marqueeChords, score]);
+
+  /** Ctrl+V: adds the copied chords into the focused (or last) measure and
+   * onward — each chord lands in the measure at (target + its measureOffset),
+   * keeping its own original offset/root/accidental/quality/text, so a
+   * multi-measure copy spreads back across that many measures anchored at
+   * whichever measure was last clicked, instead of overflowing one (see
+   * handlePasteNotes, which this mirrors). New measures are appended to the
+   * score if the copy reaches past its end. Chords are always ADDED
+   * alongside whatever's already in each target measure, never replacing it. */
+  const handlePasteChords = useCallback(() => {
+    if (chordClipboard.length === 0) return;
+    const target = focusedMeasureIndex ?? score.measures.length - 1;
+    setScore((prev) => {
+      const maxOffset = Math.max(...chordClipboard.map((c) => c.measureOffset));
+      const measures = [...prev.measures];
+      while (measures.length <= target + maxOffset) measures.push(createEmptyMeasure());
+      chordClipboard.forEach(({ chord, measureOffset }) => {
+        const mi = target + measureOffset;
+        const clone: ChordSymbol = { ...chord, id: nextId('c') };
+        const m = measures[mi];
+        measures[mi] = { ...m, chords: [...m.chords, clone] };
+      });
+      return { ...prev, measures };
+    });
+  }, [chordClipboard, focusedMeasureIndex, score.measures.length, setScore]);
+
   /** Delete/Backspace with a marquee selection removes every selected note.
    * Notes are removed highest-noteIndex-first (within each measure/clef) so
    * deleting one doesn't shift the still-pending indices of the others. */
@@ -910,15 +946,19 @@ function App() {
         handleRedo();
         return;
       }
-      // Batch copy/paste of marquee-selected notes.
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && marquee.length > 0) {
+      // Batch copy/paste of marquee-selected notes (or, if nothing's marked
+      // for notes, chord symbols instead — mirrors the same shift-drag ->
+      // Ctrl+C -> click a measure -> Ctrl+V flow for both).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && (marquee.length > 0 || marqueeChords.length > 0)) {
         e.preventDefault();
-        handleCopyNotes();
+        if (marquee.length > 0) handleCopyNotes();
+        else handleCopyChords();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && noteClipboard.length > 0) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && (noteClipboard.length > 0 || chordClipboard.length > 0)) {
         e.preventDefault();
-        handlePasteNotes();
+        if (noteClipboard.length > 0) handlePasteNotes();
+        else handlePasteChords();
         return;
       }
       if (
@@ -992,7 +1032,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
+  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -1575,7 +1615,6 @@ function App() {
         onSelectNote={handleSelectNote}
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
-        onSplitNote={handleSplitNote}
         onMoveNote={handleMoveNote}
         onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}

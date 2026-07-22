@@ -44,14 +44,6 @@ const FINGER_FONT_SIZE = 16;
 /** Gap between a notehead's right edge and its fingering number. */
 const FINGER_GAP = 4;
 const DEGREE_GAP = 10;
-/** Empty space kept clear right after a splittable note's own notehead, so
- * the scissors zone starts past the note's own click region — a plain
- * click right on the notehead still just selects it. */
-const SPLIT_ZONE_DEADZONE = 16;
-/** Below this width there's not enough visible empty staff space to safely
- * offer the scissors gesture (too easy to fat-finger a click meant for
- * whatever comes right after). */
-const SPLIT_ZONE_MIN_WIDTH = 20;
 
 /**
  * Accidentals are drawn as plain SVG text (like the chord/lyric/title labels
@@ -401,23 +393,6 @@ export interface GraceNoteHitbox {
   y: number;
 }
 
-/** Click/hover target for the scissors-cursor split gesture (see
- * splitNoteInScore) — a strip of empty staff space right after a long
- * (half/dotted-half/whole) note that has no following note crowding it,
- * distinct from the notehead's own click region so a normal click there
- * still just selects the note. */
-export interface SplitZoneHitbox {
-  measureIndex: number;
-  clef: Clef;
-  noteIndex: number;
-  x0: number;
-  x1: number;
-  y0: number;
-  y1: number;
-  /** How many equal quarter notes splitNoteInScore would produce. */
-  pieces: number;
-}
-
 /** Click target for a visual-only rest mark (see RestMark / #187). */
 export interface RestMarkHitbox {
   measureIndex: number;
@@ -554,7 +529,6 @@ export interface RenderResult {
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   graceNoteHitboxes: GraceNoteHitbox[];
-  splitZoneHitboxes: SplitZoneHitbox[];
   restMarkHitboxes: RestMarkHitbox[];
   /** The 4 tiny drag-corners shown only on the currently-selected rest mark (see selectedRestMark param). */
   restMarkHandleHitboxes: RestMarkHandleHitbox[];
@@ -835,7 +809,6 @@ export function renderScore(
   const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
-  const splitZoneHitboxes: SplitZoneHitbox[] = [];
   const restMarkHitboxes: RestMarkHitbox[] = [];
   const restMarkHandleHitboxes: RestMarkHandleHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
@@ -1223,27 +1196,6 @@ export function renderScore(
             noteHitboxes.push(hb);
 
             if (!note.isRest) {
-              const beats = noteBeats(note);
-              if (Number.isInteger(beats) && beats >= 2 && beats <= 4) {
-                const nextX = noteIndex + 1 < centerXs.length ? centerXs[noteIndex + 1] : noteStartX + noteAreaWidth;
-                const zoneX0 = centerXs[noteIndex] + SPLIT_ZONE_DEADZONE;
-                const zoneX1 = nextX - 4;
-                if (zoneX1 - zoneX0 >= SPLIT_ZONE_MIN_WIDTH) {
-                  splitZoneHitboxes.push({
-                    measureIndex,
-                    clef,
-                    noteIndex,
-                    x0: zoneX0,
-                    x1: zoneX1,
-                    y0: Math.min(...ys) - 12,
-                    y1: Math.max(...ys) + 12,
-                    pieces: beats,
-                  });
-                }
-              }
-            }
-
-            if (!note.isRest) {
               const isSelected =
                 effectiveSelected &&
                 effectiveSelected.measureIndex === measureIndex &&
@@ -1518,7 +1470,6 @@ export function renderScore(
     chordHitboxes,
     chordBandHitboxes,
     graceNoteHitboxes,
-    splitZoneHitboxes,
     restMarkHitboxes,
     restMarkHandleHitboxes,
     lineBreakHitboxes,
@@ -1725,11 +1676,6 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
  * grace glyph selects IT, not its host. */
 export function findGraceNoteAt(result: RenderResult, x: number, y: number): GraceNoteHitbox | null {
   return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 9 && Math.abs(g.y - y) < 12) ?? null;
-}
-
-/** Hover/click target for the scissors-cursor split gesture (see SplitZoneHitbox). */
-export function findSplitZoneAt(result: RenderResult, x: number, y: number): SplitZoneHitbox | null {
-  return result.splitZoneHitboxes.find((z) => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1) ?? null;
 }
 
 /** Click target for a visual-only rest mark (see RestMarkHitbox / #187) — select, drag-to-move, or right-click-delete. Tolerance scales with the mark's own visual size. */
