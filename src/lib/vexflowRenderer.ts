@@ -14,7 +14,7 @@ import {
   StaveTie,
   Voice,
 } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, NoteEvent, NoteLocation, Score } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score } from '../types/score';
 import {
   chordLabel,
   computeScaleDegreeLabels,
@@ -700,14 +700,21 @@ export interface DraggingNote {
  * odd note (like a trailing 8th) unbeamed, so groups are built manually here
  * instead, purely from each note's actual beat duration.
  */
-function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], pulseBeats: number): StaveNote[][] {
+function computeBeamNoteGroups(
+  notes: NoteEvent[],
+  staveNotes: StaveNote[],
+  pulseBeats: number,
+  chordChangeBeats: number[] = [],
+): StaveNote[][] {
   const groups: StaveNote[][] = [];
   const groupIndices: number[][] = [];
+  const onsetBeats: number[] = [];
   let current: StaveNote[] = [];
   let currentIndices: number[] = [];
   let currentPulse = -1;
   let cumulative = 0;
   notes.forEach((note, i) => {
+    onsetBeats[i] = cumulative;
     const beamable = !note.isRest && (note.duration === '8' || note.duration === '16');
     const pulseIndex = Math.floor((cumulative + 1e-6) / pulseBeats);
     if (beamable && pulseIndex === currentPulse) {
@@ -734,6 +741,11 @@ function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], puls
   // beats read as a single run rather than 2+2, matching how lead-sheet/pop
   // engraving usually beams a half-measure of straight 8ths. Mixed-duration
   // or 16th-note groups (item 115's beat-completing pairs) are untouched.
+  // Never merged across a chord-symbol change, though — a chord change
+  // mid-run visually reads as one undifferentiated beam otherwise, hiding
+  // exactly the harmonic boundary a lead-sheet reader most needs to see.
+  const EPS = 1e-6;
+  const hasChordChangeAt = (beat: number) => chordChangeBeats.some((b) => Math.abs(b - beat) < EPS);
   const merged: StaveNote[][] = [];
   const isPureEighthGroup = (indices: number[]) => indices.every((idx) => notes[idx].duration === '8' && !notes[idx].dotted);
   groups.forEach((group, gi) => {
@@ -745,7 +757,8 @@ function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], puls
       prevIndices &&
       prevIndices[prevIndices.length - 1] + 1 === indices[0] &&
       isPureEighthGroup(prevIndices) &&
-      isPureEighthGroup(indices)
+      isPureEighthGroup(indices) &&
+      !hasChordChangeAt(onsetBeats[indices[0]])
     ) {
       prev.push(...group);
     } else {
@@ -753,6 +766,17 @@ function computeBeamNoteGroups(notes: NoteEvent[], staveNotes: StaveNote[], puls
     }
   });
   return merged;
+}
+
+/** Beat positions (within a measure, 0-based) where a NEW chord symbol
+ * starts partway through — every chord's own beat except the earliest one,
+ * which governs the whole measure from its start regardless of its stored
+ * offset (see flattenChords in scoreUtils). Feeds computeBeamNoteGroups so
+ * the "merge adjacent eighth groups into one beam" step never beams
+ * straight through a chord change. */
+function chordChangeBeatsIn(measure: Measure, measureDuration: number): number[] {
+  const sorted = [...(measure.chords ?? [])].sort((a, b) => a.offset - b.offset);
+  return sorted.slice(1).map((c) => c.offset * measureDuration);
 }
 
 export function renderScore(
@@ -839,6 +863,9 @@ export function renderScore(
       const isPieceStart = measureIndex === 0;
       const isLastMeasure = measureIndex === score.measures.length - 1;
       const measureWidth = rowMeasureWidths[rowIndex][localIndex];
+      // Reused by both the melody staff and the treble/bass staves below —
+      // see chordChangeBeatsIn and computeBeamNoteGroups' chord-change guard.
+      const chordChangeBeats = chordChangeBeatsIn(measure, measureDurationBeats(score, measureIndex));
 
       const trebleStave = new Stave(x, trebleY, measureWidth);
       const bassStave = new Stave(x, bassY, measureWidth);
@@ -937,7 +964,7 @@ export function renderScore(
             try {
               const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
               const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
-              const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats);
+              const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats, chordChangeBeats);
               melodyBeams = beamGroups.map((group) => new Beam(group, true));
             } catch {
               // Beaming is a visual nicety; ignore failures on unusual groupings.
@@ -1093,7 +1120,7 @@ export function renderScore(
               // first group fraction (of a whole note) converts to beats by ×4.
               const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
               const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
-              const beamGroups = computeBeamNoteGroups(notes, staveNotes, pulseBeats);
+              const beamGroups = computeBeamNoteGroups(notes, staveNotes, pulseBeats, chordChangeBeats);
               // autoStem=true: each note's own StaveNote already picked its
               // OWN stem direction independently (autoStem on StaveNote), so
               // two notes straddling the middle line in the same beam group
@@ -1209,14 +1236,20 @@ export function renderScore(
                 // Some note shapes have no measurable glyph width; fall back to centerX.
               }
 
-              const degreeText = degreeLabels.get(`${clef}:${measureIndex}:${noteIndex}`);
-              if (degreeText) {
-                // Placed to the right of the notehead, like a numeric-keypad
-                // scale-degree entry sits next to the note it annotates —
-                // matches where fingering marks go (see FINGER_GAP below),
-                // just a bit further out so the two don't collide.
-                degreeMarks.push({ x: noteheadRightX + DEGREE_GAP, y: Math.min(...ys), text: degreeText });
-              }
+              note.pitches.forEach((_pitch, pitchIndex) => {
+                const degreeText = degreeLabels.get(`${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`);
+                if (degreeText) {
+                  // Placed to the right of the notehead, like a numeric-keypad
+                  // scale-degree entry sits next to the note it annotates —
+                  // matches where fingering marks go (see FINGER_GAP below),
+                  // just a bit further out so the two don't collide. Each
+                  // pitch in a chord gets its own label at its own Y — a
+                  // stacked voicing used to only ever compute/show one
+                  // degree for the whole chord (the bottom pitch), leaving
+                  // every other note in it unlabeled.
+                  degreeMarks.push({ x: noteheadRightX + DEGREE_GAP, y: ys[pitchIndex], text: degreeText });
+                }
+              });
 
               note.pitches.forEach((pitch, pitchIndex) => {
                 if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;

@@ -209,7 +209,11 @@ export function activeChordAt(sortedChords: { chord: ChordSymbol; beat: number }
 }
 
 /** Precomputes every note's scale-degree label text (see scaleDegreeFor), for
- * both staves across the whole score, keyed by `${clef}:${measureIndex}:${noteIndex}`.
+ * both staves across the whole score, keyed by
+ * `${clef}:${measureIndex}:${noteIndex}:${pitchIndex}` — EVERY pitch in a
+ * chord (a NoteEvent can carry several stacked pitches) gets its own label,
+ * not just the first one, so a dense piano-style voicing shows a degree next
+ * to each notehead instead of leaving all but the bottom pitch unlabeled.
  * Empty when showScaleDegrees is off. */
 export function computeScaleDegreeLabels(score: Score): Map<string, string> {
   const labels = new Map<string, string>();
@@ -224,8 +228,10 @@ export function computeScaleDegreeLabels(score: Score): Map<string, string> {
         if (!note.isRest && note.pitches.length > 0) {
           const chord = activeChordAt(sortedChords, beat);
           if (chord) {
-            const text = scaleDegreeFor(note.pitches[0], chord.root, chord.accidental, enabled, score.keySignature);
-            if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}`, text);
+            note.pitches.forEach((pitch, pitchIndex) => {
+              const text = scaleDegreeFor(pitch, chord.root, chord.accidental, enabled, score.keySignature);
+              if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`, text);
+            });
           }
         }
         beat += noteBeats(note);
