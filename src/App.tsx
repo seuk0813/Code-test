@@ -1367,11 +1367,11 @@ function App() {
     setFocusedMeasureIndex((foc) => (foc === target ? null : foc));
   }, [score.measures.length, setScore]);
 
-  /** Inserts a blank measure right after the focused (or last) measure — the floating FAB's "+", for mid-score insertion. */
+  /** Inserts a blank measure right BEFORE the focused (or last) measure — the floating FAB's "+", for mid-score insertion. */
   const handleInsertMeasureAtFocused = useCallback(() => {
     const idx = focusedMeasureIndex ?? score.measures.length - 1;
-    setScore((prev) => insertMeasureAfter(prev, idx, createEmptyMeasure()));
-    setFocusedMeasureIndex(idx + 1);
+    setScore((prev) => insertMeasureAfter(prev, idx - 1, createEmptyMeasure()));
+    setFocusedMeasureIndex(idx);
   }, [focusedMeasureIndex, score.measures.length, setScore]);
 
   /** Removes the focused (or last) measure — the floating FAB's "－", for mid-score deletion. */
@@ -1852,8 +1852,8 @@ function App() {
             <button
               className="measure-fab measure-fab-mid-add"
               onClick={handleInsertMeasureAtFocused}
-              title="선택한 마디 뒤에 마디 삽입"
-              aria-label="선택한 마디 뒤에 마디 삽입"
+              title="선택한 마디 앞에 마디 삽입"
+              aria-label="선택한 마디 앞에 마디 삽입"
             >
               +
             </button>

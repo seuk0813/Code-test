@@ -6,6 +6,7 @@ import {
   findChordAt,
   findChordBandAt,
   findComposerAt,
+  findDegreeMarkAt,
   findGraceNoteAt,
   findInsertIndex,
   findLineBreakAt,
@@ -1522,15 +1523,18 @@ function StaffEditorInner({
       // Shift+Tab mirrors the forward logic below, just walking backwards —
       // an existing chord before this position if there is one, else a fresh
       // empty slot one step back, so a run of chords can be reviewed in
-      // either direction with just Tab/Shift+Tab.
+      // either direction with just Tab/Shift+Tab. Skipped in 멜로디+가사
+      // (lead-sheet) mode — see the forward branch below for why.
       if (event.shiftKey) {
         let prevExisting: { measureIndex: number; chord: ChordSymbol } | null = null;
-        for (let mi = currentMeasureIndex; mi >= 0; mi--) {
-          const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
-          const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset < currentOffset - 1e-6) : chords;
-          if (candidates.length > 0) {
-            prevExisting = { measureIndex: mi, chord: candidates[candidates.length - 1] };
-            break;
+        if (!score.showMelodyStaff) {
+          for (let mi = currentMeasureIndex; mi >= 0; mi--) {
+            const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
+            const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset < currentOffset - 1e-6) : chords;
+            if (candidates.length > 0) {
+              prevExisting = { measureIndex: mi, chord: candidates[candidates.length - 1] };
+              break;
+            }
           }
         }
         if (prevExisting) {
@@ -1571,13 +1575,20 @@ function StaffEditorInner({
         return;
       }
 
+      // Cycling through already-filled chords with plain Tab is handy for
+      // reviewing/fixing a progression on the grand staff, but it gets in
+      // the way in 멜로디+가사 (lead-sheet) mode, where chords are usually
+      // typed out fresh across many still-empty measures in one pass — Tab
+      // there always advances straight to the next empty slot instead.
       let nextExisting: { measureIndex: number; chord: ChordSymbol } | null = null;
-      for (let mi = currentMeasureIndex; mi < score.measures.length; mi++) {
-        const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
-        const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset > currentOffset + 1e-6) : chords;
-        if (candidates.length > 0) {
-          nextExisting = { measureIndex: mi, chord: candidates[0] };
-          break;
+      if (!score.showMelodyStaff) {
+        for (let mi = currentMeasureIndex; mi < score.measures.length; mi++) {
+          const chords = [...(score.measures[mi]?.chords ?? [])].sort((a, b) => a.offset - b.offset);
+          const candidates = mi === currentMeasureIndex ? chords.filter((c) => c.offset > currentOffset + 1e-6) : chords;
+          if (candidates.length > 0) {
+            nextExisting = { measureIndex: mi, chord: candidates[0] };
+            break;
+          }
         }
       }
       if (nextExisting) {
@@ -2105,6 +2116,22 @@ function StaffEditorInner({
       onSelectGrace({ measureIndex: graceHit.measureIndex, clef: graceHit.clef, noteIndex: graceHit.noteIndex });
       suppressClickRef.current = true;
       return;
+    }
+
+    // In 도수 입력 모드, a click on the enlarged degree digit itself selects
+    // the exact note/pitch it labels (a plain select, no drag) — checked
+    // before the generic click resolution below so a click on the digit
+    // reliably lands on ITS note, not whichever note the pointer happens to
+    // be nearest by the usual radius search (the pill can visually sit close
+    // to a neighboring note).
+    if (degreeInputMode) {
+      const degreeHit = findDegreeMarkAt(result, point.x, point.y);
+      if (degreeHit) {
+        onSelectGrace(null);
+        onSelectNote({ measureIndex: degreeHit.measureIndex, clef: degreeHit.clef, noteIndex: degreeHit.noteIndex }, degreeHit.pitchIndex);
+        suppressClickRef.current = true;
+        return;
+      }
     }
 
     const click = resolveClickPreferSelect(result, point.x, point.y);

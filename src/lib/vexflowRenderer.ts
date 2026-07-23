@@ -159,17 +159,20 @@ interface DegreeMark {
  * drawn just to the right of each note's highest pitch — like a numeric-
  * keypad entry sitting next to the note it annotates, not above the glyph.
  * `emphasize` (도수 입력 모드 — see renderScore's degreeInputMode) draws them
- * noticeably larger with a pill background, since everything else on the
- * staff has just been dimmed behind them (see the dim-group wrap in
- * renderScore) and they're now the primary thing being edited. */
+ * a bit larger with a pill background, since everything else on the staff
+ * has just been dimmed behind them (see the dim-group wrap in renderScore)
+ * and they're now the primary thing being edited — kept modest (not the
+ * original 22px/15px-radius pass) so the pill doesn't balloon into a
+ * neighboring note's own click area (see DegreeMarkHitbox / findDegreeMarkAt,
+ * which now claims clicks in this radius explicitly regardless). */
 function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[], emphasize = false): void {
-  const fontSize = emphasize ? 22 : 12;
+  const fontSize = emphasize ? 15 : 12;
   marks.forEach((mark) => {
     if (emphasize) {
       const bg = document.createElementNS(SVG_NS, 'circle');
-      bg.setAttribute('cx', String(mark.x + 7));
-      bg.setAttribute('cy', String(mark.y - 5));
-      bg.setAttribute('r', '15');
+      bg.setAttribute('cx', String(mark.x + 6));
+      bg.setAttribute('cy', String(mark.y - 4));
+      bg.setAttribute('r', '10');
       bg.setAttribute('fill', '#eafbea');
       bg.setAttribute('stroke', '#2f9e44');
       bg.setAttribute('stroke-width', '1.5');
@@ -410,6 +413,22 @@ export interface GraceNoteHitbox {
   y: number;
 }
 
+/** Click target for a scale-degree label (see DegreeMark), only meaningful
+ * (and only populated) in 도수 입력 모드 — snaps a click on the enlarged
+ * digit straight to the exact note/pitch it annotates, since the label sits
+ * offset to the right of its notehead (see DEGREE_GAP) and, enlarged, can
+ * visually overlap a neighboring note; without this the click fell through
+ * to whichever note happened to be nearest, not necessarily the one whose
+ * digit was actually clicked. */
+export interface DegreeMarkHitbox {
+  measureIndex: number;
+  clef: Clef;
+  noteIndex: number;
+  pitchIndex: number;
+  x: number;
+  y: number;
+}
+
 /** Click target for a visual-only rest mark (see RestMark / #187). */
 export interface RestMarkHitbox {
   measureIndex: number;
@@ -546,6 +565,7 @@ export interface RenderResult {
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   graceNoteHitboxes: GraceNoteHitbox[];
+  degreeMarkHitboxes: DegreeMarkHitbox[];
   restMarkHitboxes: RestMarkHitbox[];
   /** The 4 tiny drag-corners shown only on the currently-selected rest mark (see selectedRestMark param). */
   restMarkHandleHitboxes: RestMarkHandleHitbox[];
@@ -771,7 +791,13 @@ function computeBeamNoteGroups(
   const EPS = 1e-6;
   const hasChordChangeAt = (beat: number) => chordChangeBeats.some((b) => Math.abs(b - beat) < EPS);
   const merged: StaveNote[][] = [];
-  const isPureEighthGroup = (indices: number[]) => indices.every((idx) => notes[idx].duration === '8' && !notes[idx].dotted);
+  // Triplet eighths (NoteEvent.tuplet) take 2/3 the time of a plain eighth,
+  // so a triplet's beam must never fuse with an adjacent plain-eighth beat's
+  // beam — they're rhythmically different runs even though both read as "8"
+  // duration; merging them drew one long beam spanning both with only the
+  // triplet's own "3" bracket over part of it (see computeTupletGroups),
+  // which looked like a single (wrong) beamed run instead of two.
+  const isPureEighthGroup = (indices: number[]) => indices.every((idx) => notes[idx].duration === '8' && !notes[idx].dotted && !notes[idx].tuplet);
   groups.forEach((group, gi) => {
     const indices = groupIndices[gi];
     const prev = merged[merged.length - 1];
@@ -896,6 +922,7 @@ export function renderScore(
   const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
+  const degreeMarkHitboxes: DegreeMarkHitbox[] = [];
   const restMarkHitboxes: RestMarkHitbox[] = [];
   const restMarkHandleHitboxes: RestMarkHandleHitbox[] = [];
   const chordBandHitboxes: ChordBandHitbox[] = [];
@@ -1126,10 +1153,10 @@ export function renderScore(
 
       const midY = (trebleStave.getYForLine(4) + bassStave.getYForLine(0)) / 2;
 
-      ([
+      const clefEntries = ([
         ['treble', trebleStave, measure.treble.notes, trebleStave.getYForLine(0) - STAVE_TOP_MARGIN, midY],
         ['bass', bassStave, measure.bass.notes, midY, bassStave.getYForLine(4) + STAVE_TOP_MARGIN],
-      ] as const).forEach(([clef, stave, notes, y0, y1]) => {
+      ] as const).map(([clef, stave, notes, y0, y1]) => {
         const hiddenNoteIndex =
           draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === clef
             ? draggingNote.noteIndex
@@ -1191,10 +1218,30 @@ export function renderScore(
           }
         });
 
-        if (staveNotes.length > 0) {
-          const voice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
-          voice.addTickables(staveNotes);
+        const voice = staveNotes.length > 0 ? new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false) : null;
+        if (voice) voice.addTickables(staveNotes);
 
+        return { clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice };
+      });
+
+      // Format treble and bass voices TOGETHER (not independently, as before)
+      // so a note that lands on the same beat in each clef ends up at the
+      // same X — otherwise a modifier that only one clef has (most commonly
+      // a grace note, whose GraceNoteGroup reserves real width) pushes just
+      // that stave's later notes rightward, throwing the grand staff out of
+      // vertical alignment from that beat onward (see #220 — a grace note on
+      // 도 no longer lining up with the simultaneous bass note below it).
+      // Trailing margin reserved after the last note's onset: a dotted
+      // note's dot is a modifier drawn to the notehead's right, and 20px
+      // left it sitting flush against (sometimes past) the barline — widen
+      // it slightly so the dot always has clear room.
+      const jointVoices = clefEntries.map((e) => e.voice).filter((v): v is Voice => v !== null);
+      if (jointVoices.length > 0) {
+        new Formatter().joinVoices(jointVoices).format(jointVoices, measureWidth - (isRowStart ? 108 : 28));
+      }
+
+      clefEntries.forEach(({ clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice }) => {
+        if (voice) {
           // Beams must be built before the notes are drawn: creating a Beam
           // marks its notes so they skip drawing their own individual flag.
           // Doing this after voice.draw() left both the flag and the beam
@@ -1228,12 +1275,6 @@ export function renderScore(
           // a tupleted note's reduced beat cost (see noteBeats) is correct
           // whether or not the measure happens to be exactly full.
           const tuplets = computeTupletGroups(notes, staveNotes).map((g) => new Tuplet(g));
-
-          // Trailing margin reserved after the last note's onset: a dotted
-          // note's dot is a modifier drawn to the notehead's right, and 20px
-          // left it sitting flush against (sometimes past) the barline —
-          // widen it slightly so the dot always has clear room.
-          new Formatter().joinVoices([voice]).format([voice], measureWidth - (isRowStart ? 108 : 28));
 
           // getAbsoluteX() is only meaningful once each note knows its stave
           // (Voice.draw sets this internally, but we need the formatted X now to
@@ -1343,7 +1384,10 @@ export function renderScore(
                   // stacked voicing used to only ever compute/show one
                   // degree for the whole chord (the bottom pitch), leaving
                   // every other note in it unlabeled.
-                  degreeMarks.push({ x: noteheadRightX + DEGREE_GAP, y: ys[pitchIndex], text: degreeText });
+                  const markX = noteheadRightX + DEGREE_GAP;
+                  const markY = ys[pitchIndex];
+                  degreeMarks.push({ x: markX, y: markY, text: degreeText });
+                  degreeMarkHitboxes.push({ measureIndex, clef, noteIndex, pitchIndex, x: markX, y: markY });
                 }
               });
 
@@ -1408,26 +1452,51 @@ export function renderScore(
       // of the note area (accidentals, varying durations etc. can shift
       // things unevenly) — so recomputing its pixel X from the linear
       // formula alone can drift a few/several px off the actual notehead the
-      // drag's live ghost/guide line showed. When the chord's beat exactly
-      // matches a real note's onset (in either clef), use that note's own
-      // rendered x directly so the committed position matches what was shown
-      // while dragging; otherwise (no note at that exact beat) fall back to
-      // the linear formula.
+      // drag's live ghost/guide line showed (this is exactly what made a
+      // chord like "Bb/F" read as pulled too far left of the notes it
+      // labels). When the chord's beat exactly matches a real note's onset
+      // (in either clef), use that note's own rendered x directly so the
+      // committed position matches what was shown while dragging. Otherwise,
+      // rather than falling straight back to the whole-measure linear
+      // formula, interpolate between the nearest surrounding note onsets
+      // (pooled across both clefs) proportional to the beat gap between
+      // them — this tracks VexFlow's own (non-linear, duration-aware)
+      // spacing far more closely than a single measure-wide straight line,
+      // since it only ever extrapolates across the one local gap the chord
+      // actually falls within.
       const measureDuration = measureDurationBeats(score, measureIndex);
       const xForBeat = (targetBeat: number): number | null => {
         const EPS = 1e-3;
+        const onsets: { beat: number; x: number }[] = [];
         for (const c of ['treble', 'bass'] as Clef[]) {
           let beat = 0;
           const clefNotes = measure[c].notes;
           for (let i = 0; i < clefNotes.length; i++) {
-            if (Math.abs(beat - targetBeat) < EPS) {
-              const hb = noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === c && n.noteIndex === i);
-              if (hb) return hb.centerX;
+            const hb = noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === c && n.noteIndex === i);
+            if (hb) {
+              if (Math.abs(beat - targetBeat) < EPS) return hb.centerX;
+              onsets.push({ beat, x: hb.centerX });
             }
             beat += noteBeats(clefNotes[i]);
           }
         }
-        return null;
+        if (onsets.length === 0) return null;
+        onsets.sort((a, b) => a.beat - b.beat);
+        // Plain for-loop (not .forEach) so the running before/after picks
+        // stay in this function's own scope rather than a nested closure —
+        // TS can't carry narrowing on a `let` mutated from inside a callback,
+        // which turned the later `before && after` check into a `never` type.
+        let before: { beat: number; x: number } | null = null;
+        let after: { beat: number; x: number } | null = null;
+        for (const o of onsets) {
+          if (o.beat < targetBeat && (!before || o.beat > before.beat)) before = o;
+          if (o.beat > targetBeat && (!after || o.beat < after.beat)) after = o;
+        }
+        if (before && after) {
+          const t = (targetBeat - before.beat) / (after.beat - before.beat);
+          return before.x + t * (after.x - before.x);
+        }
+        return (before ?? after)?.x ?? null;
       };
       measure.chords.forEach((chord: ChordSymbol) => {
         const cx = xForBeat(chord.offset * measureDuration) ?? sharedNoteStartX + chord.offset * chordNoteAreaWidth;
@@ -1610,6 +1679,7 @@ export function renderScore(
     chordHitboxes,
     chordBandHitboxes,
     graceNoteHitboxes,
+    degreeMarkHitboxes,
     restMarkHitboxes,
     restMarkHandleHitboxes,
     lineBreakHitboxes,
@@ -1816,6 +1886,15 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
  * grace glyph selects IT, not its host. */
 export function findGraceNoteAt(result: RenderResult, x: number, y: number): GraceNoteHitbox | null {
   return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 9 && Math.abs(g.y - y) < 12) ?? null;
+}
+
+/** Click target for an emphasized scale-degree digit in 도수 입력 모드 (see
+ * DegreeMarkHitbox) — matches the enlarged pill's own on-screen circle
+ * (centered a bit right/up of the mark's anchor, see drawDegreeMarks), so a
+ * click on the digit resolves to the exact note/pitch it labels instead of
+ * falling through to whatever note happens to be nearest underneath. */
+export function findDegreeMarkAt(result: RenderResult, x: number, y: number): DegreeMarkHitbox | null {
+  return result.degreeMarkHitboxes.find((d) => Math.hypot(d.x + 6 - x, d.y - 4 - y) < 13) ?? null;
 }
 
 /** Click target for a visual-only rest mark (see RestMarkHitbox / #187) — select, drag-to-move, or right-click-delete. Tolerance scales with the mark's own visual size. */

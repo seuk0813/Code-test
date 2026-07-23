@@ -145,11 +145,16 @@ export async function playScore(
   // (straight 8ths, triplets, 16th/32nd runs) each note's still-fading tail
   // overlaps several notes ahead, washing the whole passage into an
   // indistinct blur that reads as "uneven"/rushed-and-dragging timing even
-  // though the actual scheduled onsets are exact. Shortening the release
-  // (keeping the same attack/decay/sustain "plain" character requested
-  // earlier — see the F3 revert away from the heavier synthesized voice)
-  // lets fast passages and simultaneous chords stay articulate.
-  const envelope = { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.3 };
+  // though the actual scheduled onsets are exact. An earlier pass shortened
+  // this to 0.3s, which fixed slow/medium passages but is STILL longer than
+  // a single 16th note's own audible window at any normal tempo (e.g. ~0.12s
+  // at 120bpm) — a run of 16ths still overlaps 2-3 tails deep. Tightening
+  // release (and decay, so short notes finish settling into sustain before
+  // release even starts) further keeps every note's attack cleanly audible
+  // even in fast runs, while barely affecting how whole/half notes sound
+  // since their own `duration` already covers almost all of the envelope
+  // (release is just the very tail after note-off).
+  const envelope = { attack: 0.004, decay: 0.05, sustain: 0.3, release: 0.09 };
   const trebleSynth = new Tone.PolySynth(Tone.Synth, { envelope }).toDestination();
   const bassSynth = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'triangle' },
