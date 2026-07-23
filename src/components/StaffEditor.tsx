@@ -2000,6 +2000,13 @@ function StaffEditorInner({
 
     const chordHit = findChordAt(result, point.x, point.y);
     if (chordHit) {
+      // A press directly on an existing chord (to drag it, or to open its
+      // inline editor if it turns out not to have moved) marks this as the
+      // focused measure too, just like every other click type here — so
+      // "click a chord to point the paste at its measure" (see App's
+      // handlePasteChords) works even when the click lands on the chord's
+      // own label instead of empty staff space nearby.
+      onFocusMeasure(chordHit.measureIndex);
       mouseGestureRef.current = chordDragFrom(chordHit);
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
@@ -2402,6 +2409,7 @@ function StaffEditorInner({
     const chordHit = findChordAt(result, point.x, point.y);
     if (chordHit) {
       event.preventDefault();
+      onFocusMeasure(chordHit.measureIndex);
       touchGestureRef.current = chordDragFrom(chordHit);
       return;
     }
