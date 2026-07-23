@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Accidental, ChordQuality, DurationValue, Pitch, ScaleDegreeLabel, Score } from '../types/score';
-import { CHORD_QUALITY_LABELS, DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
+import type { Accidental, DurationValue, Pitch, ScaleDegreeLabel, Score } from '../types/score';
+import { DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
 const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16', '32'];
@@ -159,24 +159,6 @@ const TIME_SIGNATURES: [number, number][] = [
   [12, 8],
 ];
 
-/** All 12 chromatic roots, sharp spelling (C through B), for the chord-builder root dropdown. */
-const CHORD_ROOTS: { letter: Pitch['letter']; accidental: Accidental; label: string }[] = [
-  { letter: 'C', accidental: '', label: 'C' },
-  { letter: 'C', accidental: '#', label: 'C♯' },
-  { letter: 'D', accidental: '', label: 'D' },
-  { letter: 'D', accidental: '#', label: 'D♯' },
-  { letter: 'E', accidental: '', label: 'E' },
-  { letter: 'F', accidental: '', label: 'F' },
-  { letter: 'F', accidental: '#', label: 'F♯' },
-  { letter: 'G', accidental: '', label: 'G' },
-  { letter: 'G', accidental: '#', label: 'G♯' },
-  { letter: 'A', accidental: '', label: 'A' },
-  { letter: 'A', accidental: '#', label: 'A♯' },
-  { letter: 'B', accidental: '', label: 'B' },
-];
-
-const CHORD_QUALITIES: ChordQuality[] = ['maj', 'min', '7', 'maj7', 'min7', 'dim', 'aug', 'sus2', 'sus4', 'm7b5', 'dim7'];
-
 export interface EditTool {
   duration: DurationValue;
   dotted: boolean;
@@ -219,8 +201,6 @@ interface ToolbarProps {
   /** Clicking the already-active duration button again in "new note" mode (no staff note selected) toggles this — see StaffEditor's noteSelectMode. */
   selectMode: boolean;
   onSetSelectMode: (value: boolean) => void;
-  /** Builds a chord symbol from a root+quality pair and adds it to the current measure — the structured alternative to typing free text directly on the score. */
-  onAddChord: (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => void;
   /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
   cKeyBasedAccidentals: boolean;
   onToggleCKeyBasedAccidentals: () => void;
@@ -230,6 +210,10 @@ interface ToolbarProps {
    * showScaleDegrees is also on. */
   degreeInputMode: boolean;
   onToggleDegreeInputMode: () => void;
+  /** 음정 도수 표기 toggle: routed through App (rather than a plain
+   * onScoreMetaChange patch) so re-enabling it after some labels were force-
+   * hidden via 도수 입력 모드's Delete can offer to restore them. */
+  onToggleShowScaleDegrees: () => void;
 }
 
 export function Toolbar({
@@ -249,15 +233,14 @@ export function Toolbar({
   onClearConnection,
   selectMode,
   onSetSelectMode,
-  onAddChord,
   cKeyBasedAccidentals,
   onToggleCKeyBasedAccidentals,
   degreeInputMode,
   onToggleDegreeInputMode,
+  onToggleShowScaleDegrees,
 }: ToolbarProps) {
-  const [chordRootIndex, setChordRootIndex] = useState(0);
-  const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
   const [showKeyOptions, setShowKeyOptions] = useState(false);
+  const [showNoteOptions, setShowNoteOptions] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressAdvancedRef = useRef(false);
   useEffect(() => {
@@ -313,6 +296,9 @@ export function Toolbar({
   return (
     <div className="toolbar">
       <div className="toolbar-row">
+        <span className="group-label tool-group-label" title="곡 전체에 적용되는 기본 설정입니다">
+          ⚙ 초기 설정
+        </span>
         <label>
           박자
           <select
@@ -329,43 +315,6 @@ export function Toolbar({
             ))}
           </select>
         </label>
-        <label title={focusedMeasureIndex === null ? '먼저 악보에서 마디를 클릭해 선택하세요' : `${focusedMeasureIndex + 1}번째 마디에만 적용되는 임시 박자 (예: 6/8 곡 중 한 마디만 3/8)`}>
-          이 마디만 박자
-          <select
-            value={
-              focusedMeasureIndex !== null && score.measures[focusedMeasureIndex]?.timeSignatureOverride
-                ? `${score.measures[focusedMeasureIndex].timeSignatureOverride!.numerator}/${score.measures[focusedMeasureIndex].timeSignatureOverride!.denominator}`
-                : ''
-            }
-            disabled={focusedMeasureIndex === null}
-            onChange={(e) => {
-              if (focusedMeasureIndex === null) return;
-              if (e.target.value === '') {
-                onSetMeasureTimeSignature(focusedMeasureIndex, null);
-                return;
-              }
-              const [numerator, denominator] = e.target.value.split('/').map(Number);
-              onSetMeasureTimeSignature(focusedMeasureIndex, { numerator, denominator });
-            }}
-          >
-            <option value="">(기본 박자)</option>
-            {TIME_SIGNATURES.map(([n, d]) => (
-              <option key={`${n}/${d}`} value={`${n}/${d}`}>
-                {n}/{d}
-              </option>
-            ))}
-          </select>
-        </label>
-        {(score.pickupBeats !== undefined || score.trailingBeats !== undefined) && (
-          <span className="tool-icon-btn active" title="재생 바가 있는 첫/마지막 마디를 우클릭하면 못갖춘마디를 조정/해제할 수 있습니다">
-            못갖춘마디
-          </span>
-        )}
-        {pickupMismatch && (
-          <span className="pickup-mismatch-warning" title="못갖춘마디와 마지막 마디의 박자를 합치면 한 마디 박자와 같아야 합니다">
-            ⚠ 못갖춘마디+마지막 마디 박자 불일치
-          </span>
-        )}
         <label>
           조표
           <select
@@ -379,14 +328,64 @@ export function Toolbar({
             ))}
           </select>
         </label>
+        <label className="tempo-field">
+          템포
+          <input
+            type="number"
+            min={20}
+            max={300}
+            value={score.tempo}
+            onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
+          />
+          BPM
+        </label>
+        {(score.pickupBeats !== undefined || score.trailingBeats !== undefined) && (
+          <span className="tool-icon-btn active" title="재생 바가 있는 첫/마지막 마디를 우클릭하면 못갖춘마디를 조정/해제할 수 있습니다">
+            못갖춘마디
+          </span>
+        )}
+        {pickupMismatch && (
+          <span className="pickup-mismatch-warning" title="못갖춘마디와 마지막 마디의 박자를 합치면 한 마디 박자와 같아야 합니다">
+            ⚠ 못갖춘마디+마지막 마디 박자 불일치
+          </span>
+        )}
         <button
           className={`tool-compact ${showKeyOptions ? 'active' : ''}`}
           onClick={() => setShowKeyOptions((v) => !v)}
-          aria-label="조표 옵션 더보기"
-          title="조표 관련 옵션 더보기"
+          aria-label="설정 옵션 더보기"
+          title="이 마디만 박자 변경, 임시표/음정 도수 표기 옵션 더보기"
         >
           +
         </button>
+        {showKeyOptions && (
+          <label title={focusedMeasureIndex === null ? '먼저 악보에서 마디를 클릭해 선택하세요' : `${focusedMeasureIndex + 1}번째 마디에만 적용되는 임시 박자 (예: 6/8 곡 중 한 마디만 3/8)`}>
+            이 마디만 박자
+            <select
+              value={
+                focusedMeasureIndex !== null && score.measures[focusedMeasureIndex]?.timeSignatureOverride
+                  ? `${score.measures[focusedMeasureIndex].timeSignatureOverride!.numerator}/${score.measures[focusedMeasureIndex].timeSignatureOverride!.denominator}`
+                  : ''
+              }
+              disabled={focusedMeasureIndex === null}
+              onChange={(e) => {
+                if (focusedMeasureIndex === null) return;
+                if (e.target.value === '') {
+                  onSetMeasureTimeSignature(focusedMeasureIndex, null);
+                  return;
+                }
+                const [numerator, denominator] = e.target.value.split('/').map(Number);
+                onSetMeasureTimeSignature(focusedMeasureIndex, { numerator, denominator });
+              }}
+            >
+              <option value="">(기본 박자)</option>
+              {TIME_SIGNATURES.map(([n, d]) => (
+                <option key={`${n}/${d}`} value={`${n}/${d}`}>
+                  {n}/{d}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {showKeyOptions && (
           <button
             className={`tool-icon-btn ${cKeyBasedAccidentals ? 'active' : ''}`}
@@ -400,7 +399,7 @@ export function Toolbar({
         {showKeyOptions && (
           <button
             className={`tool-icon-btn ${score.showScaleDegrees ? 'active' : ''}`}
-            onClick={() => onScoreMetaChange({ showScaleDegrees: !score.showScaleDegrees })}
+            onClick={onToggleShowScaleDegrees}
             aria-label="음정 도수 표기"
             title="켜면 각 음표 위에 그 순간의 코드를 기준으로 한 음정 도수(1,2,3...)를 표시합니다"
           >
@@ -438,17 +437,6 @@ export function Toolbar({
             })}
           </div>
         )}
-        <label className="tempo-field">
-          템포
-          <input
-            type="number"
-            min={20}
-            max={300}
-            value={score.tempo}
-            onChange={(e) => onScoreMetaChange({ tempo: Number(e.target.value) })}
-          />
-          BPM
-        </label>
       </div>
 
       <div className="toolbar-row toolbar-row-compact">
@@ -503,67 +491,43 @@ export function Toolbar({
           </button>
         ))}
         <button
-          className={`tool-icon-btn ${editTool.graceNoteMode ? 'active' : ''}`}
-          onClick={onGraceNoteButtonClick}
-          aria-label="꾸밈음"
-          title="음표를 선택한 상태에서 누르면 그 음표에 바로 꾸밈음이 붙습니다. 선택 없이 누르면, 이후 악보에서 클릭하는 음표마다 꾸밈음을 추가/제거합니다"
+          className={`tool-compact ${showNoteOptions ? 'active' : ''}`}
+          onClick={() => setShowNoteOptions((v) => !v)}
+          aria-label="음표 옵션 더보기"
+          title="꾸밈음, 셋잇단음표, 붙임줄/이음줄 연결 더보기"
         >
-          꾸밈음
+          +
         </button>
-        <button
-          className={`tool-icon-btn ${editTool.tuplet ? 'active' : ''}`}
-          onClick={onTupletButtonClick}
-          aria-label="셋잇단음표"
-          title="음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다"
-        >
-          <span className="tool-glyph">♪³</span>
-        </button>
-        <ConnectButton
-          info={connectInfo}
-          disabled={!hasSelection}
-          onSetConnection={onSetConnection}
-          onClearConnection={onClearConnection}
-        />
+        {showNoteOptions && (
+          <button
+            className={`tool-icon-btn ${editTool.graceNoteMode ? 'active' : ''}`}
+            onClick={onGraceNoteButtonClick}
+            aria-label="꾸밈음"
+            title="음표를 선택한 상태에서 누르면 그 음표에 바로 꾸밈음이 붙습니다. 선택 없이 누르면, 이후 악보에서 클릭하는 음표마다 꾸밈음을 추가/제거합니다"
+          >
+            꾸밈음
+          </button>
+        )}
+        {showNoteOptions && (
+          <button
+            className={`tool-icon-btn ${editTool.tuplet ? 'active' : ''}`}
+            onClick={onTupletButtonClick}
+            aria-label="셋잇단음표"
+            title="음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다"
+          >
+            <span className="tool-glyph">♪³</span>
+          </button>
+        )}
+        {showNoteOptions && (
+          <ConnectButton
+            info={connectInfo}
+            disabled={!hasSelection}
+            onSetConnection={onSetConnection}
+            onClearConnection={onClearConnection}
+          />
+        )}
         <button className="tool-compact" onClick={onDeleteSelected} disabled={!hasSelection} title="선택한 음표 삭제">
           🗑 삭제
-        </button>
-      </div>
-
-      <div className="toolbar-row toolbar-row-compact">
-        <span className="group-label tool-group-label" title="근음과 종류를 골라 코드 기호를 추가합니다">
-          🎸 코드 생성
-        </span>
-        <select value={chordRootIndex} onChange={(e) => setChordRootIndex(Number(e.target.value))} aria-label="코드 근음">
-          {CHORD_ROOTS.map((r, i) => (
-            <option key={r.label} value={i}>
-              {r.label}
-            </option>
-          ))}
-        </select>
-        <select value={chordQuality} onChange={(e) => setChordQuality(e.target.value as ChordQuality)} aria-label="코드 종류">
-          {CHORD_QUALITIES.map((q) => (
-            <option key={q} value={q}>
-              {CHORD_QUALITY_LABELS[q]}
-            </option>
-          ))}
-        </select>
-        <button
-          className="tool-compact"
-          // Clicking this button while a chord text box is open on the score
-          // would otherwise blur that input (committing/closing it) before
-          // this button's onClick even runs, since blur fires on mousedown,
-          // before click — losing the open editor a moment too early for
-          // onAddChord's "is one still open?" check. Preventing the default
-          // mousedown behavior keeps the input focused so it's still open.
-          onMouseDown={(e) => e.preventDefault()}
-          onTouchStart={(e) => e.preventDefault()}
-          onClick={() => {
-            const root = CHORD_ROOTS[chordRootIndex];
-            onAddChord(root.letter, root.accidental, chordQuality);
-          }}
-          title="선택한 근음·종류로 코드 기호 추가"
-        >
-          + 코드 추가
         </button>
       </div>
     </div>

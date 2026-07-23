@@ -118,6 +118,8 @@ interface StaffEditorProps {
   /** Currently-selected rest mark (see RestMark / #187) — click its glyph to select, click empty space to deselect. */
   selectedRestMark: { measureIndex: number; restMarkId: string } | null;
   onSelectRestMark: (location: { measureIndex: number; restMarkId: string } | null) => void;
+  /** 도수 입력 모드 (see App): dims everything except the (enlarged) scale-degree marks. */
+  degreeInputMode: boolean;
   /** Drag one of the selected mark's 4 corner handles to change its on-screen visual size (RestMark.scale). */
   onResizeRestMarkScale: (measureIndex: number, restMarkId: string, scale: number) => void;
   /** Drag the mark's own glyph to reposition it elsewhere on the score. */
@@ -325,6 +327,7 @@ function StaffEditorInner({
   onSelectRestMark,
   onResizeRestMarkScale,
   onMoveRestMark,
+  degreeInputMode,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -478,7 +481,7 @@ function StaffEditorInner({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark);
+    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
@@ -489,7 +492,7 @@ function StaffEditorInner({
     // current content size at whatever zoom level is already active — e.g.
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark]);
+  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode]);
 
   // Consumes pendingChainRef (see its declaration) the moment the render
   // above has refreshed renderResultRef.current for the just-committed note

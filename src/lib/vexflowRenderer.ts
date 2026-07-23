@@ -158,14 +158,29 @@ interface DegreeMark {
 
 /** Scale-degree labels (see Score.showScaleDegrees / scoreUtils.scaleDegreeFor),
  * drawn just to the right of each note's highest pitch — like a numeric-
- * keypad entry sitting next to the note it annotates, not above the glyph. */
-function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[]): void {
+ * keypad entry sitting next to the note it annotates, not above the glyph.
+ * `emphasize` (도수 입력 모드 — see renderScore's degreeInputMode) draws them
+ * noticeably larger with a pill background, since everything else on the
+ * staff has just been dimmed behind them (see the dim-group wrap in
+ * renderScore) and they're now the primary thing being edited. */
+function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[], emphasize = false): void {
+  const fontSize = emphasize ? 22 : 12;
   marks.forEach((mark) => {
+    if (emphasize) {
+      const bg = document.createElementNS(SVG_NS, 'circle');
+      bg.setAttribute('cx', String(mark.x + 7));
+      bg.setAttribute('cy', String(mark.y - 5));
+      bg.setAttribute('r', '15');
+      bg.setAttribute('fill', '#eafbea');
+      bg.setAttribute('stroke', '#2f9e44');
+      bg.setAttribute('stroke-width', '1.5');
+      svg.appendChild(bg);
+    }
     const text = document.createElementNS(SVG_NS, 'text');
     text.setAttribute('x', String(mark.x));
     text.setAttribute('y', String(mark.y + 4));
     text.setAttribute('text-anchor', 'start');
-    text.setAttribute('font-size', '12');
+    text.setAttribute('font-size', String(fontSize));
     text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
     text.setAttribute('font-weight', '700');
     text.setAttribute('stroke', 'none');
@@ -826,6 +841,11 @@ export function renderScore(
   selectedGrace?: NoteLocation | null,
   /** Currently-selected rest mark (see RestMark / #187) — draws its 4 corner handles. */
   selectedRestMark?: { measureIndex: number; restMarkId: string } | null,
+  /** 도수 입력 모드 (see App's degreeInputMode): dims every other rendered
+   * element and enlarges the scale-degree marks so they read as the primary
+   * focus while entering/deleting them (see the dim-group wrap below and
+   * drawDegreeMarks' `emphasize` param). */
+  degreeInputMode?: boolean,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -1561,9 +1581,20 @@ export function renderScore(
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
     drawFingeringMarks(svg, fingeringMarks);
-    drawDegreeMarks(svg, degreeMarks);
     drawConnectStubs(svg, connectStubs);
     drawRestMarks(svg, restMarkHitboxes, restMarkHandleHitboxes);
+    // 도수 입력 모드: push everything drawn so far (staves, noteheads, beams,
+    // chord/lyric text, ...) into one dimmed group, THEN draw the degree
+    // marks on top at full opacity/enlarged (see drawDegreeMarks' emphasize
+    // param) — degreeMarks is intentionally excluded from the group since it
+    // isn't appended until after this wrap.
+    if (degreeInputMode) {
+      const dimGroup = document.createElementNS(SVG_NS, 'g');
+      dimGroup.setAttribute('class', 'degree-mode-dim');
+      while (svg.firstChild) dimGroup.appendChild(svg.firstChild);
+      svg.appendChild(dimGroup);
+    }
+    drawDegreeMarks(svg, degreeMarks, degreeInputMode);
   }
 
   return {

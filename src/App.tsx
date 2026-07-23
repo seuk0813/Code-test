@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, LoadMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordQuality, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
 import {
-  addChordToScore,
   addChordToScoreAt,
   addLineBreak,
   addLyricsToScoreAt,
@@ -13,8 +12,6 @@ import {
   addRestMarkAt,
   adjacentIndexAfterDelete,
   attachOrRemoveGraceNote,
-  CHORD_QUALITY_SUFFIX,
-  clearManualScaleDegreeLabel,
   clearPickupMeasure,
   clearTrailingMeasure,
   createEmptyMeasure,
@@ -582,6 +579,25 @@ function App() {
     [setScore],
   );
 
+  /** Toolbar's "음정 도수 표기" toggle: turning it back ON, after some labels
+   * were force-hidden via 도수 입력 모드's Delete (see manualScaleDegreeLabels'
+   * '' sentinel), asks whether to restore those before re-enabling — otherwise
+   * they'd silently stay invisible forever with no way to tell they're gone. */
+  const handleToggleShowScaleDegrees = useCallback(() => {
+    const turningOn = !score.showScaleDegrees;
+    const hasHidden = !!score.manualScaleDegreeLabels && Object.values(score.manualScaleDegreeLabels).some((v) => v === '');
+    if (turningOn && hasHidden) {
+      const restore = window.confirm('이전에 삭제한 음정 도수 표기를 다시 표시할까요?');
+      setScore((prev) => {
+        if (!restore) return { ...prev, showScaleDegrees: true };
+        const kept = Object.fromEntries(Object.entries(prev.manualScaleDegreeLabels ?? {}).filter(([, v]) => v !== ''));
+        return { ...prev, showScaleDegrees: true, manualScaleDegreeLabels: kept };
+      });
+      return;
+    }
+    setScore((prev) => ({ ...prev, showScaleDegrees: turningOn }));
+  }, [score, setScore]);
+
   /** Arrow Up/Down on a selected grace note: diatonic pitch step, same
    * key-signature-aware accidental derivation as handleStepPitch. */
   const handleStepGracePitch = useCallback(
@@ -1018,13 +1034,30 @@ function App() {
         else handlePasteChords();
         return;
       }
-      // 도수 입력 모드: with a note selected, digit keys type a manual
-      // scale-degree label override ('b'/'#' immediately before a digit
-      // prefixes it, e.g. 'b' then '3' -> "b3"), and Delete/Backspace clears
-      // the override (reverting to the auto-computed label) instead of
-      // deleting the note — takes priority over the generic delete handling
-      // right below.
-      if (degreeInputMode && selected && !e.ctrlKey && !e.metaKey) {
+      // 도수 입력 모드: digit keys type a manual scale-degree label override
+      // ('b'/'#' immediately before a digit prefixes it, e.g. 'b' then '3' ->
+      // "b3"), and Delete/Backspace force-hides the label instead of deleting
+      // the note — takes priority over the generic delete handling right
+      // below. A shift-drag marquee selection (see marquee state) applies the
+      // same keystroke to EVERY selected note's pitches at once ("다중 입력");
+      // with nothing marqueed, it falls back to the single `selected` note
+      // (narrowed to `selectedPitchIndex` if that note is a chord).
+      if (degreeInputMode && (selected || marquee.length > 0) && !e.ctrlKey && !e.metaKey) {
+        const degreeKeysForSelection = (): string[] => {
+          if (marquee.length > 0) {
+            const keys: string[] = [];
+            marquee.forEach((loc) => {
+              const note = score.measures[loc.measureIndex]?.[loc.clef]?.notes[loc.noteIndex];
+              if (!note || note.isRest) return;
+              note.pitches.forEach((_pitch, pitchIndex) => {
+                keys.push(scaleDegreeKey(loc.clef, loc.measureIndex, loc.noteIndex, pitchIndex));
+              });
+            });
+            return keys;
+          }
+          if (!selected) return [];
+          return [scaleDegreeKey(selected.clef, selected.measureIndex, selected.noteIndex, selectedPitchIndex ?? 0)];
+        };
         if (e.key === 'b' || e.key === '#') {
           e.preventDefault();
           pendingDegreeAccidentalRef.current = e.key;
@@ -1039,14 +1072,19 @@ function App() {
           const prefix = pendingDegreeAccidentalRef.current;
           pendingDegreeAccidentalRef.current = '';
           if (pendingDegreeAccidentalTimeoutRef.current) clearTimeout(pendingDegreeAccidentalTimeoutRef.current);
-          const key = scaleDegreeKey(selected.clef, selected.measureIndex, selected.noteIndex, selectedPitchIndex ?? 0);
-          setScore((prev) => setManualScaleDegreeLabel(prev, key, `${prefix}${e.key}`));
+          const text = `${prefix}${e.key}`;
+          const keys = degreeKeysForSelection();
+          setScore((prev) => keys.reduce((s, key) => setManualScaleDegreeLabel(s, key, text), prev));
           return;
         }
         if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault();
-          const key = scaleDegreeKey(selected.clef, selected.measureIndex, selected.noteIndex, selectedPitchIndex ?? 0);
-          setScore((prev) => clearManualScaleDegreeLabel(prev, key));
+          // '' is the force-hide sentinel (see computeScaleDegreeLabels) —
+          // distinct from just removing the override, so a later re-enable of
+          // 음정 도수 표기 can detect and offer to restore it (see
+          // handleToggleShowScaleDegrees).
+          const keys = degreeKeysForSelection();
+          setScore((prev) => keys.reduce((s, key) => setManualScaleDegreeLabel(s, key, ''), prev));
           return;
         }
         if (e.key === 'Escape') {
@@ -1126,29 +1164,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
-
-  /**
-   * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
-   * open on the score (the user clicked the chord band to add/edit one),
-   * fills that box in place instead of creating a separate chord elsewhere.
-   * Otherwise adds a chord built from the root+quality pair to whichever
-   * measure was last focused (or the first one, initially). Builds plain-
-   * ASCII text (e.g. "D#m7") rather than a prettified label — the add path
-   * (and the inline editor's own commit) re-derives the structured root/
-   * quality by parsing this text the same way free-text chord entry does,
-   * and parseChordText's patterns only match ASCII '#'/'b', not the ♯/♭
-   * display symbols.
-   */
-  const handleAddChordTool = useCallback(
-    (root: Pitch['letter'], accidental: Accidental, quality: ChordQuality) => {
-      const text = `${root}${accidental}${CHORD_QUALITY_SUFFIX[quality]}`;
-      if (staffEditorRef.current?.fillActiveChordEditor(text)) return;
-      const measureIndex = focusedMeasureIndex ?? 0;
-      setScore((prev) => addChordToScore(prev, measureIndex, text));
-    },
-    [focusedMeasureIndex, setScore],
-  );
+  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, score, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
 
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
@@ -1681,11 +1697,11 @@ function App() {
           onClearConnection={handleClearConnection}
           selectMode={selectMode}
           onSetSelectMode={setSelectMode}
-          onAddChord={handleAddChordTool}
           cKeyBasedAccidentals={cKeyBasedAccidentals}
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
           degreeInputMode={degreeInputMode}
           onToggleDegreeInputMode={() => setDegreeInputMode((v) => !v)}
+          onToggleShowScaleDegrees={handleToggleShowScaleDegrees}
           focusedMeasureIndex={focusedMeasureIndex}
           onSetMeasureTimeSignature={handleSetMeasureTimeSignature}
         />
@@ -1733,6 +1749,7 @@ function App() {
         onSelectRestMark={setSelectedRestMark}
         onResizeRestMarkScale={handleResizeRestMarkScale}
         onMoveRestMark={handleMoveRestMark}
+        degreeInputMode={degreeInputMode}
         onDeselectNote={handleDeselectNote}
         onSetTitle={handleSetTitle}
         onSetComposer={handleSetComposer}

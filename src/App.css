@@ -191,6 +191,14 @@
   animation: measure-flash-fade 3s ease-out forwards;
 }
 
+/* 도수 입력 모드 (see App's degreeInputMode / vexflowRenderer's dim-group
+   wrap): everything except the enlarged scale-degree marks fades back so the
+   degrees read as the thing being edited. */
+.degree-mode-dim {
+  opacity: 0.18;
+  transition: opacity 0.25s ease;
+}
+
 @keyframes measure-flash-fade {
   0% {
     opacity: 1;
