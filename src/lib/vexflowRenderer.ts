@@ -938,7 +938,17 @@ export function renderScore(
       // other. Pin both staves to the wider of the two so every beat lines
       // up vertically across the grand staff, matching how real engraving
       // aligns simultaneous notes between clefs.
-      const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX());
+      // A grace note (꾸밈음) attached before the FIRST note of a measure has
+      // nowhere to sit but immediately at noteStartX — VexFlow's own stave
+      // width calc reserves room for the clef/key/time glyphs but not for a
+      // leading grace note squeezed in right after them, so it rendered
+      // flush against (sometimes overlapping) those glyphs. Give it its own
+      // breathing room whenever either staff's first note carries one.
+      const hasLeadingGraceNote = (['treble', 'bass'] as Clef[]).some((c) => {
+        const first = measure[c].notes[0];
+        return !!first?.graceNote && first.graceNote.position !== 'after';
+      });
+      const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
 
@@ -955,6 +965,10 @@ export function renderScore(
         if (showTimeSignature) {
           melodyStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
         }
+        // Mirrors the same leading-grace-note breathing room as the piano
+        // staves above (see hasLeadingGraceNote) — the melody staff shows the
+        // same treble notes (see deriveMelodyNotes), so it needs the same fix.
+        if (hasLeadingGraceNote) melodyStave.setNoteStartX(melodyStave.getNoteStartX() + 18);
         melodyStave.setContext(context).draw();
 
         // The melody staff mirrors measure.treble.notes index-for-index (see

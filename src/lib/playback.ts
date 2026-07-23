@@ -95,6 +95,14 @@ function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature:
       });
     }
     if (note.isRest || note.pitches.length === 0) return;
+    // Group this note's pitches by their resulting duration (almost always
+    // identical across a whole chord voicing, unless a tie extends only some
+    // of its pitches) so simultaneous tones fire as ONE triggerAttackRelease
+    // call with an array of notes, instead of one separate Transport-scheduled
+    // call per pitch — the most direct way to guarantee a chord's tones start
+    // in the same audio callback rather than relying on N independently
+    // scheduled events happening to resolve to the identical time.
+    const byDuration = new Map<number, string[]>();
     note.pitches.forEach((pitch, pi) => {
       if (suppressed[i].has(pi)) return;
       let totalBeats = noteBeats(note);
@@ -110,12 +118,14 @@ function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature:
         chainNote += 1;
         chainPitch = nextIdx;
       }
-      events.push({
-        timeBeats,
-        durationSeconds: totalBeats * secondsPerBeat * 0.92,
-        notes: [pitchToToneNote(pitch, keySignature)],
-        synth,
-      });
+      const durationSeconds = totalBeats * secondsPerBeat * 0.92;
+      const group = byDuration.get(durationSeconds);
+      const toneNote = pitchToToneNote(pitch, keySignature);
+      if (group) group.push(toneNote);
+      else byDuration.set(durationSeconds, [toneNote]);
+    });
+    byDuration.forEach((notes, durationSeconds) => {
+      events.push({ timeBeats, durationSeconds, notes, synth });
     });
   });
   return events;
@@ -130,9 +140,20 @@ export async function playScore(
 ): Promise<PlaybackHandle> {
   await Tone.start();
 
-  const trebleSynth = new Tone.PolySynth(Tone.Synth).toDestination();
+  // Tone.Synth's default envelope has a 1-SECOND release — fine for a single
+  // sustained note, but for anything faster than about one note per second
+  // (straight 8ths, triplets, 16th/32nd runs) each note's still-fading tail
+  // overlaps several notes ahead, washing the whole passage into an
+  // indistinct blur that reads as "uneven"/rushed-and-dragging timing even
+  // though the actual scheduled onsets are exact. Shortening the release
+  // (keeping the same attack/decay/sustain "plain" character requested
+  // earlier — see the F3 revert away from the heavier synthesized voice)
+  // lets fast passages and simultaneous chords stay articulate.
+  const envelope = { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.3 };
+  const trebleSynth = new Tone.PolySynth(Tone.Synth, { envelope }).toDestination();
   const bassSynth = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'triangle' },
+    envelope,
   }).toDestination();
 
   Tone.getTransport().stop();
