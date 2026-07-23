@@ -12,6 +12,7 @@ import {
   StaveConnector,
   StaveNote,
   StaveTie,
+  Tuplet,
   Voice,
 } from 'vexflow';
 import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score } from '../types/score';
@@ -182,6 +183,7 @@ const REST_MARK_GLYPH: Record<DurationValue, string> = {
   q: String.fromCodePoint(0xe4e5),
   '8': String.fromCodePoint(0xe4e6),
   '16': String.fromCodePoint(0xe4e7),
+  '32': String.fromCodePoint(0xe4e8),
 };
 
 /** Base rendered font-size (px) for a rest mark glyph at scale 1. */
@@ -715,7 +717,7 @@ function computeBeamNoteGroups(
   let cumulative = 0;
   notes.forEach((note, i) => {
     onsetBeats[i] = cumulative;
-    const beamable = !note.isRest && (note.duration === '8' || note.duration === '16');
+    const beamable = !note.isRest && (note.duration === '8' || note.duration === '16' || note.duration === '32');
     const pulseIndex = Math.floor((cumulative + 1e-6) / pulseBeats);
     if (beamable && pulseIndex === currentPulse) {
       current.push(staveNotes[i]);
@@ -766,6 +768,40 @@ function computeBeamNoteGroups(
     }
   });
   return merged;
+}
+
+/**
+ * Groups runs of exactly 3 consecutive 셋잇단음표 (triplet, NoteEvent.tuplet)
+ * notes of the SAME duration into brackets for `new Tuplet(group)` — the
+ * standard "3" bracket over a run of 3 same-value notes. A run that isn't a
+ * multiple of 3 (e.g. only 1-2 tupleted notes in a row, or a differently-
+ * tupleted note breaking the chain) simply doesn't get a bracket for its
+ * leftover notes; they still sound/export correctly via noteBeats, they just
+ * read without the visual "3" — an edge case, not a correctness issue.
+ */
+function computeTupletGroups(notes: NoteEvent[], staveNotes: StaveNote[]): StaveNote[][] {
+  const groups: StaveNote[][] = [];
+  let run: StaveNote[] = [];
+  let runDuration: DurationValue | null = null;
+  const flushRun = () => {
+    for (let i = 0; i + 2 < run.length; i += 3) groups.push(run.slice(i, i + 3));
+    run = [];
+    runDuration = null;
+  };
+  notes.forEach((note, i) => {
+    if (note.tuplet && (runDuration === null || note.duration === runDuration)) {
+      run.push(staveNotes[i]);
+      runDuration = note.duration;
+    } else {
+      flushRun();
+      if (note.tuplet) {
+        run = [staveNotes[i]];
+        runDuration = note.duration;
+      }
+    }
+  });
+  flushRun();
+  return groups;
 }
 
 /** Beat positions (within a measure, 0-based) where a NEW chord symbol
@@ -970,8 +1006,13 @@ export function renderScore(
               // Beaming is a visual nicety; ignore failures on unusual groupings.
             }
           }
+          // Triplet brackets aren't gated by `full` the way auto-beaming is —
+          // a tupleted note's reduced beat cost (see noteBeats) is correct
+          // whether or not the measure happens to be exactly full.
+          const melodyTuplets = computeTupletGroups(melodyNotes, melodyStaveNotes).map((g) => new Tuplet(g));
           melodyVoice.draw(context, melodyStave);
           melodyBeams.forEach((b) => b.setContext(context).draw());
+          melodyTuplets.forEach((t) => t.setContext(context).draw());
 
           melodyStaveNotes.forEach((sn, noteIndex) => {
             const note = melodyNotes[noteIndex];
@@ -1133,6 +1174,10 @@ export function renderScore(
               // Beaming is a visual nicety; ignore failures on unusual groupings.
             }
           }
+          // Triplet brackets aren't gated by `full` the way auto-beaming is —
+          // a tupleted note's reduced beat cost (see noteBeats) is correct
+          // whether or not the measure happens to be exactly full.
+          const tuplets = computeTupletGroups(notes, staveNotes).map((g) => new Tuplet(g));
 
           // Trailing margin reserved after the last note's onset: a dotted
           // note's dot is a modifier drawn to the notehead's right, and 20px
@@ -1160,6 +1205,7 @@ export function renderScore(
 
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
+          tuplets.forEach((t) => t.setContext(context).draw());
 
           // Grace note hitboxes: only resolvable now that the host note (and
           // therefore its attached GraceNoteGroup modifier) has an actual

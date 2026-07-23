@@ -28,6 +28,7 @@ export const DURATION_BEATS: Record<DurationValue, number> = {
   q: 1,
   '8': 0.5,
   '16': 0.25,
+  '32': 0.125,
 };
 
 export const DURATION_LABELS: Record<DurationValue, string> = {
@@ -36,15 +37,22 @@ export const DURATION_LABELS: Record<DurationValue, string> = {
   q: '4분음표',
   '8': '8분음표',
   '16': '16분음표',
+  '32': '32분음표',
 };
 
-export function noteBeats(note: Pick<NoteEvent, 'duration' | 'dotted'>): number {
+/** Standard 3-in-the-time-of-2 triplet ratio — a tupleted note takes 2/3 of
+ * its written duration (see NoteEvent.tuplet). Applied after the dotted
+ * multiplier, matching how a dotted-and-tupleted note would actually sound. */
+const TUPLET_RATIO = 2 / 3;
+
+export function noteBeats(note: Pick<NoteEvent, 'duration' | 'dotted' | 'tuplet'>): number {
   const base = DURATION_BEATS[note.duration];
-  return note.dotted ? base * 1.5 : base;
+  const dotted = note.dotted ? base * 1.5 : base;
+  return note.tuplet ? dotted * TUPLET_RATIO : dotted;
 }
 
 /** Shortest to longest. Long-press (toolbar or staff) steps toward the end of this list. */
-export const DURATION_ORDER: DurationValue[] = ['16', '8', 'q', 'h', 'w'];
+export const DURATION_ORDER: DurationValue[] = ['32', '16', '8', 'q', 'h', 'w'];
 
 /** Next longer duration, or the same value if already a whole note. */
 export function cycleDurationLonger(duration: DurationValue): DurationValue {
@@ -487,6 +495,7 @@ export function createNote(
   dotted: boolean,
   isRest: boolean,
   x?: number,
+  tuplet?: boolean,
 ): NoteEvent {
   return {
     id: nextId('n'),
@@ -495,6 +504,7 @@ export function createNote(
     dotted,
     isRest,
     x,
+    ...(tuplet ? { tuplet: true } : {}),
   };
 }
 
@@ -1265,7 +1275,7 @@ export function splitPitchFromNote(
     if (!note || note.pitches.length <= 1) return sm;
     const notes = [...sm.notes];
     notes[location.noteIndex] = { ...note, pitches: note.pitches.filter((_, i) => i !== pitchIndex) };
-    notes.splice(newIndex, 0, createNote([newPitch], note.duration, note.dotted, false, x));
+    notes.splice(newIndex, 0, createNote([newPitch], note.duration, note.dotted, false, x, note.tuplet));
     return { notes };
   });
   return { score: updated, noteIndex: newIndex };

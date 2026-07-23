@@ -3,7 +3,7 @@ import type { Accidental, ChordQuality, DurationValue, Pitch, ScaleDegreeLabel, 
 import { CHORD_QUALITY_LABELS, DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
-const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16'];
+const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16', '32'];
 const LONG_PRESS_STEP_MS = 1000;
 const ACCIDENTALS: { value: Accidental; label: string }[] = [
   { value: '', label: '∅' },
@@ -34,6 +34,7 @@ const NOTE_ICON: Record<DurationValue, { filled: boolean; stem: boolean; flags: 
   q: { filled: true, stem: true, flags: 0 },
   '8': { filled: true, stem: true, flags: 1 },
   '16': { filled: true, stem: true, flags: 2 },
+  '32': { filled: true, stem: true, flags: 3 },
 };
 
 /** The standard quarter-rest squiggle, reused by the quarter-rest glyph and the dotted-rest toggle icon. */
@@ -45,7 +46,7 @@ const QUARTER_REST_PATH =
  * they're a distinct shape: a diagonal stem with one filled "flag" blob per
  * subdivision (two for sixteenth), matching standard notation.
  */
-function FlaggedRestGlyph({ flagCount }: { flagCount: 1 | 2 }) {
+function FlaggedRestGlyph({ flagCount }: { flagCount: 1 | 2 | 3 }) {
   return (
     <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
       <path
@@ -57,12 +58,13 @@ function FlaggedRestGlyph({ flagCount }: { flagCount: 1 | 2 }) {
         strokeLinejoin="round"
       />
       <circle cx="14.3" cy="5.8" r="2.6" fill="currentColor" />
-      {flagCount === 2 && <circle cx="10.8" cy="12" r="2.6" fill="currentColor" />}
+      {flagCount >= 2 && <circle cx="10.8" cy="12" r="2.6" fill="currentColor" />}
+      {flagCount >= 3 && <circle cx="7.3" cy="18.2" r="2.6" fill="currentColor" />}
     </svg>
   );
 }
 
-/** Rest glyph for a duration: filled blocks for whole/half, the standard squiggle for quarter, a flagged diagonal stem for eighth/sixteenth. */
+/** Rest glyph for a duration: filled blocks for whole/half, the standard squiggle for quarter, a flagged diagonal stem for eighth/sixteenth/32nd. */
 function RestGlyph({ duration }: { duration: DurationValue }) {
   if (duration === 'w') {
     return (
@@ -80,6 +82,7 @@ function RestGlyph({ duration }: { duration: DurationValue }) {
   }
   if (duration === '8') return <FlaggedRestGlyph flagCount={1} />;
   if (duration === '16') return <FlaggedRestGlyph flagCount={2} />;
+  if (duration === '32') return <FlaggedRestGlyph flagCount={3} />;
   return (
     <svg width="16" height="22" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
       <path
@@ -178,6 +181,10 @@ export interface EditTool {
   accidental: Accidental;
   /** When true, clicking an existing note on the staff toggles a grace note (see 꾸밈음 toolbar button) on it instead of the usual select/place behavior. */
   graceNoteMode: boolean;
+  /** Pen state for 셋잇단음표 (triplet): when true, the NEXT newly-placed
+   * note is created with NoteEvent.tuplet set (2/3 of its written duration).
+   * See App's handleTupletButtonClick for the selected-note-direct-toggle half. */
+  tuplet: boolean;
 }
 
 interface ToolbarProps {
@@ -188,6 +195,8 @@ interface ToolbarProps {
   /** 꾸밈음 button: with a note selected, attaches/removes a grace note on it
    * directly; with nothing selected, falls back to toggling 꾸밈음 mode (see App). */
   onGraceNoteButtonClick: () => void;
+  /** 셋잇단음표 button: with a note selected, toggles its `tuplet` flag directly; with nothing selected, toggles the pen (editTool.tuplet) for the next new note. */
+  onTupletButtonClick: () => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
@@ -219,6 +228,7 @@ export function Toolbar({
   editTool,
   onEditToolChange,
   onGraceNoteButtonClick,
+  onTupletButtonClick,
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
@@ -460,6 +470,14 @@ export function Toolbar({
           title="음표를 선택한 상태에서 누르면 그 음표에 바로 꾸밈음이 붙습니다. 선택 없이 누르면, 이후 악보에서 클릭하는 음표마다 꾸밈음을 추가/제거합니다"
         >
           꾸밈음
+        </button>
+        <button
+          className={`tool-icon-btn ${editTool.tuplet ? 'active' : ''}`}
+          onClick={onTupletButtonClick}
+          aria-label="셋잇단음표"
+          title="음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다"
+        >
+          <span className="tool-glyph">♪³</span>
         </button>
         <ConnectButton
           info={connectInfo}

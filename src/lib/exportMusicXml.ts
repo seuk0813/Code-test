@@ -1,7 +1,10 @@
 import type { Measure, NoteEvent, Pitch, Score } from '../types/score';
 import { effectiveAccidental } from './scoreUtils';
 
-const DIVISIONS = 4; // ticks per quarter note
+// 48 ticks/quarter note — divisible by both 8 (for 32nd notes) and 3 (for
+// triplets), so every duration/dotted/tuplet combination below lands on a
+// whole number of ticks instead of needing fractional <duration> values.
+const DIVISIONS = 48;
 
 const NOTE_TYPE: Record<NoteEvent['duration'], string> = {
   w: 'whole',
@@ -9,6 +12,7 @@ const NOTE_TYPE: Record<NoteEvent['duration'], string> = {
   q: 'quarter',
   '8': 'eighth',
   '16': '16th',
+  '32': '32nd',
 };
 
 const BASE_DURATION_TICKS: Record<NoteEvent['duration'], number> = {
@@ -17,6 +21,7 @@ const BASE_DURATION_TICKS: Record<NoteEvent['duration'], number> = {
   q: DIVISIONS,
   '8': DIVISIONS / 2,
   '16': DIVISIONS / 4,
+  '32': DIVISIONS / 8,
 };
 
 const KEY_FIFTHS: Record<string, number> = {
@@ -47,7 +52,8 @@ function pitchXml(pitch: Pitch, keySignature: string): string {
 
 function noteTicks(note: NoteEvent): number {
   const base = BASE_DURATION_TICKS[note.duration];
-  return note.dotted ? base * 1.5 : base;
+  const dotted = note.dotted ? base * 1.5 : base;
+  return note.tuplet ? (dotted * 2) / 3 : dotted;
 }
 
 function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean, keySignature: string): string {
@@ -55,8 +61,10 @@ function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean, keySign
   const type = NOTE_TYPE[note.duration];
   const dotXml = note.dotted ? '<dot/>' : '';
   const chordXml = !isFirstOfChord ? '<chord/>' : '';
+  // 3-in-the-place-of-2 (standard triplet ratio — see scoreUtils' TUPLET_RATIO).
+  const timeModXml = note.tuplet ? '<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>' : '';
   const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(note.pitches[0], keySignature);
-  return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}<staff>${staff}</staff></note>`;
+  return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}${timeModXml}<staff>${staff}</staff></note>`;
 }
 
 function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2, keySignature: string): string {

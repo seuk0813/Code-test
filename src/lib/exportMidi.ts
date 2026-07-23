@@ -8,11 +8,16 @@ const BASE_DURATION: Record<NoteEvent['duration'], string> = {
   q: '4',
   '8': '8',
   '16': '16',
+  '32': '32',
 };
 
+/** midi-writer-js natively parses a 't' suffix (e.g. "8t") as a duration
+ * ratio'd 3-in-the-place-of-2 — exactly the 2/3 triplet ratio NoteEvent.tuplet
+ * needs (see scoreUtils' noteBeats/TUPLET_RATIO), so no manual tick math here. */
 function midiDuration(note: NoteEvent): string {
   const base = BASE_DURATION[note.duration];
-  return note.dotted ? `d${base}` : base;
+  const dotted = note.dotted ? `d${base}` : base;
+  return note.tuplet ? `${dotted}t` : dotted;
 }
 
 function buildTrack(score: Score, pickNotes: (measure: Measure) => NoteEvent[]) {

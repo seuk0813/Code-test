@@ -118,7 +118,7 @@ export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
       el('line', { x1: stemX, y1: y, x2: stemX, y2: stemY2, stroke: color, 'stroke-width': 1.4, opacity }),
     );
 
-    const flagCount = spec.duration === '8' ? 1 : spec.duration === '16' ? 2 : 0;
+    const flagCount = spec.duration === '8' ? 1 : spec.duration === '16' ? 2 : spec.duration === '32' ? 3 : 0;
     const dir = spec.stemUp ? 1 : -1;
     for (let i = 0; i < flagCount; i++) {
       const baseY = stemY2 + i * dir * 7;

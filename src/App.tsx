@@ -73,10 +73,12 @@ import {
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
-const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '', graceNoteMode: false };
+const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '', graceNoteMode: false, tuplet: false };
 
 /** Ordered shortest -> longest, interleaving dotted values, for arrow-key duration stepping. */
 const DURATION_LADDER: { duration: DurationValue; dotted: boolean }[] = [
+  { duration: '32', dotted: false },
+  { duration: '32', dotted: true },
   { duration: '16', dotted: false },
   { duration: '16', dotted: true },
   { duration: '8', dotted: false },
@@ -373,7 +375,7 @@ function App() {
           ? explicitAccidental
           : keySignatureAccidentalFor(letter as Pitch['letter'], score.keySignature);
       const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave, manualAccidental: !!explicitAccidental };
-      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x);
+      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x, editTool.tuplet);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
         // A full staff normally just refuses the add — but with the 쉼표
@@ -556,6 +558,18 @@ function App() {
     }
     setEditTool((t) => ({ ...t, graceNoteMode: !t.graceNoteMode }));
   }, [selected, score, setScore, handleSelectGrace]);
+
+  /** 셋잇단음표 (triplet) toolbar button: with a note already selected,
+   * toggles its `tuplet` flag directly (2/3 of its written duration — see
+   * NoteEvent.tuplet). With nothing selected, it's pen-only: toggles whether
+   * the NEXT newly-placed note is a triplet, mirroring how `dotted` behaves. */
+  const handleTupletButtonClick = useCallback(() => {
+    if (selected) {
+      setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, tuplet: !note.tuplet })));
+      return;
+    }
+    setEditTool((t) => ({ ...t, tuplet: !t.tuplet }));
+  }, [selected, setScore]);
 
   /** Arrow Up/Down on a selected grace note: diatonic pitch step, same
    * key-signature-aware accidental derivation as handleStepPitch. */
@@ -1647,6 +1661,7 @@ function App() {
           editTool={editTool}
           onEditToolChange={handleEditToolChange}
           onGraceNoteButtonClick={handleGraceNoteButtonClick}
+          onTupletButtonClick={handleTupletButtonClick}
           hasSelection={!!selected}
           onDeleteSelected={handleDeleteSelected}
           onDeselectNote={handleDeselectNote}

@@ -1,7 +1,7 @@
 export type Clef = 'treble' | 'bass';
 
 /** VexFlow-style duration codes (without dot). */
-export type DurationValue = 'w' | 'h' | 'q' | '8' | '16';
+export type DurationValue = 'w' | 'h' | 'q' | '8' | '16' | '32';
 
 export type Accidental = '#' | 'b' | 'n' | '';
 
@@ -27,6 +27,17 @@ export interface NoteEvent {
   duration: DurationValue;
   dotted: boolean;
   isRest: boolean;
+  /**
+   * 셋잇단음표 (triplet): when true, this note's actual sounding/beat-capacity
+   * duration is 2/3 of what `duration`/`dotted` alone would say — the
+   * standard "3 in the time of 2" ratio (see scoreUtils' noteBeats/
+   * TUPLET_RATIO). Purely a per-note flag: the renderer groups consecutive
+   * tupleted notes of matching duration into runs of 3 for the bracket (see
+   * vexflowRenderer's tuplet grouping), but nothing here enforces group size —
+   * an incomplete run (not a multiple of 3) still sounds/exports correctly,
+   * it just won't get a bracket.
+   */
+  tuplet?: boolean;
   /**
    * Free horizontal position within the measure's note area, 0 (start)..1 (end).
    * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
