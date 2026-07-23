@@ -1262,6 +1262,13 @@ export function setGraceNotePitch(score: Score, location: NoteLocation, letter: 
   );
 }
 
+/** Sets a grace note's duration directly (see App's handleStepGraceDuration for arrow-key stepping). */
+export function setGraceNoteDuration(score: Score, location: NoteLocation, duration: DurationValue): Score {
+  return updateNoteInScore(score, location, (note) =>
+    note.graceNote ? { ...note, graceNote: { ...note.graceNote, duration } } : note,
+  );
+}
+
 /**
  * Finds the note immediately following `location` in the same clef, crossing
  * into the next measure(s) if the current one has no more notes. Used for

@@ -14,6 +14,8 @@ import {
   attachOrRemoveGraceNote,
   clearPickupMeasure,
   clearTrailingMeasure,
+  cycleDurationLonger,
+  cycleDurationShorter,
   createEmptyMeasure,
   createEmptyScore,
   createNote,
@@ -44,6 +46,7 @@ import {
   resizePickupMeasure,
   resizeTrailingMeasure,
   scaleDegreeKey,
+  setGraceNoteDuration,
   setGraceNotePitch,
   setManualScaleDegreeLabel,
   setMeasureTimeSignature,
@@ -614,7 +617,23 @@ function App() {
     [selectedGrace, score, setScore, accidentalAfterMove],
   );
 
-  /** Arrow Left/Right on a selected grace note: flip it before/after its host note. */
+  /** Arrow Left/Right on a selected grace note: step its duration one notch
+   * longer (dir=+1, left) or shorter (dir=-1, right) — same convention and
+   * ladder as a main note's handleStepDuration, just without dotted values
+   * (grace notes don't carry a dot). */
+  const handleStepGraceDuration = useCallback(
+    (dir: 1 | -1) => {
+      if (!selectedGrace) return;
+      const note = score.measures[selectedGrace.measureIndex][selectedGrace.clef].notes[selectedGrace.noteIndex];
+      const g = note?.graceNote;
+      if (!g) return;
+      const next = dir === 1 ? cycleDurationLonger(g.duration ?? '8') : cycleDurationShorter(g.duration ?? '8');
+      setScore((prev) => setGraceNoteDuration(prev, selectedGrace, next));
+    },
+    [selectedGrace, score, setScore],
+  );
+
+  /** Shift+Arrow Left/Right on a selected grace note: flip it before/after its host note. */
   const handleToggleSelectedGracePosition = useCallback(() => {
     if (!selectedGrace) return;
     setScore((prev) => toggleGraceNotePosition(prev, selectedGrace));
@@ -976,9 +995,12 @@ function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      // A selected grace note claims arrow keys (pitch / before-after
-      // position) and Delete (removal) before any of the main-note handling
-      // below, since selectedGrace and selected are mutually exclusive.
+      // A selected grace note claims arrow keys (pitch / duration / before-
+      // after position) and Delete (removal) before any of the main-note
+      // handling below, since selectedGrace and selected are mutually
+      // exclusive — mirrors a main note's own arrow-key scheme (up/down =
+      // pitch, left/right = duration); Shift+left/right reaches the rarer
+      // before/after toggle instead.
       if (selectedGrace) {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           e.preventDefault();
@@ -987,7 +1009,8 @@ function App() {
         }
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();
-          handleToggleSelectedGracePosition();
+          if (e.shiftKey) handleToggleSelectedGracePosition();
+          else handleStepGraceDuration(e.key === 'ArrowLeft' ? 1 : -1);
           return;
         }
         if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1164,7 +1187,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, score, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
+  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, score, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleStepGraceDuration, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
 
   const handleDeselectNote = useCallback(() => {
     setSelected(null);

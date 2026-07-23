@@ -582,7 +582,7 @@ function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSe
   const graceStaveNote = new GraceNote({
     clef,
     keys: [pitchToVexKey({ letter: g.letter, accidental: g.accidental ?? '', octave: g.octave })],
-    duration: '8',
+    duration: g.duration ?? '8',
     slash: true,
   });
   if (g.accidental) graceStaveNote.addModifier(new VexAccidental(g.accidental), 0);

@@ -2097,8 +2097,12 @@ function StaffEditorInner({
     // host's own click resolution below so the smaller glyph wins.
     const graceHit = findGraceNoteAt(result, point.x, point.y);
     if (graceHit && !editTool.graceNoteMode) {
-      onSelectGrace({ measureIndex: graceHit.measureIndex, clef: graceHit.clef, noteIndex: graceHit.noteIndex });
+      // onDeselectNote also clears selectedGrace (see App's
+      // handleDeselectNote) — called first so the onSelectGrace right after
+      // is the one whose state update actually sticks, instead of being
+      // immediately clobbered back to null by the batched deselect.
       onDeselectNote();
+      onSelectGrace({ measureIndex: graceHit.measureIndex, clef: graceHit.clef, noteIndex: graceHit.noteIndex });
       suppressClickRef.current = true;
       return;
     }

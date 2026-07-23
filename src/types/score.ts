@@ -67,9 +67,12 @@ export interface NoteEvent {
    * slurred to it. Toggled on/off by clicking an existing note while the
    * 꾸밈음 toolbar button is active, or by pressing that button with a note
    * already selected. Rests never carry one. Selectable in its own right
-   * (see App's `selectedGrace`) for pitch/position edits and deletion.
+   * (see App's `selectedGrace`) for pitch/duration/position edits and
+   * deletion — arrow keys mirror a main note's (up/down = pitch, left/right
+   * = duration; see App's keydown handler). `duration` defaults to '8' (the
+   * standard single-flag acciaccatura shape) when unset.
    */
-  graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental; position?: 'before' | 'after' };
+  graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental; position?: 'before' | 'after'; duration?: DurationValue };
 }
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */
