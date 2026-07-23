@@ -6,7 +6,6 @@ import {
   Formatter,
   GraceNote,
   GraceNoteGroup,
-  Modifier,
   Renderer,
   Stave,
   StaveConnector,
@@ -565,12 +564,18 @@ const REST_KEY: Record<Clef, string> = {
 };
 
 /** Attaches `note.graceNote` (see NoteEvent.graceNote) as a slashed,
- * slurred acciaccatura to `staveNote` — before it (the default) or after it
- * (`position: 'after'`, a nachschlag-style grace note leaning into the next
- * note) — if it has one. `isSelected` recolors it red like a selected main
- * note (see StaffEditor's grace-note selection). Returns the created
- * GraceNote so the caller can compute its hitbox once the voice is drawn
- * (its position isn't resolved until then), or null if there was none. */
+ * slurred acciaccatura to `staveNote` — always engraved immediately to its
+ * LEFT, matching how printed sheet music always shows a grace note leading
+ * into the note it decorates (regardless of `position`, which only affects
+ * playback timing — see playback.ts's isAfter — not which side it's drawn
+ * on; VexFlow's own RIGHT placement for `position: 'after'` packed the grace
+ * note within a couple pixels of its host, which both looked like an
+ * overlapping smear and stole clicks meant for the host note, since the
+ * grace-note hitbox is checked before the host's own). `isSelected` recolors
+ * it red like a selected main note (see StaffEditor's grace-note selection).
+ * Returns the created GraceNote so the caller can compute its hitbox once
+ * the voice is drawn (its position isn't resolved until then), or null if
+ * there was none. */
 function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSelected: boolean): GraceNote | null {
   if (!note.graceNote || note.isRest) return null;
   const g = note.graceNote;
@@ -587,9 +592,10 @@ function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSe
   }
   // showSlur=true draws VexFlow's own curve from the grace note to its host —
   // real engraving, always on, matching the standard convention that a grace
-  // note is always slurred to the note it decorates.
+  // note is always slurred to the note it decorates. Position is left at
+  // GraceNoteGroup's own default (Modifier.Position.LEFT) — see the doc
+  // comment above for why 'after' no longer moves it to the right.
   const group = new GraceNoteGroup([graceStaveNote], true).beamNotes();
-  if (g.position === 'after') group.setPosition(Modifier.Position.RIGHT);
   staveNote.addModifier(group, 0);
   return graceStaveNote;
 }
@@ -958,16 +964,15 @@ export function renderScore(
       // other. Pin both staves to the wider of the two so every beat lines
       // up vertically across the grand staff, matching how real engraving
       // aligns simultaneous notes between clefs.
-      // A grace note (꾸밈음) attached before the FIRST note of a measure has
+      // A grace note (꾸밈음) attached to the FIRST note of a measure has
       // nowhere to sit but immediately at noteStartX — VexFlow's own stave
       // width calc reserves room for the clef/key/time glyphs but not for a
       // leading grace note squeezed in right after them, so it rendered
       // flush against (sometimes overlapping) those glyphs. Give it its own
-      // breathing room whenever either staff's first note carries one.
-      const hasLeadingGraceNote = (['treble', 'bass'] as Clef[]).some((c) => {
-        const first = measure[c].notes[0];
-        return !!first?.graceNote && first.graceNote.position !== 'after';
-      });
+      // breathing room whenever either staff's first note carries one. Grace
+      // notes always draw on the left of their host now (see attachGraceNote),
+      // so this applies regardless of the note's `position` field.
+      const hasLeadingGraceNote = (['treble', 'bass'] as Clef[]).some((c) => !!measure[c].notes[0]?.graceNote);
       const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
