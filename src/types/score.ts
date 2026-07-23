@@ -96,8 +96,11 @@ export interface ChordSymbol {
   quality: ChordQuality;
   /** Raw free-text label as typed. When set, shown verbatim instead of the parsed root/quality. */
   text?: string;
-  /** Horizontal position within the measure, 0 (start) .. 1 (end). Freely draggable. */
+  /** Horizontal position within the measure, 0 (start) .. 1 (end). Freely draggable — purely cosmetic, does not affect which notes the chord harmonically covers (see startNoteIndex/startNoteClef). */
   offset: number;
+  /** The melody note (by index within the SAME measure's startNoteClef staff) this chord starts harmonically applying from, for scale-degree computation (see activeChordAt) — chosen via the chord's "적용 시작 음표 선택" UI. When unset, falls back to the offset-derived beat (legacy behavior), so old scores without this field keep working. */
+  startNoteIndex?: number;
+  startNoteClef?: Clef;
 }
 
 /** A single draggable lyric syllable placed in the band between the two staves. */

@@ -11,6 +11,7 @@ import {
   StaveConnector,
   StaveNote,
   StaveTie,
+  Stem,
   Tuplet,
   Voice,
 } from 'vexflow';
@@ -153,6 +154,12 @@ interface DegreeMark {
   x: number;
   y: number;
   text: string;
+  /** Whether this mark's own note/pitch is the currently selected one — see
+   * drawDegreeMarks' `emphasize` param: in 도수 입력 모드 the underlying note
+   * is dimmed to near-invisibility, so "the note got selected" red styling
+   * alone doesn't read; the digit itself needs its own distinct selected
+   * look instead. */
+  selected: boolean;
 }
 
 /** Scale-degree labels (see Score.showScaleDegrees / scoreUtils.scaleDegreeFor),
@@ -168,14 +175,20 @@ interface DegreeMark {
 function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[], emphasize = false): void {
   const fontSize = emphasize ? 15 : 12;
   marks.forEach((mark) => {
+    const showSelected = emphasize && mark.selected;
     if (emphasize) {
       const bg = document.createElementNS(SVG_NS, 'circle');
       bg.setAttribute('cx', String(mark.x + 6));
       bg.setAttribute('cy', String(mark.y - 4));
       bg.setAttribute('r', '10');
-      bg.setAttribute('fill', '#eafbea');
-      bg.setAttribute('stroke', '#2f9e44');
-      bg.setAttribute('stroke-width', '1.5');
+      // A clicked/selected digit fills solid blue with white text instead of
+      // the usual light-green outline pill — a click on the note itself gets
+      // recolored red too, but that styling lands on the (dimmed-out) note,
+      // not the digit, so it reads as almost nothing; the digit needs its
+      // own unmistakable "this is the one I clicked" look.
+      bg.setAttribute('fill', showSelected ? '#2563eb' : '#eafbea');
+      bg.setAttribute('stroke', showSelected ? '#1d4ed8' : '#2f9e44');
+      bg.setAttribute('stroke-width', showSelected ? '2' : '1.5');
       svg.appendChild(bg);
     }
     const text = document.createElementNS(SVG_NS, 'text');
@@ -186,7 +199,7 @@ function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[], emphasize = fa
     text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
     text.setAttribute('font-weight', '700');
     text.setAttribute('stroke', 'none');
-    text.setAttribute('fill', '#2f9e44');
+    text.setAttribute('fill', showSelected ? '#ffffff' : '#2f9e44');
     text.textContent = mark.text;
     svg.appendChild(text);
   });
@@ -347,6 +360,12 @@ const MELODY_BLOCK_HEIGHT = 150;
 const MELODY_CHORD_Y = 58;
 const MELODY_STAFF_Y = 60;
 const NOTE_HIT_RADIUS = 16;
+/** How much closer (px) to pull a grace notehead toward its host than
+ * VexFlow's own GraceNoteGroup spacing places it (see the graceNotes.forEach
+ * XShift pass) — measured empirically against VexFlow's ~14px default gap to
+ * land around 8px, tight but not touching. Must leave findGraceNoteAt's own
+ * x-tolerance (see there) still smaller than the resulting gap. */
+const GRACE_NUDGE_PX = 6;
 export const MEASURES_PER_ROW = 4;
 /** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the title font size (see drawHeading's font-size). */
 const TITLE_BAND = 82;
@@ -1000,6 +1019,16 @@ export function renderScore(
       // notes always draw on the left of their host now (see attachGraceNote),
       // so this applies regardless of the note's `position` field.
       const hasLeadingGraceNote = (['treble', 'bass'] as Clef[]).some((c) => !!measure[c].notes[0]?.graceNote);
+      // A grace note's GraceNoteGroup modifier is positioned relative to its
+      // host's tick-context X, computed once during the initial joinVoices
+      // format() pass below — it does NOT track any further per-note
+      // setXShift override applied afterward (see the beat-proportional
+      // override further down, for #224). Overriding a grace-bearing note's
+      // X without also being able to reliably relocate its grace note left
+      // it detached/overlapping its host, so measures with any grace note
+      // skip that override entirely and keep VexFlow's own joinVoices
+      // layout, which already keeps a grace note correctly glued to its host.
+      const measureHasGrace = (['treble', 'bass'] as Clef[]).some((c) => measure[c].notes.some((n) => !!n.graceNote));
       const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
@@ -1061,6 +1090,17 @@ export function renderScore(
               sn.setXShift(desiredX - sn.getAbsoluteX());
               melodyCenterXs[i] = desiredX;
             });
+          } else {
+            // Same beat-proportional override as the treble/bass staves
+            // below (see #224) — keeps note spacing even/proportional to
+            // duration instead of VexFlow's own uneven tick-context widths.
+            let melodyCumBeat = 0;
+            melodyStaveNotes.forEach((sn, i) => {
+              const desiredX = melodyNoteStartX + clamp01(capacity > 0 ? melodyCumBeat / capacity : 0) * melodyNoteAreaWidth;
+              sn.setXShift(desiredX - sn.getAbsoluteX());
+              melodyCenterXs[i] = desiredX;
+              melodyCumBeat += noteBeats(melodyNotes[i]);
+            });
           }
 
           // Beams must be built BEFORE the voice is drawn — same reasoning as
@@ -1086,7 +1126,10 @@ export function renderScore(
           // Triplet brackets aren't gated by `full` the way auto-beaming is —
           // a tupleted note's reduced beat cost (see noteBeats) is correct
           // whether or not the measure happens to be exactly full.
-          const melodyTuplets = computeTupletGroups(melodyNotes, melodyStaveNotes).map((g) => new Tuplet(g));
+          const melodyTuplets = computeTupletGroups(melodyNotes, melodyStaveNotes).map((g) => {
+            const stemsDown = g[0]?.getStemDirection() === Stem.DOWN;
+            return new Tuplet(g, stemsDown ? { location: Tuplet.LOCATION_BOTTOM } : undefined);
+          });
           melodyVoice.draw(context, melodyStave);
           melodyBeams.forEach((b) => b.setContext(context).draw());
           melodyTuplets.forEach((t) => t.setContext(context).draw());
@@ -1273,8 +1316,16 @@ export function renderScore(
           }
           // Triplet brackets aren't gated by `full` the way auto-beaming is —
           // a tupleted note's reduced beat cost (see noteBeats) is correct
-          // whether or not the measure happens to be exactly full.
-          const tuplets = computeTupletGroups(notes, staveNotes).map((g) => new Tuplet(g));
+          // whether or not the measure happens to be exactly full. VexFlow
+          // defaults every Tuplet to LOCATION_TOP regardless of the notes'
+          // own stem direction — reads wrong (bracket floating away from the
+          // beam) whenever the group's stems point down (typically because
+          // the notes sit high on the staff). Follow the beam/stems instead,
+          // like real engraving: bracket below when stems are down.
+          const tuplets = computeTupletGroups(notes, staveNotes).map((g) => {
+            const stemsDown = g[0]?.getStemDirection() === Stem.DOWN;
+            return new Tuplet(g, stemsDown ? { location: Tuplet.LOCATION_BOTTOM } : undefined);
+          });
 
           // getAbsoluteX() is only meaningful once each note knows its stave
           // (Voice.draw sets this internally, but we need the formatted X now to
@@ -1284,15 +1335,81 @@ export function renderScore(
           // Free-X placement: shift each positioned note from its formatted spot
           // to the requested fraction of the note area.
           const centerXs: number[] = staveNotes.map((sn) => sn.getAbsoluteX());
+          // How far each note was pushed by the overrides below — a grace
+          // note's own X is computed from its host's PRE-override tick
+          // context position (not the host's final getAbsoluteX()), so
+          // moving the host without also moving its grace note by the same
+          // amount leaves the grace note behind at its old spot, sometimes
+          // landing to the RIGHT of the host that moved past it. Applied to
+          // the grace note's own xShift below (in addition to GRACE_NUDGE_PX).
+          const hostShiftDeltas: number[] = staveNotes.map(() => 0);
           if (!full) {
             staveNotes.forEach((sn, i) => {
               const fx = notes[i].x;
               if (fx === undefined) return;
-              const desiredX = noteStartX + clamp01(fx) * noteAreaWidth;
-              sn.setXShift(desiredX - sn.getAbsoluteX());
-              centerXs[i] = desiredX;
+              const target = noteStartX + clamp01(fx) * noteAreaWidth;
+              const shift = target - sn.getAbsoluteX();
+              sn.setXShift(shift);
+              centerXs[i] = target;
+              hostShiftDeltas[i] = shift;
+            });
+          } else if (!measureHasGrace) {
+            // VexFlow's joinVoices().format() still drives modifier/accidental
+            // collision avoidance (why we keep calling it above), but its own
+            // spacing between tick contexts is NOT simply proportional to
+            // duration: a beat shared with the OTHER clef's longer note (e.g.
+            // a bass quarter note landing under every other treble eighth)
+            // gets pulled much wider than a beat that isn't, producing a
+            // visibly uneven "zigzag" spacing pattern — most noticeable in
+            // the bass clef, whose own notes are otherwise all equal
+            // duration and should read as evenly spaced (see #224). Override
+            // with a strictly beat-proportional X instead: every note's
+            // position is purely its cumulative beat offset divided by the
+            // measure's total beat capacity, scaled across the note area.
+            // Both staves share the same noteStartX/noteAreaWidth (pinned
+            // above via sharedNoteStartX), so this also keeps same-beat
+            // notes in each clef vertically aligned, same as joinVoices did.
+            // Skipped whenever this measure has a grace note anywhere (see
+            // measureHasGrace) — see the comment there for why.
+            let cumBeat = 0;
+            staveNotes.forEach((sn, i) => {
+              const target = noteStartX + clamp01(capacity > 0 ? cumBeat / capacity : 0) * noteAreaWidth;
+              const shift = target - sn.getAbsoluteX();
+              sn.setXShift(shift);
+              centerXs[i] = target;
+              hostShiftDeltas[i] = shift;
+              cumBeat += noteBeats(notes[i]);
             });
           }
+
+          // VexFlow's own GraceNoteGroup spacing leaves a wider gap (~14px)
+          // than how a grace note usually engraves — nearly touching its
+          // host. Pull it in by a fixed amount rather than fight VexFlow's
+          // internal metrics directly. This has to be a FIXED nudge, not one
+          // computed from the grace note's current getAbsoluteX(): the grace
+          // note's position isn't actually resolved yet at this point (it's
+          // set during the GraceNoteGroup modifier's own draw, inside
+          // voice.draw() below) — reading it now returned a stale/unrelated
+          // value and shifted grace notes wildly off, next to entirely
+          // different notes. GRACE_NUDGE_PX must leave the final gap bigger
+          // than findGraceNoteAt's own x-tolerance (see there) so a click
+          // dead-center on the HOST note still falls outside the grace
+          // note's hit radius — shrinking the gap without also shrinking
+          // that radius is exactly what caused the grace note to silently
+          // steal host clicks last time.
+          graceNotes.forEach((gn, i) => {
+            if (!gn) return;
+            // A GraceNoteGroup positions itself from its host's PRE-override
+            // tick-context X, not the host's final getAbsoluteX() — so it
+            // doesn't automatically follow the host/free-X and beat-proportional
+            // overrides above. Without re-applying the same delta here, the
+            // grace note stays glued to where the host WOULD have been,
+            // which can even land it to the right of the host after a large
+            // override (see #224's beat-proportional rewrite). Grace notes
+            // sit to the LEFT of their host (smaller x) — moving one CLOSER
+            // to its host means increasing its x (adding, not subtracting).
+            gn.setXShift(gn.getXShift() + hostShiftDeltas[i] + GRACE_NUDGE_PX);
+          });
 
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
@@ -1386,7 +1503,10 @@ export function renderScore(
                   // every other note in it unlabeled.
                   const markX = noteheadRightX + DEGREE_GAP;
                   const markY = ys[pitchIndex];
-                  degreeMarks.push({ x: markX, y: markY, text: degreeText });
+                  const markSelected =
+                    !!isSelected &&
+                    (selectedPitchIndexForClef === null || note.pitches.length === 1 || pitchIndex === selectedPitchIndexForClef);
+                  degreeMarks.push({ x: markX, y: markY, text: degreeText, selected: markSelected });
                   degreeMarkHitboxes.push({ measureIndex, clef, noteIndex, pitchIndex, x: markX, y: markY });
                 }
               });
@@ -1885,7 +2005,11 @@ export function findLineBreakAt(result: RenderResult, x: number, y: number): Lin
  * checked before the host note's own hitbox so a click precisely on the
  * grace glyph selects IT, not its host. */
 export function findGraceNoteAt(result: RenderResult, x: number, y: number): GraceNoteHitbox | null {
-  return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 9 && Math.abs(g.y - y) < 12) ?? null;
+  // x-tolerance kept below GRACE_HOST_GAP_PX (see vexflowRenderer's grace-note
+  // nudge) so this radius never reaches all the way to the host note's own
+  // center — otherwise a click dead-center on the HOST would still fall
+  // inside the grace note's zone and silently steal the click again.
+  return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 5 && Math.abs(g.y - y) < 12) ?? null;
 }
 
 /** Click target for an emphasized scale-degree digit in 도수 입력 모드 (see

@@ -469,6 +469,40 @@
   font-size: 14px;
 }
 
+.chord-start-note-btn {
+  position: absolute;
+  pointer-events: auto;
+  border: 1px solid var(--accent, #7a5cff);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--accent, #7a5cff);
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 1px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chord-start-note-btn:hover {
+  background: var(--accent, #7a5cff);
+  color: #fff;
+}
+
+.chord-start-note-hint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2f3a8f;
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+
 /* Floating add/remove-measure buttons — always act on the last measure. */
 /* Floating cluster, bottom-right, always visible (follows scroll): the "±"
    toggle reveals +/- for inserting/deleting at the currently FOCUSED (mid-

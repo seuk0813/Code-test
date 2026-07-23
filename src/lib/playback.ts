@@ -140,25 +140,32 @@ export async function playScore(
 ): Promise<PlaybackHandle> {
   await Tone.start();
 
-  // Tone.Synth's default envelope has a 1-SECOND release — fine for a single
-  // sustained note, but for anything faster than about one note per second
-  // (straight 8ths, triplets, 16th/32nd runs) each note's still-fading tail
-  // overlaps several notes ahead, washing the whole passage into an
-  // indistinct blur that reads as "uneven"/rushed-and-dragging timing even
-  // though the actual scheduled onsets are exact. An earlier pass shortened
-  // this to 0.3s, which fixed slow/medium passages but is STILL longer than
-  // a single 16th note's own audible window at any normal tempo (e.g. ~0.12s
-  // at 120bpm) — a run of 16ths still overlaps 2-3 tails deep. Tightening
-  // release (and decay, so short notes finish settling into sustain before
-  // release even starts) further keeps every note's attack cleanly audible
-  // even in fast runs, while barely affecting how whole/half notes sound
-  // since their own `duration` already covers almost all of the envelope
-  // (release is just the very tail after note-off).
-  const envelope = { attack: 0.004, decay: 0.05, sustain: 0.3, release: 0.09 };
-  const trebleSynth = new Tone.PolySynth(Tone.Synth, { envelope }).toDestination();
+  // A single FIXED envelope — no matter how far its release/decay were
+  // tightened in earlier passes — is exactly as long for a 16th note as for
+  // a whole note. A 90ms release is barely noticeable on a quarter note
+  // (500ms at 120bpm) but is comparable to or LONGER than a whole 16th
+  // note's own ~120ms window at that same tempo, so straight 8th/16th runs
+  // kept blurring together no matter how much the one shared constant was
+  // shortened — that's the previously-untried root cause (this is a
+  // different lever than re-tuning the same fixed numbers again): the
+  // envelope must scale down with how short THIS note actually is, not stay
+  // fixed. Long notes (half/whole) keep the fuller, more natural envelope;
+  // short fast notes get a proportionally snappier one so their own release
+  // tail finishes well before the next note's attack. Applied per note via
+  // synth.set() right before each scheduled triggerAttackRelease (below),
+  // since Tone.PolySynth's envelope is otherwise one shared config for
+  // every voice.
+  const envelopeFor = (durationSeconds: number) => ({
+    attack: 0.004,
+    decay: Math.min(0.05, durationSeconds * 0.2),
+    sustain: 0.3,
+    release: Math.min(0.09, durationSeconds * 0.35),
+  });
+  const baseEnvelope = envelopeFor(0.5);
+  const trebleSynth = new Tone.PolySynth(Tone.Synth, { envelope: baseEnvelope }).toDestination();
   const bassSynth = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'triangle' },
-    envelope,
+    envelope: baseEnvelope,
   }).toDestination();
 
   Tone.getTransport().stop();
@@ -179,6 +186,7 @@ export async function playScore(
 
   events.forEach((ev) => {
     Tone.getTransport().schedule((time) => {
+      ev.synth.set({ envelope: envelopeFor(ev.durationSeconds) });
       ev.synth.triggerAttackRelease(ev.notes, ev.durationSeconds, time);
     }, ev.timeBeats * secondsPerBeat);
   });

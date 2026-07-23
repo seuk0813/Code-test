@@ -46,6 +46,7 @@ import {
   resizePickupMeasure,
   resizeTrailingMeasure,
   scaleDegreeKey,
+  setChordStartNote,
   setGraceNoteDuration,
   setGraceNotePitch,
   setManualScaleDegreeLabel,
@@ -1466,6 +1467,13 @@ function App() {
     [setScore],
   );
 
+  const handleSetChordStartNote = useCallback(
+    (measureIndex: number, chordId: string, clef: Clef, noteIndex: number) => {
+      setScore((prev) => setChordStartNote(prev, measureIndex, chordId, clef, noteIndex));
+    },
+    [setScore],
+  );
+
   const handleDeleteChord = useCallback((measureIndex: number, chordId: string) => {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));
   }, [setScore]);
@@ -1763,6 +1771,7 @@ function App() {
         onFocusMeasure={handleFocusMeasure}
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
+        onSetChordStartNote={handleSetChordStartNote}
         onDeleteChord={handleDeleteChord}
         onMoveLyric={handleMoveLyric}
         onDeleteLyric={handleDeleteLyric}

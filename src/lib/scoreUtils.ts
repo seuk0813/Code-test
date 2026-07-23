@@ -221,6 +221,20 @@ function flattenChords(score: Score): { chord: ChordSymbol; beat: number }[] {
     const duration = measureDurationBeats(score, measureIndex);
     const sorted = [...measure.chords].sort((a, b) => a.offset - b.offset);
     sorted.forEach((chord, i) => {
+      // A chord with an explicit startNoteIndex/startNoteClef (set via its
+      // "적용 시작 음표 선택" UI) harmonically starts exactly at that note's
+      // onset, independent of where its label is dragged (offset) — see
+      // ChordSymbol's doc comment. Falls back to the old offset-derived beat
+      // for chords that never had a start note chosen.
+      if (chord.startNoteIndex !== undefined && chord.startNoteClef) {
+        const clefNotes = measure[chord.startNoteClef].notes;
+        let beat = start;
+        for (let ni = 0; ni < chord.startNoteIndex && ni < clefNotes.length; ni++) {
+          beat += noteBeats(clefNotes[ni]);
+        }
+        flat.push({ chord, beat });
+        return;
+      }
       flat.push({ chord, beat: i === 0 ? start : start + chord.offset * duration });
     });
   });
@@ -831,6 +845,18 @@ export function editChordText(score: Score, measureIndex: number, chordId: strin
       ),
     };
   });
+  return { ...score, measures };
+}
+
+/** Sets which melody note (see ChordSymbol.startNoteIndex/startNoteClef) a
+ * chord starts harmonically applying from, chosen via its "적용 시작 음표
+ * 선택" UI — independent of the chord's own draggable label offset. */
+export function setChordStartNote(score: Score, measureIndex: number, chordId: string, clef: Clef, noteIndex: number): Score {
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex
+      ? { ...m, chords: m.chords.map((c) => (c.id === chordId ? { ...c, startNoteIndex: noteIndex, startNoteClef: clef } : c)) }
+      : m,
+  );
   return { ...score, measures };
 }
 

@@ -139,6 +139,8 @@ interface StaffEditorProps {
   onFocusMeasure: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number, toMeasureIndex: number) => void;
+  /** Sets which melody note (see ChordSymbol.startNoteIndex) a chord starts harmonically applying from — chosen via its "적용 시작 음표 선택" UI, separate from dragging its label (onMoveChord, purely cosmetic). */
+  onSetChordStartNote: (measureIndex: number, chordId: string, clef: Clef, noteIndex: number) => void;
   onDeleteChord: (measureIndex: number, chordId: string) => void;
   onMoveLyric: (fromMeasureIndex: number, lyricId: string, offset: number, toMeasureIndex: number) => void;
   onDeleteLyric: (measureIndex: number, lyricId: string) => void;
@@ -339,6 +341,7 @@ function StaffEditorInner({
   onFocusMeasure,
   onAddLineBreak,
   onMoveChord,
+  onSetChordStartNote,
   onDeleteChord,
   onMoveLyric,
   onDeleteLyric,
@@ -408,6 +411,19 @@ function StaffEditorInner({
   const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
   const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
   const inlineCancelledRef = useRef(false);
+  /** While set, the next click on a melody note sets that chord's harmonic
+   * start point (see onSetChordStartNote) instead of its usual action —
+   * entered via the "적용 시작 음표 선택" button in a chord's edit popup. */
+  const [pickingChordStart, setPickingChordStart] = useState<{ measureIndex: number; chordId: string } | null>(null);
+
+  useEffect(() => {
+    if (!pickingChordStart) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPickingChordStart(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pickingChordStart]);
 
   useImperativeHandle(
     ref,
@@ -1957,6 +1973,21 @@ function StaffEditorInner({
     clearGhost(overlayRef.current);
     if (inlineEditor) commitInlineEditor();
 
+    // 코드 적용 시작 음표 선택 모드: the next click anywhere resolves against
+    // a note instead of its usual action. A hit on a real note (in the same
+    // measure the chord lives in) commits the pick; anything else (empty
+    // staff space, a different measure, another chord) just cancels the
+    // mode without side effects, so it's easy to back out of.
+    if (pickingChordStart) {
+      const click = resolveClick(result, point.x, point.y);
+      if (click?.type === 'select' && click.measureIndex === pickingChordStart.measureIndex) {
+        onSetChordStartNote(pickingChordStart.measureIndex, pickingChordStart.chordId, click.clef, click.noteIndex);
+      }
+      setPickingChordStart(null);
+      suppressClickRef.current = true;
+      return;
+    }
+
     // Shift+drag anywhere on the staff draws a rubber-band that multi-selects
     // every notehead inside it (for batch copy/paste). Takes priority over
     // note placement/selection so it works even when starting over a note.
@@ -2765,6 +2796,36 @@ function StaffEditorInner({
                 onKeyDown={handleInlineKeyDown}
                 onBlur={handleInlineBlur}
               />
+              {inlineEditor.kind === 'chordEdit' && (
+                <button
+                  type="button"
+                  className="chord-start-note-btn"
+                  style={{ left: inlineEditor.left, top: inlineEditor.top + 22, width: inlineEditor.width }}
+                  title="이 코드를 적용할 멜로디 음표를 선택합니다"
+                  // Clicking this button shifts focus away from the text
+                  // input, which fires its onBlur → commitInlineEditor() →
+                  // setInlineEditor(null) — that unmounts this very button
+                  // (it only exists inside {inlineEditor && ...}) BEFORE the
+                  // click event has a chance to fire on it. preventDefault
+                  // on mousedown stops the focus change (and thus the blur)
+                  // from happening at all, so the button survives to fire
+                  // its own handler; commit the text manually here instead.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const ed = inlineEditor;
+                    if (!ed || ed.kind !== 'chordEdit') return;
+                    commitInlineEditor();
+                    setPickingChordStart({ measureIndex: ed.measureIndex, chordId: ed.chordId });
+                  }}
+                >
+                  적용 시작 음표 선택
+                </button>
+              )}
+            </div>
+          )}
+          {pickingChordStart && (
+            <div className="chord-start-note-hint">
+              적용을 시작할 멜로디 음표를 클릭하세요 (Esc로 취소)
             </div>
           )}
         </div>
