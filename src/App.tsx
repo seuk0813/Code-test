@@ -14,6 +14,7 @@ import {
   adjacentIndexAfterDelete,
   attachOrRemoveGraceNote,
   CHORD_QUALITY_SUFFIX,
+  clearManualScaleDegreeLabel,
   clearPickupMeasure,
   clearTrailingMeasure,
   createEmptyMeasure,
@@ -45,7 +46,9 @@ import {
   removeNoteFromScore,
   resizePickupMeasure,
   resizeTrailingMeasure,
+  scaleDegreeKey,
   setGraceNotePitch,
+  setManualScaleDegreeLabel,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -99,6 +102,15 @@ function App() {
   // The host note whose grace note is selected (see NoteEvent.graceNote) —
   // mutually exclusive with `selected`: selecting either clears the other.
   const [selectedGrace, setSelectedGrace] = useState<NoteLocation | null>(null);
+  // 도수 입력 모드: while on, digit keys 1-9 (optionally prefixed with 'b'/'#')
+  // set a hand-typed scale-degree label override on the currently `selected`
+  // note/pitch instead of their usual meaning, and Delete/Backspace clears
+  // that override instead of deleting the note — see the keydown handler below.
+  const [degreeInputMode, setDegreeInputMode] = useState(false);
+  // Buffers a 'b' or '#' keypress so the NEXT digit key combines with it
+  // (e.g. 'b' then '3' -> "b3"). Cleared after use or after a short timeout.
+  const pendingDegreeAccidentalRef = useRef<'' | 'b' | '#'>('');
+  const pendingDegreeAccidentalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The currently-selected visual-only rest mark (see RestMark / #187) —
   // shows its 4 corner resize handles; click its glyph to select, click
   // elsewhere to deselect (see StaffEditor's rest-mark mousedown handling).
@@ -214,6 +226,14 @@ function App() {
   useEffect(() => {
     saveAutosave(score);
   }, [score]);
+
+  // Turning off 음정 도수 표기 altogether makes 도수 입력 모드 meaningless
+  // (its toolbar button is hidden too — see Toolbar) — force it off so a
+  // stray leftover `degreeInputMode=true` can't silently keep intercepting
+  // digit/Delete keys once the labels themselves are gone.
+  useEffect(() => {
+    if (!score.showScaleDegrees && degreeInputMode) setDegreeInputMode(false);
+  }, [score.showScaleDegrees, degreeInputMode]);
 
   const deleteNoteAndSelectAdjacent = useCallback(
     (location: NoteLocation) => {
@@ -973,6 +993,43 @@ function App() {
         else handlePasteChords();
         return;
       }
+      // 도수 입력 모드: with a note selected, digit keys type a manual
+      // scale-degree label override ('b'/'#' immediately before a digit
+      // prefixes it, e.g. 'b' then '3' -> "b3"), and Delete/Backspace clears
+      // the override (reverting to the auto-computed label) instead of
+      // deleting the note — takes priority over the generic delete handling
+      // right below.
+      if (degreeInputMode && selected && !e.ctrlKey && !e.metaKey) {
+        if (e.key === 'b' || e.key === '#') {
+          e.preventDefault();
+          pendingDegreeAccidentalRef.current = e.key;
+          if (pendingDegreeAccidentalTimeoutRef.current) clearTimeout(pendingDegreeAccidentalTimeoutRef.current);
+          pendingDegreeAccidentalTimeoutRef.current = setTimeout(() => {
+            pendingDegreeAccidentalRef.current = '';
+          }, 1500);
+          return;
+        }
+        if (/^[1-9]$/.test(e.key)) {
+          e.preventDefault();
+          const prefix = pendingDegreeAccidentalRef.current;
+          pendingDegreeAccidentalRef.current = '';
+          if (pendingDegreeAccidentalTimeoutRef.current) clearTimeout(pendingDegreeAccidentalTimeoutRef.current);
+          const key = scaleDegreeKey(selected.clef, selected.measureIndex, selected.noteIndex, selectedPitchIndex ?? 0);
+          setScore((prev) => setManualScaleDegreeLabel(prev, key, `${prefix}${e.key}`));
+          return;
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          const key = scaleDegreeKey(selected.clef, selected.measureIndex, selected.noteIndex, selectedPitchIndex ?? 0);
+          setScore((prev) => clearManualScaleDegreeLabel(prev, key));
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setDegreeInputMode(false);
+          return;
+        }
+      }
       if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
         (marquee.length > 0 || marqueeChords.length > 0 || marqueeLyrics.length > 0 || selected)
@@ -1044,7 +1101,7 @@ function App() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
+  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
 
   /**
    * Toolbar chord-builder ("+ 코드 추가"): if a chord text box is currently
@@ -1601,6 +1658,8 @@ function App() {
           onAddChord={handleAddChordTool}
           cKeyBasedAccidentals={cKeyBasedAccidentals}
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
+          degreeInputMode={degreeInputMode}
+          onToggleDegreeInputMode={() => setDegreeInputMode((v) => !v)}
         />
       </div>
       <div className="status-line">

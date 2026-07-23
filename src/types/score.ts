@@ -192,6 +192,16 @@ export interface Score {
    * SCALE_DEGREE_LABELS/DEFAULT_SCALE_DEGREE_LABELS in scoreUtils.
    * Undefined = the default set (the basic 7). */
   scaleDegreeLabels?: ScaleDegreeLabel[];
+  /**
+   * Hand-typed overrides for individual notes' scale-degree labels, set via
+   * 도수 입력 모드 (see App's degreeInputMode). Keyed the same way
+   * computeScaleDegreeLabels keys its output map: `${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`.
+   * A value of '' means "force-hide" (suppress whatever computeScaleDegreeLabels
+   * would have auto-computed there); any other string replaces it outright.
+   * Applied as a final overlay on top of the auto-computed labels, independent
+   * of whether an active chord actually produced one.
+   */
+  manualScaleDegreeLabels?: Record<string, string>;
 }
 
 /**

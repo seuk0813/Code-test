@@ -205,6 +205,12 @@ interface ToolbarProps {
   /** When true, new notes never auto-inherit the key signature's implied accidental (as if the piece were in C major). */
   cKeyBasedAccidentals: boolean;
   onToggleCKeyBasedAccidentals: () => void;
+  /** 도수 입력 모드: while on, a selected note's scale-degree label can be
+   * hand-typed from the keyboard (digits, optionally 'b'/'#'-prefixed) — see
+   * App's keydown handler. Only meaningful (and only shown) while
+   * showScaleDegrees is also on. */
+  degreeInputMode: boolean;
+  onToggleDegreeInputMode: () => void;
 }
 
 export function Toolbar({
@@ -224,6 +230,8 @@ export function Toolbar({
   onAddChord,
   cKeyBasedAccidentals,
   onToggleCKeyBasedAccidentals,
+  degreeInputMode,
+  onToggleDegreeInputMode,
 }: ToolbarProps) {
   const [chordRootIndex, setChordRootIndex] = useState(0);
   const [chordQuality, setChordQuality] = useState<ChordQuality>('maj');
@@ -348,6 +356,16 @@ export function Toolbar({
             title="켜면 각 음표 위에 그 순간의 코드를 기준으로 한 음정 도수(1,2,3...)를 표시합니다"
           >
             음정 도수 표기
+          </button>
+        )}
+        {showKeyOptions && score.showScaleDegrees && (
+          <button
+            className={`tool-icon-btn ${degreeInputMode ? 'active' : ''}`}
+            onClick={onToggleDegreeInputMode}
+            aria-label="도수 입력 모드"
+            title="켜면 음표를 선택한 뒤 숫자 키(1-9)로 그 음표의 음정 도수 표기를 직접 입력할 수 있습니다. 'b'나 '#'을 숫자 앞에 누르면 b3, #5처럼 변화표가 붙습니다. Delete/Backspace로 직접 입력한 표기를 지우면 자동 계산된 표기로 되돌아갑니다. Esc로 모드를 끕니다."
+          >
+            도수 입력 모드
           </button>
         )}
         {showKeyOptions && score.showScaleDegrees && (

@@ -220,25 +220,55 @@ export function computeScaleDegreeLabels(score: Score): Map<string, string> {
   if (!score.showScaleDegrees) return labels;
   const enabled = score.scaleDegreeLabels ?? DEFAULT_SCALE_DEGREE_LABELS;
   const sortedChords = flattenChords(score);
-  if (sortedChords.length === 0) return labels;
-  (['treble', 'bass'] as Clef[]).forEach((clef) => {
-    score.measures.forEach((measure, measureIndex) => {
-      let beat = measureStartBeat(score, measureIndex);
-      measure[clef].notes.forEach((note, noteIndex) => {
-        if (!note.isRest && note.pitches.length > 0) {
-          const chord = activeChordAt(sortedChords, beat);
-          if (chord) {
-            note.pitches.forEach((pitch, pitchIndex) => {
-              const text = scaleDegreeFor(pitch, chord.root, chord.accidental, enabled, score.keySignature);
-              if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`, text);
-            });
+  if (sortedChords.length > 0) {
+    (['treble', 'bass'] as Clef[]).forEach((clef) => {
+      score.measures.forEach((measure, measureIndex) => {
+        let beat = measureStartBeat(score, measureIndex);
+        measure[clef].notes.forEach((note, noteIndex) => {
+          if (!note.isRest && note.pitches.length > 0) {
+            const chord = activeChordAt(sortedChords, beat);
+            if (chord) {
+              note.pitches.forEach((pitch, pitchIndex) => {
+                const text = scaleDegreeFor(pitch, chord.root, chord.accidental, enabled, score.keySignature);
+                if (text) labels.set(`${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`, text);
+              });
+            }
           }
-        }
-        beat += noteBeats(note);
+          beat += noteBeats(note);
+        });
       });
     });
-  });
+  }
+  // 도수 입력 모드 (see App's degreeInputMode) overlay: '' force-hides
+  // whatever was auto-computed above, anything else replaces it outright —
+  // applied regardless of whether an active chord produced a label at all.
+  if (score.manualScaleDegreeLabels) {
+    Object.entries(score.manualScaleDegreeLabels).forEach(([key, text]) => {
+      if (text === '') labels.delete(key);
+      else labels.set(key, text);
+    });
+  }
   return labels;
+}
+
+/** Shared key format for both computeScaleDegreeLabels' output map and
+ * Score.manualScaleDegreeLabels — keep call sites (rendering, degree input
+ * mode) from hand-rolling the template and drifting apart. */
+export function scaleDegreeKey(clef: Clef, measureIndex: number, noteIndex: number, pitchIndex: number): string {
+  return `${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`;
+}
+
+/** Sets (or replaces) a hand-typed scale-degree label override for one note/pitch. */
+export function setManualScaleDegreeLabel(score: Score, key: string, text: string): Score {
+  return { ...score, manualScaleDegreeLabels: { ...(score.manualScaleDegreeLabels ?? {}), [key]: text } };
+}
+
+/** Removes a manual scale-degree override, reverting that note/pitch to the auto-computed label. */
+export function clearManualScaleDegreeLabel(score: Score, key: string): Score {
+  if (!score.manualScaleDegreeLabels || !(key in score.manualScaleDegreeLabels)) return score;
+  const next = { ...score.manualScaleDegreeLabels };
+  delete next[key];
+  return { ...score, manualScaleDegreeLabels: next };
 }
 
 /**
