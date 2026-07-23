@@ -955,6 +955,18 @@ function App() {
         else handleCopyChords();
         return;
       }
+      // Cut = copy then delete the same selection, same note-vs-chord priority as copy.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && (marquee.length > 0 || marqueeChords.length > 0)) {
+        e.preventDefault();
+        if (marquee.length > 0) {
+          handleCopyNotes();
+          handleDeleteMarquee();
+        } else {
+          handleCopyChords();
+          handleDeleteMarqueeChords();
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && (noteClipboard.length > 0 || chordClipboard.length > 0)) {
         e.preventDefault();
         if (noteClipboard.length > 0) handlePasteNotes();
