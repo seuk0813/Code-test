@@ -49,6 +49,7 @@ import {
   scaleDegreeKey,
   setGraceNotePitch,
   setManualScaleDegreeLabel,
+  setMeasureTimeSignature,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -570,6 +571,16 @@ function App() {
     }
     setEditTool((t) => ({ ...t, tuplet: !t.tuplet }));
   }, [selected, setScore]);
+
+  /** Toolbar's "이 마디만 박자" control: sets/clears a per-measure time
+   * signature override (see Measure.timeSignatureOverride) — e.g. one 3/8
+   * measure inside an otherwise-6/8 piece. */
+  const handleSetMeasureTimeSignature = useCallback(
+    (measureIndex: number, timeSignature: { numerator: number; denominator: number } | null) => {
+      setScore((prev) => setMeasureTimeSignature(prev, measureIndex, timeSignature));
+    },
+    [setScore],
+  );
 
   /** Arrow Up/Down on a selected grace note: diatonic pitch step, same
    * key-signature-aware accidental derivation as handleStepPitch. */
@@ -1675,6 +1686,8 @@ function App() {
           onToggleCKeyBasedAccidentals={handleToggleCKeyBasedAccidentals}
           degreeInputMode={degreeInputMode}
           onToggleDegreeInputMode={() => setDegreeInputMode((v) => !v)}
+          focusedMeasureIndex={focusedMeasureIndex}
+          onSetMeasureTimeSignature={handleSetMeasureTimeSignature}
         />
       </div>
       <div className="status-line">

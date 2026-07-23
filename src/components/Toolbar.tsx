@@ -154,6 +154,9 @@ const TIME_SIGNATURES: [number, number][] = [
   [3, 4],
   [2, 4],
   [6, 8],
+  [3, 8],
+  [9, 8],
+  [12, 8],
 ];
 
 /** All 12 chromatic roots, sharp spelling (C through B), for the chord-builder root dropdown. */
@@ -197,6 +200,13 @@ interface ToolbarProps {
   onGraceNoteButtonClick: () => void;
   /** 셋잇단음표 button: with a note selected, toggles its `tuplet` flag directly; with nothing selected, toggles the pen (editTool.tuplet) for the next new note. */
   onTupletButtonClick: () => void;
+  /** Last measure clicked/focused (see App's focusedMeasureIndex) — the
+   * "이 마디만 박자 변경" control targets this measure. Null = no measure
+   * focused yet, so the control stays disabled. */
+  focusedMeasureIndex: number | null;
+  /** Sets (or, passing null, clears) a time signature override for JUST
+   * `focusedMeasureIndex` — see Measure.timeSignatureOverride. */
+  onSetMeasureTimeSignature: (measureIndex: number, timeSignature: { numerator: number; denominator: number } | null) => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
@@ -229,6 +239,8 @@ export function Toolbar({
   onEditToolChange,
   onGraceNoteButtonClick,
   onTupletButtonClick,
+  focusedMeasureIndex,
+  onSetMeasureTimeSignature,
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
@@ -310,6 +322,33 @@ export function Toolbar({
               onScoreMetaChange({ timeSignature: { numerator, denominator } });
             }}
           >
+            {TIME_SIGNATURES.map(([n, d]) => (
+              <option key={`${n}/${d}`} value={`${n}/${d}`}>
+                {n}/{d}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label title={focusedMeasureIndex === null ? '먼저 악보에서 마디를 클릭해 선택하세요' : `${focusedMeasureIndex + 1}번째 마디에만 적용되는 임시 박자 (예: 6/8 곡 중 한 마디만 3/8)`}>
+          이 마디만 박자
+          <select
+            value={
+              focusedMeasureIndex !== null && score.measures[focusedMeasureIndex]?.timeSignatureOverride
+                ? `${score.measures[focusedMeasureIndex].timeSignatureOverride!.numerator}/${score.measures[focusedMeasureIndex].timeSignatureOverride!.denominator}`
+                : ''
+            }
+            disabled={focusedMeasureIndex === null}
+            onChange={(e) => {
+              if (focusedMeasureIndex === null) return;
+              if (e.target.value === '') {
+                onSetMeasureTimeSignature(focusedMeasureIndex, null);
+                return;
+              }
+              const [numerator, denominator] = e.target.value.split('/').map(Number);
+              onSetMeasureTimeSignature(focusedMeasureIndex, { numerator, denominator });
+            }}
+          >
+            <option value="">(기본 박자)</option>
             {TIME_SIGNATURES.map(([n, d]) => (
               <option key={`${n}/${d}`} value={`${n}/${d}`}>
                 {n}/{d}

@@ -24,6 +24,7 @@ import {
   isStaffMeasureFull,
   measureCapacityBeats,
   measureDurationBeats,
+  measureTimeSignature,
   noteBeats,
   pitchToLine,
   pitchToVexKey,
@@ -899,6 +900,16 @@ export function renderScore(
       const isPieceStart = measureIndex === 0;
       const isLastMeasure = measureIndex === score.measures.length - 1;
       const measureWidth = rowMeasureWidths[rowIndex][localIndex];
+      // This measure's own time signature (Measure.timeSignatureOverride, if
+      // set — see measureTimeSignature) — the glyph is redrawn whenever it
+      // differs from the PREVIOUS measure's, both when a mid-piece override
+      // starts and again when the next measure reverts back to normal.
+      const effectiveTimeSignature = measureTimeSignature(score, measureIndex);
+      const showTimeSignature =
+        isPieceStart ||
+        (measureIndex > 0 &&
+          (effectiveTimeSignature.numerator !== measureTimeSignature(score, measureIndex - 1).numerator ||
+            effectiveTimeSignature.denominator !== measureTimeSignature(score, measureIndex - 1).denominator));
       // Reused by both the melody staff and the treble/bass staves below —
       // see chordChangeBeatsIn and computeBeamNoteGroups' chord-change guard.
       const chordChangeBeats = chordChangeBeatsIn(measure, measureDurationBeats(score, measureIndex));
@@ -914,9 +925,9 @@ export function renderScore(
           bassStave.addKeySignature(score.keySignature);
         }
       }
-      if (isPieceStart) {
-        trebleStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
-        bassStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+      if (showTimeSignature) {
+        trebleStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
+        bassStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
       }
 
       // The treble clef glyph is wider than the bass clef glyph (and either
@@ -941,8 +952,8 @@ export function renderScore(
           melodyStave.addClef('treble');
           if (score.keySignature !== 'C') melodyStave.addKeySignature(score.keySignature);
         }
-        if (isPieceStart) {
-          melodyStave.addTimeSignature(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+        if (showTimeSignature) {
+          melodyStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
         }
         melodyStave.setContext(context).draw();
 
@@ -962,7 +973,7 @@ export function renderScore(
         const melodySpacing = melodyRefY0 - melodyStave.getYForNote(1);
         const melodyNoteStartX = melodyStave.getNoteStartX();
         const melodyNoteAreaWidth = Math.max(40, melodyStave.getX() + melodyStave.getWidth() - NOTE_AREA_RIGHT_PAD - melodyNoteStartX);
-        const melodyFull = isStaffMeasureFull({ notes: measure.treble.notes }, score.timeSignature);
+        const melodyFull = isStaffMeasureFull({ notes: measure.treble.notes }, effectiveTimeSignature);
 
         if (melodyStaveNotes.length > 0) {
           const melodyVoice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
@@ -998,7 +1009,7 @@ export function renderScore(
           let melodyBeams: Beam[] = [];
           if (melodyFull) {
             try {
-              const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+              const defaultGroups = Beam.getDefaultBeamGroups(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
               const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
               const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats, chordChangeBeats);
               melodyBeams = beamGroups.map((group) => new Beam(group, true));
@@ -1107,7 +1118,7 @@ export function renderScore(
         const noteAreaWidth = Math.max(40, stave.getX() + stave.getWidth() - NOTE_AREA_RIGHT_PAD - noteStartX);
         // Once a measure is full it auto-formats (free X positions ignored) so
         // the score tidies itself; until then notes sit where they were placed.
-        const full = isStaffMeasureFull({ notes }, score.timeSignature);
+        const full = isStaffMeasureFull({ notes }, effectiveTimeSignature);
 
         (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
           const scale = r.scale ?? 1;
@@ -1159,7 +1170,7 @@ export function renderScore(
               // dotted quarter — see Beam.getDefaultBeamGroups, VexFlow's own
               // implementation of the standard notation convention, whose
               // first group fraction (of a whole note) converts to beats by ×4.
-              const defaultGroups = Beam.getDefaultBeamGroups(`${score.timeSignature.numerator}/${score.timeSignature.denominator}`);
+              const defaultGroups = Beam.getDefaultBeamGroups(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
               const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
               const beamGroups = computeBeamNoteGroups(notes, staveNotes, pulseBeats, chordChangeBeats);
               // autoStem=true: each note's own StaveNote already picked its

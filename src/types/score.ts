@@ -146,6 +146,15 @@ export interface Measure {
   lyrics: LyricSyllable[];
   /** Visual-only rest annotations layered over existing notes (see RestMark / #187). */
   restMarks: RestMark[];
+  /**
+   * Temporarily overrides `Score.timeSignature` for just this ONE measure
+   * (e.g. a 6/8 piece with a single 3/8 bar mid-song) — the next measure
+   * reverts to the score's normal time signature unless it carries its own
+   * override too. Set/cleared via Toolbar's "이 마디만 박자 변경" control
+   * (see App's handleSetMeasureTimeSignature / scoreUtils' measureTimeSignature).
+   * Undefined = use the score's time signature, same as every other measure.
+   */
+  timeSignatureOverride?: TimeSignature;
 }
 
 export interface TimeSignature {

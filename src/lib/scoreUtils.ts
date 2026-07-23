@@ -70,6 +70,29 @@ export function measureCapacityBeats(timeSignature: TimeSignature): number {
   return timeSignature.numerator * (4 / timeSignature.denominator);
 }
 
+/** The time signature actually governing this measure — its own
+ * `timeSignatureOverride` if set (see Measure.timeSignatureOverride),
+ * otherwise the score's normal `timeSignature`. Every capacity/overflow
+ * check and the row-layout width calc key off this, not `score.timeSignature`
+ * directly, so a single mid-piece measure can temporarily change meter. */
+export function measureTimeSignature(score: Score, measureIndex: number): TimeSignature {
+  return score.measures[measureIndex]?.timeSignatureOverride ?? score.timeSignature;
+}
+
+/** Sets (or, passing null, clears) a per-measure time signature override —
+ * see Measure.timeSignatureOverride. */
+export function setMeasureTimeSignature(score: Score, measureIndex: number, timeSignature: TimeSignature | null): Score {
+  const measures = score.measures.map((m, i) => {
+    if (i !== measureIndex) return m;
+    if (timeSignature === null) {
+      const { timeSignatureOverride: _drop, ...rest } = m;
+      return rest;
+    }
+    return { ...m, timeSignatureOverride: timeSignature };
+  });
+  return { ...score, measures };
+}
+
 export function staffMeasureBeats(staffMeasure: StaffMeasure): number {
   return staffMeasure.notes.reduce((sum, n) => sum + noteBeats(n), 0);
 }
@@ -100,7 +123,7 @@ export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature
  * user via the seek bar (see splitPickupMeasure/splitTrailingMeasure).
  */
 export function measureDurationBeats(score: Score, measureIndex: number): number {
-  const capacity = measureCapacityBeats(score.timeSignature);
+  const capacity = measureCapacityBeats(measureTimeSignature(score, measureIndex));
   if (measureIndex === 0 && score.pickupBeats !== undefined && score.measures.length > 0) {
     return Math.min(capacity, Math.max(0, score.pickupBeats));
   }
@@ -112,7 +135,8 @@ export function measureDurationBeats(score: Score, measureIndex: number): number
 
 /** Absolute beat offset where the given measure starts — see measureDurationBeats. */
 export function measureStartBeat(score: Score, measureIndex: number): number {
-  if (score.pickupBeats === undefined && score.trailingBeats === undefined) {
+  const hasPerMeasureOverride = score.measures.some((m) => m.timeSignatureOverride !== undefined);
+  if (score.pickupBeats === undefined && score.trailingBeats === undefined && !hasPerMeasureOverride) {
     return measureIndex * measureCapacityBeats(score.timeSignature);
   }
   let start = 0;
@@ -1138,7 +1162,7 @@ export function addNoteToScore(
 ): AddNoteResult {
   const measure = score.measures[measureIndex];
   const staffMeasure = measure[clef];
-  const capacity = measureCapacityBeats(score.timeSignature);
+  const capacity = measureCapacityBeats(measureTimeSignature(score, measureIndex));
   const currentBeats = staffMeasureBeats(staffMeasure);
   if (currentBeats + noteBeats(note) > capacity + 1e-6) {
     return { score, noteIndex: -1, overflow: true };

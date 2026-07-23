@@ -1,5 +1,5 @@
 import type { Measure, NoteEvent, Pitch, Score } from '../types/score';
-import { effectiveAccidental } from './scoreUtils';
+import { effectiveAccidental, measureTimeSignature } from './scoreUtils';
 
 // 48 ticks/quarter note — divisible by both 8 (for 32nd notes) and 3 (for
 // triplets), so every duration/dotted/tuplet combination below lands on a
@@ -86,10 +86,14 @@ function measureDurationTicks(notes: NoteEvent[]): number {
 }
 
 function measureXml(measure: Measure, index: number, score: Score): string {
+  const ts = measureTimeSignature(score, index);
+  const timeChanged = index > 0 && (ts.numerator !== measureTimeSignature(score, index - 1).numerator || ts.denominator !== measureTimeSignature(score, index - 1).denominator);
   const attributes =
     index === 0
-      ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${KEY_FIFTHS[score.keySignature] ?? 0}</fifths></key><time><beats>${score.timeSignature.numerator}</beats><beat-type>${score.timeSignature.denominator}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`
-      : '';
+      ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${KEY_FIFTHS[score.keySignature] ?? 0}</fifths></key><time><beats>${ts.numerator}</beats><beat-type>${ts.denominator}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`
+      : timeChanged
+        ? `<attributes><time><beats>${ts.numerator}</beats><beat-type>${ts.denominator}</beat-type></time></attributes>`
+        : '';
 
   const trebleXml = staffMeasureXml(measure.treble.notes, 1, score.keySignature);
   const trebleTicks = measureDurationTicks(measure.treble.notes);

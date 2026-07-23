@@ -36,6 +36,7 @@ import {
   measureCapacityBeats,
   measureDurationBeats,
   measureStartBeat,
+  measureTimeSignature,
   noteBeats,
   pitchToLine,
   stemPointsUp,
@@ -516,9 +517,10 @@ function StaffEditorInner({
   useEffect(() => {
     const current = new Set<string>();
     score.measures.forEach((measure, measureIndex) => {
+      const ts = measureTimeSignature(score, measureIndex);
       (['treble', 'bass'] as const).forEach((clef) => {
         const sm = measure[clef];
-        if (isStaffMeasureFull(sm, score.timeSignature) && !isStaffMeasureOverflow(sm, score.timeSignature)) {
+        if (isStaffMeasureFull(sm, ts) && !isStaffMeasureOverflow(sm, ts)) {
           current.add(`${measureIndex}:${clef}`);
         }
       });
