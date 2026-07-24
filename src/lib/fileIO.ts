@@ -210,8 +210,9 @@ async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGE
   return clone;
 }
 
-/** Measures per PDF page — a new page starts every 16 measures (4 rows of the standard 4-per-row layout). */
+/** Measures per PDF page — a new page starts every 16 measures (4 rows of the standard 4-per-row layout). The 멜로디+가사 (lead-sheet) layout adds an extra melody/lyric staff per row, so each row takes noticeably more vertical space — 12 measures (3 rows) keeps a page from being squeezed as tightly as the plain piano layout's 16. */
 const MEASURES_PER_PDF_PAGE = 16;
+const MEASURES_PER_PDF_PAGE_MELODY = 12;
 
 /** True when a measure has nothing in it (no notes/rests, no chord symbols, no lyrics). */
 function isBlankMeasure(measure: Measure): boolean {
@@ -251,9 +252,10 @@ function trimTrailingBlankMeasures(score: Score): Score {
  * for just that slice of measures.
  */
 function chunkScoreForPdf(score: Score): Score[] {
+  const perPage = score.showMelodyStaff ? MEASURES_PER_PDF_PAGE_MELODY : MEASURES_PER_PDF_PAGE;
   const chunks: Score[] = [];
-  for (let start = 0; start < score.measures.length; start += MEASURES_PER_PDF_PAGE) {
-    const end = Math.min(start + MEASURES_PER_PDF_PAGE, score.measures.length);
+  for (let start = 0; start < score.measures.length; start += perPage) {
+    const end = Math.min(start + perPage, score.measures.length);
     const measures = score.measures.slice(start, end);
     const lineBreaks = score.lineBreaks.filter((b) => b >= start && b < end - 1).map((b) => b - start);
     chunks.push({ ...score, measures, lineBreaks });
@@ -342,7 +344,9 @@ function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: 
  * Renders the score to a PDF and saves it through the same native "Save As"
  * dialog as JSON — falling back to a plain download where the File System
  * Access API isn't available. Long scores are split one page per 16
- * measures (see MEASURES_PER_PDF_PAGE), each its own single A4 page.
+ * measures (12 in 멜로디+가사 mode — see MEASURES_PER_PDF_PAGE/
+ * MEASURES_PER_PDF_PAGE_MELODY), each its own single A4 page. Every page
+ * gets a centered "-N-" page number at the bottom.
  */
 export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
   const pages = chunkScoreForPdf(trimTrailingBlankMeasures(score));
@@ -353,6 +357,9 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
     if (i > 0) doc.addPage();
     const { dataUrl, width, height } = await renderScoreToPng(pages[i]);
     drawPngFitToA4Page(doc, dataUrl, width, height);
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`- ${i + 1} -`, A4_WIDTH_PT / 2, A4_HEIGHT_PT - PDF_MARGIN_PT / 2, { align: 'center' });
   }
 
   const blob = doc.output('blob');

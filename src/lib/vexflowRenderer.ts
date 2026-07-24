@@ -300,11 +300,17 @@ const REST_WEIGHT = 0.35;
  * out of vertical alignment even though they share the same real beat. A
  * time span only counts as "silent" (and gets compressed by REST_WEIGHT)
  * when EVERY given voice is resting (or has nothing written) there — real
- * content in even ONE voice keeps that span at full width. The mapping only
- * extends to the furthest actual content across all voices (not necessarily
- * the full measure capacity), so a partially-written measure's notes
- * stretch across the whole available area instead of being confined to a
- * fraction of it with blank space left for beats nobody has written yet.
+ * content in even ONE voice keeps that span at full width. `total` (the
+ * denominator every note's own weight gets divided by) is pinned to the
+ * weight AT THE LATEST ONSET across every voice — not the weight at the end
+ * of the latest-ending note — so the very last note (whichever voice it's
+ * in, whatever its own duration) always lands exactly at the right edge of
+ * the note area, instead of leaving a trailing gap sized to its own
+ * duration before the barline (#231). Every earlier note's position is
+ * still proportional within that same total, so this also naturally
+ * stretches a partially-written measure's notes across the whole available
+ * area instead of confining them to a fraction of it with blank space left
+ * for beats nobody has written yet.
  */
 function buildBeatWeightMap(voices: NoteEvent[][]): { weightAt: (beat: number) => number; total: number } {
   interface Span {
@@ -361,7 +367,9 @@ function buildBeatWeightMap(voices: NoteEvent[][]): { weightAt: (beat: number) =
     return cumAt[lo] + t * (cumAt[lo + 1] - cumAt[lo]);
   };
 
-  return { weightAt, total: cumAt[cumAt.length - 1] ?? 0 };
+  const lastOnset = spansPerVoice.reduce((max, spans) => spans.reduce((m, s) => Math.max(m, s.start), max), 0);
+
+  return { weightAt, total: weightAt(lastOnset) };
 }
 
 const FIRST_MEASURE_WIDTH = 300;
@@ -463,11 +471,28 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
   const weightSum = weights.reduce((sum, w) => sum + w, 0);
   if (weightSum <= 0) return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w));
 
-  const remaining = targetRowWidth - partialWidth;
+  // The row-start slot alone reserves extra fixed width for the clef/key/
+  // time-signature glyphs at the start of a staff line (see the measureWidth
+  // - (isRowStart ? 108 : 28) split used when formatting notes) — its own
+  // FIRST_MEASURE_WIDTH is bigger than MEASURE_WIDTH by (108-28) for exactly
+  // this reason. Splitting the row's width purely by content weight ignores
+  // that gap: two measures with IDENTICAL content would get identical raw
+  // widths, leaving the row-start slot with meaningfully LESS actual note
+  // room once its bigger glyph reservation is subtracted out — exactly the
+  // "first measure looks cramped even though 2nd/3rd have room" bug (#231).
+  // Carve this fixed overhead off the top for the row-start slot (when it
+  // isn't already the specially-sized partial slot) before splitting what's
+  // left by content weight, then add it back on — so equal-content measures
+  // still end up with equal USABLE note area, and denser ones still get
+  // proportionally more on top of that shared baseline.
+  const FIRST_SLOT_OVERHEAD = FIRST_MEASURE_WIDTH - MEASURE_WIDTH;
+  const firstSlotOverhead = partialLocalIndex === 0 ? 0 : FIRST_SLOT_OVERHEAD;
+  const remaining = targetRowWidth - partialWidth - firstSlotOverhead;
   return row.map((_, i) => {
     if (i === partialLocalIndex) return partialWidth;
     const minWidth = i === 0 ? 150 : 90;
-    return Math.max(minWidth, remaining * (weights[i] / weightSum));
+    const overhead = i === 0 ? firstSlotOverhead : 0;
+    return Math.max(minWidth, overhead + remaining * (weights[i] / weightSum));
   });
 }
 
