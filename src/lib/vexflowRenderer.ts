@@ -1343,37 +1343,61 @@ export function renderScore(
           // landing to the RIGHT of the host that moved past it. Applied to
           // the grace note's own xShift below (in addition to GRACE_NUDGE_PX).
           const hostShiftDeltas: number[] = staveNotes.map(() => 0);
-          if (!full) {
-            staveNotes.forEach((sn, i) => {
-              const fx = notes[i].x;
-              if (fx === undefined) return;
-              const target = noteStartX + clamp01(fx) * noteAreaWidth;
-              const shift = target - sn.getAbsoluteX();
-              sn.setXShift(shift);
-              centerXs[i] = target;
-              hostShiftDeltas[i] = shift;
-            });
-          } else if (!measureHasGrace) {
-            // VexFlow's joinVoices().format() still drives modifier/accidental
-            // collision avoidance (why we keep calling it above), but its own
-            // spacing between tick contexts is NOT simply proportional to
-            // duration: a beat shared with the OTHER clef's longer note (e.g.
-            // a bass quarter note landing under every other treble eighth)
-            // gets pulled much wider than a beat that isn't, producing a
-            // visibly uneven "zigzag" spacing pattern — most noticeable in
-            // the bass clef, whose own notes are otherwise all equal
-            // duration and should read as evenly spaced (see #224). Override
-            // with a strictly beat-proportional X instead: every note's
-            // position is purely its cumulative beat offset divided by the
-            // measure's total beat capacity, scaled across the note area.
-            // Both staves share the same noteStartX/noteAreaWidth (pinned
-            // above via sharedNoteStartX), so this also keeps same-beat
-            // notes in each clef vertically aligned, same as joinVoices did.
-            // Skipped whenever this measure has a grace note anywhere (see
-            // measureHasGrace) — see the comment there for why.
+          if (measureHasGrace) {
+            // Measures with a grace note anywhere keep the OLD behavior
+            // (manual free-X drag honored, otherwise VexFlow's own natural
+            // position left untouched) instead of the beat-proportional
+            // override below: a GraceNoteGroup's position is computed once,
+            // relative to its host's PRE-override tick-context X, during the
+            // initial joinVoices format() call above — pushing its host note
+            // any further than a small nudge (see GRACE_NUDGE_PX) leaves the
+            // grace note behind at its old spot, even detached to the RIGHT
+            // of a host that moved past it (confirmed empirically: even
+            // re-applying the exact same shift to the grace note's own
+            // xShift afterward did not track a large host move — VexFlow
+            // silently ignores/clamps it, unlike the small fixed nudge which
+            // does work). Correct grand-staff alignment for a grace-bearing
+            // note (#220) is worth more than perfectly even spacing here.
+            if (!full) {
+              staveNotes.forEach((sn, i) => {
+                const fx = notes[i].x;
+                if (fx === undefined) return;
+                const target = noteStartX + clamp01(fx) * noteAreaWidth;
+                const shift = target - sn.getAbsoluteX();
+                sn.setXShift(shift);
+                centerXs[i] = target;
+                hostShiftDeltas[i] = shift;
+              });
+            }
+          } else {
+            // VexFlow's own formatted/joinVoices spacing is NOT proportional
+            // to duration in either the full-measure case (see #224 — a beat
+            // shared with the other clef's longer note gets pulled much
+            // wider than one that isn't, a visibly uneven "zigzag") or the
+            // partial-measure case (a short run like a single triplet gets
+            // spread across most of the available width instead of just the
+            // sliver its own beats actually cover, since VexFlow's formatter
+            // has no idea how many beats are still left unwritten in the
+            // measure). Override with a strictly beat-proportional X
+            // instead: every note's position is purely its cumulative beat
+            // offset divided by the measure's total beat CAPACITY (not just
+            // the beats actually written), scaled across the note area — a
+            // half-empty measure now visually leaves its unwritten back half
+            // blank instead of stretching what IS written to fill it, and
+            // notes never have to jump position later just because the
+            // measure became full. A note the user has explicitly dragged
+            // (free-X, only possible while the measure isn't full — see
+            // notes[i].x) keeps that manual position instead. Both staves
+            // share the same noteStartX/noteAreaWidth (pinned above via
+            // sharedNoteStartX), so this also keeps same-beat notes in each
+            // clef vertically aligned, same as joinVoices did.
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
-              const target = noteStartX + clamp01(capacity > 0 ? cumBeat / capacity : 0) * noteAreaWidth;
+              const fx = !full ? notes[i].x : undefined;
+              const target =
+                fx !== undefined
+                  ? noteStartX + clamp01(fx) * noteAreaWidth
+                  : noteStartX + clamp01(capacity > 0 ? cumBeat / capacity : 0) * noteAreaWidth;
               const shift = target - sn.getAbsoluteX();
               sn.setXShift(shift);
               centerXs[i] = target;
