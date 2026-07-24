@@ -289,6 +289,14 @@ function clamp01(value: number): number {
  * short notes) just crowds the actual notes for no benefit (see #230). */
 const REST_WEIGHT = 0.35;
 
+/** A small fixed gap (px) reserved after the very last note's onset in the
+ * beat-weighted layout below — without it, the last note (see
+ * buildBeatWeightMap's `total`) lands flush against the note area's right
+ * edge, right up against the barline with zero breathing room (see #231's
+ * "no trailing gap" fix). A tiny bit of space there reads more natural, the
+ * same way real engraving never sits a notehead exactly on the barline. */
+const TRAILING_GAP_PX = 8;
+
 /**
  * Builds a shared raw-beat → cumulative-"visual weight" mapping for one
  * measure, merging every voice given (e.g. [trebleNotes, bassNotes] for the
@@ -1258,10 +1266,12 @@ export function renderScore(
             // (stretched across the whole written content, with rests
             // compressed) instead of VexFlow's own uneven tick-context widths.
             const melodyMap = buildBeatWeightMap([melodyNotes]);
+            const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - TRAILING_GAP_PX);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
               const desiredX =
-                melodyNoteStartX + clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyNoteAreaWidth;
+                melodyNoteStartX +
+                clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyWeightedAreaWidth;
               sn.setXShift(desiredX - sn.getAbsoluteX());
               melodyCenterXs[i] = desiredX;
               melodyCumBeat += noteBeats(melodyNotes[i]);
@@ -1551,6 +1561,7 @@ export function renderScore(
             // #230). A note the user has explicitly dragged (free-X, only
             // possible while the measure isn't full — see notes[i].x) keeps
             // that manual position instead.
+            const weightedAreaWidth = Math.max(0, noteAreaWidth - TRAILING_GAP_PX);
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
               const fx = !full ? notes[i].x : undefined;
@@ -1558,7 +1569,7 @@ export function renderScore(
                 fx !== undefined
                   ? noteStartX + clamp01(fx) * noteAreaWidth
                   : noteStartX +
-                    clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * noteAreaWidth;
+                    clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * weightedAreaWidth;
               const shift = target - sn.getAbsoluteX();
               sn.setXShift(shift);
               centerXs[i] = target;
