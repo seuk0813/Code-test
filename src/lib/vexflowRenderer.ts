@@ -282,6 +282,88 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+/** How much less horizontal room a rest gets relative to an actual sounding
+ * note of the same duration, in the beat-weighted layout below — a rest is
+ * empty time and doesn't need visual room for readability, so giving it its
+ * full duration-proportional share (like a long rest sitting between two
+ * short notes) just crowds the actual notes for no benefit (see #230). */
+const REST_WEIGHT = 0.35;
+
+/**
+ * Builds a shared raw-beat → cumulative-"visual weight" mapping for one
+ * measure, merging every voice given (e.g. [trebleNotes, bassNotes] for the
+ * grand staff, or just [melodyNotes] alone) so all of them consult the
+ * IDENTICAL mapping when positioning their own notes — required for
+ * grand-staff alignment (#220): if each clef discounted its OWN rests
+ * independently, a bass note sounding while the treble rests (or vice versa)
+ * would land at a different weighted position between clefs, throwing them
+ * out of vertical alignment even though they share the same real beat. A
+ * time span only counts as "silent" (and gets compressed by REST_WEIGHT)
+ * when EVERY given voice is resting (or has nothing written) there — real
+ * content in even ONE voice keeps that span at full width. The mapping only
+ * extends to the furthest actual content across all voices (not necessarily
+ * the full measure capacity), so a partially-written measure's notes
+ * stretch across the whole available area instead of being confined to a
+ * fraction of it with blank space left for beats nobody has written yet.
+ */
+function buildBeatWeightMap(voices: NoteEvent[][]): { weightAt: (beat: number) => number; total: number } {
+  interface Span {
+    start: number;
+    end: number;
+    isRest: boolean;
+  }
+  const spansPerVoice: Span[][] = voices.map((notes) => {
+    const spans: Span[] = [];
+    let beat = 0;
+    for (const n of notes) {
+      const beats = noteBeats(n);
+      spans.push({ start: beat, end: beat + beats, isRest: n.isRest || n.pitches.length === 0 });
+      beat += beats;
+    }
+    return spans;
+  });
+
+  const boundariesSet = new Set<number>([0]);
+  spansPerVoice.forEach((spans) => spans.forEach((s) => {
+    boundariesSet.add(s.start);
+    boundariesSet.add(s.end);
+  }));
+  const boundaries = Array.from(boundariesSet).sort((a, b) => a - b);
+
+  const isSilentAt = (b0: number, b1: number): boolean => {
+    const mid = (b0 + b1) / 2;
+    return spansPerVoice.every((spans) => {
+      const covering = spans.find((s) => mid >= s.start && mid < s.end);
+      return !covering || covering.isRest;
+    });
+  };
+
+  const cumAt: number[] = [0];
+  for (let i = 1; i < boundaries.length; i++) {
+    const b0 = boundaries[i - 1];
+    const b1 = boundaries[i];
+    const silent = isSilentAt(b0, b1);
+    cumAt.push(cumAt[i - 1] + (b1 - b0) * (silent ? REST_WEIGHT : 1));
+  }
+
+  const weightAt = (beat: number): number => {
+    // A note's own onset beat is, by construction, always one of the
+    // boundaries above (every voice's own onsets were added to the set) —
+    // the interpolation fallback only matters for an off-boundary query.
+    const idx = boundaries.findIndex((b) => Math.abs(b - beat) < 1e-6);
+    if (idx !== -1) return cumAt[idx];
+    let lo = 0;
+    while (lo < boundaries.length - 1 && boundaries[lo + 1] <= beat) lo++;
+    if (lo >= boundaries.length - 1) return cumAt[cumAt.length - 1] ?? 0;
+    const b0 = boundaries[lo];
+    const b1 = boundaries[lo + 1];
+    const t = b1 > b0 ? (beat - b0) / (b1 - b0) : 0;
+    return cumAt[lo] + t * (cumAt[lo + 1] - cumAt[lo]);
+  };
+
+  return { weightAt, total: cumAt[cumAt.length - 1] ?? 0 };
+}
+
 const FIRST_MEASURE_WIDTH = 300;
 const MEASURE_WIDTH = 220;
 
@@ -1079,6 +1161,11 @@ export function renderScore(
       // skip that override entirely and keep VexFlow's own joinVoices
       // layout, which already keeps a grace note correctly glued to its host.
       const measureHasGrace = (['treble', 'bass'] as Clef[]).some((c) => measure[c].notes.some((n) => !!n.graceNote));
+      // Shared by BOTH clefs' beat-weighted positioning below (see
+      // buildBeatWeightMap) so a treble note and a simultaneous bass note
+      // land at the identical X regardless of how many rests either clef
+      // has elsewhere in the measure.
+      const grandStaffBeatMap = buildBeatWeightMap([measure.treble.notes, measure.bass.notes]);
       const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
@@ -1141,12 +1228,15 @@ export function renderScore(
               melodyCenterXs[i] = desiredX;
             });
           } else {
-            // Same beat-proportional override as the treble/bass staves
-            // below (see #224) — keeps note spacing even/proportional to
-            // duration instead of VexFlow's own uneven tick-context widths.
+            // Same beat-weighted override as the treble/bass staves below
+            // (see #224, #230) — keeps note spacing proportional to duration
+            // (stretched across the whole written content, with rests
+            // compressed) instead of VexFlow's own uneven tick-context widths.
+            const melodyMap = buildBeatWeightMap([melodyNotes]);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
-              const desiredX = melodyNoteStartX + clamp01(capacity > 0 ? melodyCumBeat / capacity : 0) * melodyNoteAreaWidth;
+              const desiredX =
+                melodyNoteStartX + clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyNoteAreaWidth;
               sn.setXShift(desiredX - sn.getAbsoluteX());
               melodyCenterXs[i] = desiredX;
               melodyCumBeat += noteBeats(melodyNotes[i]);
@@ -1421,33 +1511,29 @@ export function renderScore(
             }
           } else {
             // VexFlow's own formatted/joinVoices spacing is NOT proportional
-            // to duration in either the full-measure case (see #224 — a beat
-            // shared with the other clef's longer note gets pulled much
-            // wider than one that isn't, a visibly uneven "zigzag") or the
-            // partial-measure case (a short run like a single triplet gets
-            // spread across most of the available width instead of just the
-            // sliver its own beats actually cover, since VexFlow's formatter
-            // has no idea how many beats are still left unwritten in the
-            // measure). Override with a strictly beat-proportional X
-            // instead: every note's position is purely its cumulative beat
-            // offset divided by the measure's total beat CAPACITY (not just
-            // the beats actually written), scaled across the note area — a
-            // half-empty measure now visually leaves its unwritten back half
-            // blank instead of stretching what IS written to fill it, and
-            // notes never have to jump position later just because the
-            // measure became full. A note the user has explicitly dragged
-            // (free-X, only possible while the measure isn't full — see
-            // notes[i].x) keeps that manual position instead. Both staves
-            // share the same noteStartX/noteAreaWidth (pinned above via
-            // sharedNoteStartX), so this also keeps same-beat notes in each
-            // clef vertically aligned, same as joinVoices did.
+            // to duration (see #224 — a beat shared with the other clef's
+            // longer note gets pulled much wider than one that isn't, a
+            // visibly uneven "zigzag"). Override with a beat-weighted X
+            // instead, using the SAME shared map both clefs consult (see
+            // grandStaffBeatMap/buildBeatWeightMap) so a treble note and a
+            // simultaneous bass note still land at the identical X. The map
+            // only spans the furthest content written in EITHER clef (not
+            // necessarily the full measure capacity), so a partially-written
+            // measure's notes stretch across the whole available width
+            // instead of being confined to a fraction of it — and rests are
+            // compressed relative to real notes (see REST_WEIGHT) so a long
+            // rest sitting between two short notes doesn't crowd them (see
+            // #230). A note the user has explicitly dragged (free-X, only
+            // possible while the measure isn't full — see notes[i].x) keeps
+            // that manual position instead.
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
               const fx = !full ? notes[i].x : undefined;
               const target =
                 fx !== undefined
                   ? noteStartX + clamp01(fx) * noteAreaWidth
-                  : noteStartX + clamp01(capacity > 0 ? cumBeat / capacity : 0) * noteAreaWidth;
+                  : noteStartX +
+                    clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * noteAreaWidth;
               const shift = target - sn.getAbsoluteX();
               sn.setXShift(shift);
               centerXs[i] = target;
