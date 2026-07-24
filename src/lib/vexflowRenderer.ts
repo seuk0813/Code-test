@@ -15,7 +15,7 @@ import {
   Tuplet,
   Voice,
 } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score, TimeSignature } from '../types/score';
 import {
   chordLabel,
   computeScaleDegreeLabels,
@@ -293,18 +293,56 @@ function measureSlotXRange(indexInRow: number): { x0: number; x1: number } {
   return { x0: x, x1: x + w };
 }
 
+// A note's contribution to how much horizontal room its measure "wants" —
+// see measureContentWeight. NOTE_WIDTH_MIN is a fixed floor per note (room
+// for its head/accidental/flag regardless of how short the note is);
+// NOTE_WIDTH_PER_BEAT scales with the SQUARE ROOT of the note's own beat
+// duration (diminishing returns, not linear — a whole note shouldn't get 16x
+// the width of a 16th note just because it's 16x as long, but it should get
+// noticeably more than an equal-count run of short notes).
+const NOTE_WIDTH_MIN = 15;
+const NOTE_WIDTH_PER_BEAT = 26;
+
+/** How much horizontal room a measure's own note content wants, independent
+ * of the fixed per-slot base width — feeds computeRowMeasureWidths' weighted
+ * redistribution below. A dense passage (many notes and/or short durations —
+ * most commonly a busy bass-clef 16th-note run) needs meaningfully more room
+ * per note than a sparse one just to keep noteheads/accidentals/chord
+ * labels from crowding together, even when both measures nominally span the
+ * same number of beats. Real engraving gives measures unequal width for
+ * exactly this reason, instead of clamping every measure in a row to one
+ * fixed size regardless of what's actually written in it. Takes the denser
+ * of the two clefs, since they share one measure width. */
+function measureContentWeight(measure: Measure, timeSignature: TimeSignature): number {
+  const perClef = (notes: NoteEvent[]) =>
+    notes.reduce((sum, n) => sum + NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT * Math.sqrt(Math.max(noteBeats(n), 0.01)), 0);
+  const treble = perClef(measure.treble.notes);
+  const bass = perClef(measure.bass.notes);
+  // A measure with little or no content yet (still being composed, or
+  // deliberately spare) still needs a sane baseline width — as if it held
+  // one beat-long note per beat of its own capacity — so it doesn't
+  // collapse down to almost nothing next to a dense neighbor.
+  const baseline = measureCapacityBeats(timeSignature) * (NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT);
+  return Math.max(treble, bass, baseline);
+}
+
 /**
- * Per-slot widths for one row. Normally each slot just uses its fixed base
- * width. But a row holding the pickup or trailing partial measure needs that
- * one slot narrower (proportional to its own beat fraction, not a full
- * measure's worth) — with the freed width redistributed across the row's
- * OTHER measures so they stay evenly sized, whatever their own count.
- * Applies regardless of how many measures the row happens to hold: a row
- * squeezed to MEASURES_PER_ROW + 1 slots (the pickup/trailing measure plus a
- * full normal row) targets the SAME total width as any other full row, so it
- * doesn't stick out past the normal right edge; a shorter row (fewer total
- * measures in the piece) just keeps its own natural total width instead of
- * being artificially stretched to match a full row.
+ * Per-slot widths for one row. Each non-partial slot's share of the row's
+ * total target width is weighted by its own measure's note content (see
+ * measureContentWeight), instead of every slot simply getting the same
+ * fixed base width — so a measure with a dense passage gets noticeably more
+ * room than a sparse neighbor in the same row (see #229). A row holding the
+ * pickup or trailing partial measure still needs that one slot sized
+ * proportional to its own beat fraction (not content-weighted like a normal
+ * measure, since its width represents "how much of a full measure this
+ * covers"), with the freed width folded into the weighted redistribution
+ * across the row's other measures. Applies regardless of how many measures
+ * the row happens to hold: a row squeezed to MEASURES_PER_ROW + 1 slots (the
+ * pickup/trailing measure plus a full normal row) targets the SAME total
+ * width as any other full row, so it doesn't stick out past the normal right
+ * edge; a shorter row (fewer total measures in the piece) just keeps its own
+ * natural total width instead of being artificially stretched to match a
+ * full row.
  */
 function computeRowMeasureWidths(row: number[], score: Score, capacity: number): number[] {
   const baseWidths = row.map((_, localIndex) => (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH));
@@ -317,26 +355,38 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
     }
     return false;
   });
-  if (partialLocalIndex === -1) return baseWidths;
-
-  const partialBeats = partialLocalIndex === 0 ? score.pickupBeats! : score.trailingBeats!;
-  const fraction = Math.max(0, Math.min(1, partialBeats / capacity));
-  const partialBase = baseWidths[partialLocalIndex];
-  // The pickup slot (local index 0) still needs room for the clef/key/time
-  // signature glyphs even when very short, so it gets a taller floor than a
-  // trailing slot (which only needs room for a note or two).
-  const minWidth = partialLocalIndex === 0 ? 150 : 90;
-  const partialWidth = Math.max(partialBase * fraction, minWidth);
-
-  const otherBaseSum = baseWidths.reduce((sum, w, i) => (i === partialLocalIndex ? sum : sum + w), 0);
-  if (otherBaseSum <= 0) return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w));
 
   const naturalTotal = baseWidths.reduce((sum, w) => sum + w, 0);
   const targetRowWidth =
     row.length > MEASURES_PER_ROW ? FIRST_MEASURE_WIDTH + (MEASURES_PER_ROW - 1) * MEASURE_WIDTH : naturalTotal;
-  const remaining = targetRowWidth - partialWidth;
 
-  return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w * (remaining / otherBaseSum)));
+  let partialWidth = 0;
+  if (partialLocalIndex !== -1) {
+    const partialBeats = partialLocalIndex === 0 ? score.pickupBeats! : score.trailingBeats!;
+    const fraction = Math.max(0, Math.min(1, partialBeats / capacity));
+    const partialBase = baseWidths[partialLocalIndex];
+    // The pickup slot (local index 0) still needs room for the clef/key/time
+    // signature glyphs even when very short, so it gets a taller floor than a
+    // trailing slot (which only needs room for a note or two).
+    const minWidth = partialLocalIndex === 0 ? 150 : 90;
+    partialWidth = Math.max(partialBase * fraction, minWidth);
+  }
+
+  const weights = row.map((measureIndex, localIndex) => {
+    if (localIndex === partialLocalIndex) return 0;
+    const measure = score.measures[measureIndex];
+    const timeSignature = measureTimeSignature(score, measureIndex);
+    return measure ? measureContentWeight(measure, timeSignature) : measureCapacityBeats(timeSignature) * (NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT);
+  });
+  const weightSum = weights.reduce((sum, w) => sum + w, 0);
+  if (weightSum <= 0) return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w));
+
+  const remaining = targetRowWidth - partialWidth;
+  return row.map((_, i) => {
+    if (i === partialLocalIndex) return partialWidth;
+    const minWidth = i === 0 ? 150 : 90;
+    return Math.max(minWidth, remaining * (weights[i] / weightSum));
+  });
 }
 
 const ROW_HEIGHT = 320;
