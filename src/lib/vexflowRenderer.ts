@@ -611,6 +611,10 @@ export interface DegreeMarkHitbox {
   pitchIndex: number;
   x: number;
   y: number;
+  /** The currently-displayed degree text (e.g. "b5", "b13") — lets a click
+   * handler offer a same-slot alternate spelling (see alternateDegreeSpelling
+   * in scoreUtils.ts) without having to recompute the label itself. */
+  text: string;
 }
 
 /** Click target for a visual-only rest mark (see RestMark / #187). */
@@ -1703,7 +1707,7 @@ export function renderScore(
                     !!isSelected &&
                     (selectedPitchIndexForClef === null || note.pitches.length === 1 || pitchIndex === selectedPitchIndexForClef);
                   degreeMarks.push({ x: markX, y: markY, text: degreeText, selected: markSelected });
-                  degreeMarkHitboxes.push({ measureIndex, clef, noteIndex, pitchIndex, x: markX, y: markY });
+                  degreeMarkHitboxes.push({ measureIndex, clef, noteIndex, pitchIndex, x: markX, y: markY, text: degreeText });
                 }
               });
 

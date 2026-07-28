@@ -28,6 +28,7 @@ import {
   type StaffHitbox,
 } from '../lib/vexflowRenderer';
 import {
+  alternateDegreeSpelling,
   chordLabel,
   cycleDurationLonger,
   cycleDurationShorter,
@@ -40,6 +41,7 @@ import {
   measureTimeSignature,
   noteBeats,
   pitchToLine,
+  scaleDegreeKey,
   stemPointsUp,
   topPitchIndex,
 } from '../lib/scoreUtils';
@@ -121,6 +123,8 @@ interface StaffEditorProps {
   onSelectRestMark: (location: { measureIndex: number; restMarkId: string } | null) => void;
   /** 도수 입력 모드 (see App): dims everything except the (enlarged) scale-degree marks. */
   degreeInputMode: boolean;
+  /** Sets a per-note manual scale-degree label override (see setManualScaleDegreeLabel) — used when the user confirms switching a degree mark to its alternate spelling (e.g. b5 → #11). */
+  onSetManualScaleDegree: (key: string, text: string) => void;
   /** Drag one of the selected mark's 4 corner handles to change its on-screen visual size (RestMark.scale). */
   onResizeRestMarkScale: (measureIndex: number, restMarkId: string, scale: number) => void;
   /** Drag the mark's own glyph to reposition it elsewhere on the score. */
@@ -331,6 +335,7 @@ function StaffEditorInner({
   onResizeRestMarkScale,
   onMoveRestMark,
   degreeInputMode,
+  onSetManualScaleDegree,
   onMoveNote,
   onMergeNoteIntoChord,
   onTogglePitch,
@@ -2158,6 +2163,13 @@ function StaffEditorInner({
     if (degreeInputMode) {
       const degreeHit = findDegreeMarkAt(result, point.x, point.y);
       if (degreeHit) {
+        const alt = alternateDegreeSpelling(degreeHit.text);
+        if (alt && window.confirm(`이 음을 ${alt}(으)로 표시할까요?`)) {
+          onSetManualScaleDegree(
+            scaleDegreeKey(degreeHit.clef, degreeHit.measureIndex, degreeHit.noteIndex, degreeHit.pitchIndex),
+            alt,
+          );
+        }
         onSelectGrace(null);
         onSelectNote({ measureIndex: degreeHit.measureIndex, clef: degreeHit.clef, noteIndex: degreeHit.noteIndex }, degreeHit.pitchIndex);
         suppressClickRef.current = true;

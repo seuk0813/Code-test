@@ -1478,6 +1478,11 @@ function App() {
     setScore((prev) => removeChordFromScore(prev, measureIndex, chordId));
   }, [setScore]);
 
+  const handleSetManualScaleDegree = useCallback(
+    (key: string, text: string) => setScore((prev) => setManualScaleDegreeLabel(prev, key, text)),
+    [setScore],
+  );
+
   const handleAddLyricAt = useCallback((measureIndex: number, text: string, offset: number) => {
     setScore((prev) => addLyricsToScoreAt(prev, measureIndex, text, offset));
   }, [setScore]);
@@ -1782,6 +1787,7 @@ function App() {
         onResizeRestMarkScale={handleResizeRestMarkScale}
         onMoveRestMark={handleMoveRestMark}
         degreeInputMode={degreeInputMode}
+        onSetManualScaleDegree={handleSetManualScaleDegree}
         onDeselectNote={handleDeselectNote}
         onSetTitle={handleSetTitle}
         onSetComposer={handleSetComposer}

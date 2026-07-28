@@ -164,6 +164,19 @@ export const SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = [
   '13',
   'dim7',
 ];
+
+/** Same-semitone alternate spelling for a degree label that already has one
+ * (see DEGREE_TABLE — 'b5'/'#11' and '#5'/'b13' are two lead-sheet readings
+ * of the identical pitch). Used to offer "이 음을 #11로 표시할까요?"-style
+ * confirmation when the user clicks a degree mark showing one of these
+ * texts, letting that ONE note switch to the other spelling via a manual
+ * override (see setManualScaleDegreeLabel) without touching the score-wide
+ * checkbox. `null` for any text with no such alternate. */
+export function alternateDegreeSpelling(text: string): string | null {
+  const alternates: Record<string, string> = { b5: '#11', '#11': 'b5', '#5': 'b13', b13: '#5' };
+  return alternates[text] ?? null;
+}
+
 /** Checked by default when 표기 is first turned on — the plain diatonic 7, no altered/extended tones. */
 export const DEFAULT_SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = ['1', '2', '3', '4', '5', '6', '7'];
 
