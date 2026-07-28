@@ -22,8 +22,14 @@ const SCALE_DEGREE_LABEL_TEXT: Record<ScaleDegreeLabel, string> = {
   '6': '6음',
   '7': '7음',
   b9: 'b9',
+  '9': '9',
+  '#9': '#9',
+  '11': '11',
   b5: 'b5',
+  '#11': '#11',
   '#5': '#5',
+  b13: 'b13',
+  '13': '13',
   dim7: '디미니시7',
 };
 

@@ -145,7 +145,25 @@ export function measureStartBeat(score: Score, measureIndex: number): number {
 }
 
 /** Every selectable scale-degree label (see ScaleDegreeLabel) — the checkbox list's full contents. */
-export const SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = ['1', '2', '3', '4', '5', '6', '7', 'b9', 'b5', '#5', 'dim7'];
+export const SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = [
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  'b9',
+  '9',
+  '#9',
+  '11',
+  'b5',
+  '#11',
+  '#5',
+  'b13',
+  '13',
+  'dim7',
+];
 /** Checked by default when 표기 is first turned on — the plain diatonic 7, no altered/extended tones. */
 export const DEFAULT_SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = ['1', '2', '3', '4', '5', '6', '7'];
 
@@ -156,21 +174,44 @@ function pitchClass(letter: Pitch['letter'], accidental: Accidental): number {
   return (((LETTER_PITCH_CLASS[letter] + shift) % 12) + 12) % 12;
 }
 
-/** Semitones-from-root → { checkbox key, display text } — see ScaleDegreeLabel's
- * doc comment for why '3'/'7' cover two semitones each and 'dim7'/'6' share one. */
-const DEGREE_TABLE: Record<number, { key: ScaleDegreeLabel; text: string }> = {
-  0: { key: '1', text: '1' },
-  1: { key: 'b9', text: 'b9' },
-  2: { key: '2', text: '2' },
-  3: { key: '3', text: 'b3' },
-  4: { key: '3', text: '3' },
-  5: { key: '4', text: '4' },
-  6: { key: 'b5', text: 'b5' },
-  7: { key: '5', text: '5' },
-  8: { key: '#5', text: '#5' },
-  9: { key: '6', text: '6' },
-  10: { key: '7', text: '7' },
-  11: { key: '7', text: '△7' },
+/** Semitones-from-root → candidate { checkbox key, display text } pairs, in
+ * preference order — see ScaleDegreeLabel's doc comment for why '3'/'7'
+ * cover two semitones each, 'dim7'/'6' share one, and several semitones
+ * carry BOTH a plain triad-tone spelling and an extended/altered-tension
+ * spelling (e.g. semitone 6 is either 'b5' or '#11' — same pitch, different
+ * lead-sheet reading). The first candidate whose key is in `enabledLabels`
+ * wins; a semitone with no matching enabled candidate shows nothing. */
+const DEGREE_TABLE: Record<number, { key: ScaleDegreeLabel; text: string }[]> = {
+  0: [{ key: '1', text: '1' }],
+  1: [{ key: 'b9', text: 'b9' }],
+  2: [
+    { key: '2', text: '2' },
+    { key: '9', text: '9' },
+  ],
+  3: [
+    { key: '3', text: 'b3' },
+    { key: '#9', text: '#9' },
+  ],
+  4: [{ key: '3', text: '3' }],
+  5: [
+    { key: '4', text: '4' },
+    { key: '11', text: '11' },
+  ],
+  6: [
+    { key: 'b5', text: 'b5' },
+    { key: '#11', text: '#11' },
+  ],
+  7: [{ key: '5', text: '5' }],
+  8: [
+    { key: '#5', text: '#5' },
+    { key: 'b13', text: 'b13' },
+  ],
+  9: [
+    { key: '6', text: '6' },
+    { key: '13', text: '13' },
+  ],
+  10: [{ key: '7', text: '7' }],
+  11: [{ key: '7', text: '△7' }],
 };
 
 /** The scale-degree label text for `pitch` against a chord rooted at
@@ -195,12 +236,10 @@ export function scaleDegreeFor(
 ): string | null {
   const soundingAccidental = pitch.accidental !== '' ? pitch.accidental : keySignatureAccidentalFor(pitch.letter, keySignature);
   const semitone = (pitchClass(pitch.letter, soundingAccidental) - pitchClass(chordRoot, chordRootAccidental) + 12) % 12;
-  if (semitone === 9) {
-    if (enabledLabels.includes('dim7')) return 'dim7';
-    return enabledLabels.includes('6') ? '6' : null;
-  }
-  const entry = DEGREE_TABLE[semitone];
-  return entry && enabledLabels.includes(entry.key) ? entry.text : null;
+  if (semitone === 9 && enabledLabels.includes('dim7')) return 'dim7';
+  const candidates = DEGREE_TABLE[semitone];
+  const match = candidates?.find((c) => enabledLabels.includes(c.key));
+  return match ? match.text : null;
 }
 
 /** Every chord symbol in the score, in playing order, with its absolute beat

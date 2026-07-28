@@ -237,8 +237,35 @@ export interface Score {
  * scoreUtils' DEGREE_TABLE — so checking "3" or "7" covers both qualities at
  * once. 'dim7' and '6' both name the same semitone (a diminished 7th is
  * enharmonic to a major 6th); when 'dim7' is checked it takes precedence.
+ *
+ * The extended/altered tensions ('9', '#9', '11', '#11', '13', 'b13') are
+ * jazz-lead-sheet ALTERNATE SPELLINGS for a semitone that already has a
+ * plain triad-tone label — '9' is the same pitch class as '2', '#9' the same
+ * as 'b3' (part of '3'), '11' the same as '4', '#11' the same as 'b5', '13'
+ * the same as '6', and 'b13' the same as '#5'. They exist as their own
+ * checkboxes (see SCALE_DEGREE_LABELS) so a note can be labeled with
+ * whichever reading fits the context (e.g. a chord's extension vs. its
+ * altered fifth), independent of the plain-tone checkbox for that same
+ * semitone — see DEGREE_TABLE for which labels share a slot.
  */
-export type ScaleDegreeLabel = '1' | '2' | '3' | '4' | '5' | '6' | '7' | 'b5' | '#5' | 'b9' | 'dim7';
+export type ScaleDegreeLabel =
+  | '1'
+  | '2'
+  | '3'
+  | '4'
+  | '5'
+  | '6'
+  | '7'
+  | 'b5'
+  | '#5'
+  | 'b9'
+  | 'dim7'
+  | '9'
+  | '#9'
+  | '11'
+  | '#11'
+  | '13'
+  | 'b13';
 
 export interface NoteLocation {
   measureIndex: number;
