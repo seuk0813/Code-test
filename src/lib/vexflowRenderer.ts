@@ -300,13 +300,21 @@ const TRAILING_GAP_PX = 8;
 /** Mirrors TRAILING_GAP_PX at the start of the note area — without it, the
  * very FIRST note (fraction 0) sits flush against the clef/key/time glyphs
  * with zero left margin, most noticeably a lone whole note pinned right up
- * against them. Reserving a small leading gap gives it breathing room, and
- * as a side effect narrows the middle gap for exactly-two-notes-spanning-
- * the-measure cases (e.g. two half notes) — the last note's own position
- * still lands at the same spot as before (TRAILING_GAP_PX from the right
- * edge, independent of this), so only the notes BEFORE it shift right,
- * closing the gap between them by this amount (see #235). */
-const LEADING_GAP_PX = 10;
+ * against them. Reserving a leading gap gives it breathing room, and as a
+ * side effect narrows the middle gap for exactly-two-notes-spanning-the-
+ * measure cases (e.g. two half notes) — the last note's own position still
+ * lands at the same spot as before (TRAILING_GAP_PX from the right edge,
+ * independent of this), so only the notes BEFORE it shift right, closing
+ * the gap between them by this amount (see #235, #236). Scales with the
+ * measure's own note area (a fixed px value reads as barely-there on a
+ * normal-width measure but way too much on a narrow shrunk-for-sparse-
+ * content one — see #234) instead of a flat constant, capped so it doesn't
+ * eat too much of a very wide measure's area either. */
+const LEADING_GAP_FRACTION = 0.15;
+const LEADING_GAP_MAX_PX = 40;
+function leadingGapFor(noteAreaWidth: number): number {
+  return Math.min(LEADING_GAP_MAX_PX, noteAreaWidth * LEADING_GAP_FRACTION);
+}
 
 /**
  * Builds a shared raw-beat → cumulative-"visual weight" mapping for one
@@ -1318,12 +1326,13 @@ export function renderScore(
             // (stretched across the whole written content, with rests
             // compressed) instead of VexFlow's own uneven tick-context widths.
             const melodyMap = buildBeatWeightMap([melodyNotes]);
-            const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - LEADING_GAP_PX - TRAILING_GAP_PX);
+            const melodyLeadingGap = leadingGapFor(melodyNoteAreaWidth);
+            const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - melodyLeadingGap - TRAILING_GAP_PX);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
               const desiredX =
                 melodyNoteStartX +
-                LEADING_GAP_PX +
+                melodyLeadingGap +
                 clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyWeightedAreaWidth;
               sn.setXShift(desiredX - sn.getAbsoluteX());
               melodyCenterXs[i] = desiredX;
@@ -1614,7 +1623,8 @@ export function renderScore(
             // #230). A note the user has explicitly dragged (free-X, only
             // possible while the measure isn't full — see notes[i].x) keeps
             // that manual position instead.
-            const weightedAreaWidth = Math.max(0, noteAreaWidth - LEADING_GAP_PX - TRAILING_GAP_PX);
+            const leadingGap = leadingGapFor(noteAreaWidth);
+            const weightedAreaWidth = Math.max(0, noteAreaWidth - leadingGap - TRAILING_GAP_PX);
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
               const fx = !full ? notes[i].x : undefined;
@@ -1622,7 +1632,7 @@ export function renderScore(
                 fx !== undefined
                   ? noteStartX + clamp01(fx) * noteAreaWidth
                   : noteStartX +
-                    LEADING_GAP_PX +
+                    leadingGap +
                     clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * weightedAreaWidth;
               const shift = target - sn.getAbsoluteX();
               sn.setXShift(shift);
