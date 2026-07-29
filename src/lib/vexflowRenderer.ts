@@ -401,6 +401,29 @@ function measureSlotXRange(indexInRow: number): { x0: number; x1: number } {
 const NOTE_WIDTH_MIN = 15;
 const NOTE_WIDTH_PER_BEAT = 26;
 
+/** A fully-notated measure's "typical" content weight (one beat-long note
+ * per beat of its capacity) — the reference point computeRowMeasureWidths
+ * scales a sparse measure's SLOT WIDTH down against (see WRITTEN_FRACTION_FLOOR
+ * below), and the floor measureContentWeight itself falls back to. */
+function fullMeasureWeight(timeSignature: TimeSignature): number {
+  return measureCapacityBeats(timeSignature) * (NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT);
+}
+
+/** A measure with real notes in it still needs a floor below which it won't
+ * collapse (regardless of how short its own notes are) — but that floor
+ * scales with how much of the measure is actually WRITTEN (last note's own
+ * span / capacity), not the full capacity outright, down to
+ * WRITTEN_FRACTION_FLOOR (so a bare handful-of-beats measure gets a
+ * meaningfully smaller floor than a fully-notated one, instead of both
+ * claiming the exact same "typical full measure" width — see #234: a lone
+ * half-note chord sitting in an otherwise-blank 4/4 measure was rendered
+ * pinned flush-left with a huge dead gap after it, because the measure's
+ * SLOT was sized as if it were fully written even though only half of it
+ * was). A never-touched measure (0 notes) still gets the floor itself, so a
+ * mid-composition score doesn't collapse its still-empty measures to
+ * nothing next to a denser neighbor. */
+const WRITTEN_FRACTION_FLOOR = 0.4;
+
 /** How much horizontal room a measure's own note content wants, independent
  * of the fixed per-slot base width — feeds computeRowMeasureWidths' weighted
  * redistribution below. A dense passage (many notes and/or short durations —
@@ -416,11 +439,10 @@ function measureContentWeight(measure: Measure, timeSignature: TimeSignature): n
     notes.reduce((sum, n) => sum + NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT * Math.sqrt(Math.max(noteBeats(n), 0.01)), 0);
   const treble = perClef(measure.treble.notes);
   const bass = perClef(measure.bass.notes);
-  // A measure with little or no content yet (still being composed, or
-  // deliberately spare) still needs a sane baseline width — as if it held
-  // one beat-long note per beat of its own capacity — so it doesn't
-  // collapse down to almost nothing next to a dense neighbor.
-  const baseline = measureCapacityBeats(timeSignature) * (NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT);
+  const writtenBeats = (notes: NoteEvent[]) => notes.reduce((sum, n) => sum + noteBeats(n), 0);
+  const capacity = measureCapacityBeats(timeSignature);
+  const writtenFraction = Math.min(1, Math.max(writtenBeats(measure.treble.notes), writtenBeats(measure.bass.notes)) / capacity);
+  const baseline = fullMeasureWeight(timeSignature) * Math.max(writtenFraction, WRITTEN_FRACTION_FLOOR);
   return Math.max(treble, bass, baseline);
 }
 
@@ -454,7 +476,29 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
     return false;
   });
 
-  const naturalTotal = baseWidths.reduce((sum, w) => sum + w, 0);
+  const weights = row.map((measureIndex, localIndex) => {
+    if (localIndex === partialLocalIndex) return 0;
+    const measure = score.measures[measureIndex];
+    const timeSignature = measureTimeSignature(score, measureIndex);
+    return measure ? measureContentWeight(measure, timeSignature) : fullMeasureWeight(timeSignature);
+  });
+  const weightSum = weights.reduce((sum, w) => sum + w, 0);
+
+  // Each non-partial slot's natural (pre-redistribution) width scales down
+  // toward WRITTEN_FRACTION_FLOOR when its own content is sparse (see
+  // measureContentWeight) — capped at 1 so a fully (or densely) written
+  // measure keeps its traditional full slot width, unchanged from before
+  // this scaling existed. This is what actually shrinks a sparsely-notated
+  // row's TOTAL width, instead of only changing how a fixed total gets
+  // redistributed among that row's measures — redistribution alone can't
+  // fix a lone note's dead trailing gap, since it only reallocates share of
+  // a total that stayed the same size regardless of content (see #234).
+  const naturalTotal = row.reduce((sum, measureIndex, localIndex) => {
+    if (localIndex === partialLocalIndex) return sum;
+    const timeSignature = measureTimeSignature(score, measureIndex);
+    const scale = Math.min(1, weights[localIndex] / fullMeasureWeight(timeSignature));
+    return sum + baseWidths[localIndex] * scale;
+  }, 0);
   const targetRowWidth =
     row.length > MEASURES_PER_ROW ? FIRST_MEASURE_WIDTH + (MEASURES_PER_ROW - 1) * MEASURE_WIDTH : naturalTotal;
 
@@ -470,13 +514,6 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
     partialWidth = Math.max(partialBase * fraction, minWidth);
   }
 
-  const weights = row.map((measureIndex, localIndex) => {
-    if (localIndex === partialLocalIndex) return 0;
-    const measure = score.measures[measureIndex];
-    const timeSignature = measureTimeSignature(score, measureIndex);
-    return measure ? measureContentWeight(measure, timeSignature) : measureCapacityBeats(timeSignature) * (NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT);
-  });
-  const weightSum = weights.reduce((sum, w) => sum + w, 0);
   if (weightSum <= 0) return baseWidths.map((w, i) => (i === partialLocalIndex ? partialWidth : w));
 
   // The row-start slot alone reserves extra fixed width for the clef/key/
