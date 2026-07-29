@@ -1011,7 +1011,7 @@ function App() {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();
           if (e.shiftKey) handleToggleSelectedGracePosition();
-          else handleStepGraceDuration(e.key === 'ArrowLeft' ? 1 : -1);
+          else handleStepGraceDuration(e.key === 'ArrowLeft' ? -1 : 1);
           return;
         }
         if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1151,8 +1151,8 @@ function App() {
           const opened = staffEditorRef.current?.openAdjacentPreview(selected, e.key === 'ArrowRight' ? 1 : -1);
           if (opened) return;
         }
-        // Left = longer, Right = shorter.
-        handleStepDuration(e.key === 'ArrowLeft' ? 1 : -1);
+        // Left = shorter, Right = longer.
+        handleStepDuration(e.key === 'ArrowLeft' ? -1 : 1);
         return;
       }
       // Tab (a note selected, no preview open): opens a placement preview
