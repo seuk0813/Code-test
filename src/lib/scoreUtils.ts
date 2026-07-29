@@ -40,6 +40,10 @@ export const DURATION_LABELS: Record<DurationValue, string> = {
   '32': '32분음표',
 };
 
+/** Left-to-right toolbar order — also the digit-key shortcut order (1-6, see
+ * App's keydown handler), so key 'N' always matches the Nth button. */
+export const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16', '32'];
+
 /** Standard 3-in-the-time-of-2 triplet ratio — a tupleted note takes 2/3 of
  * its written duration (see NoteEvent.tuplet). Applied after the dotted
  * multiplier, matching how a dotted-and-tupleted note would actually sound. */

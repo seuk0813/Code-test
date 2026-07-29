@@ -17,6 +17,7 @@ import {
   cycleDurationLonger,
   cycleDurationShorter,
   createEmptyMeasure,
+  DURATIONS,
   createEmptyScore,
   createNote,
   editChordText,
@@ -992,6 +993,70 @@ function App() {
     setMarqueeLyrics([]);
   }, [marqueeLyrics, setScore]);
 
+  const handleEditToolChange = useCallback(
+    (patch: Partial<EditTool>) => {
+      // Clicking an accidental button while a note is selected is a one-shot
+      // edit of that note, not a persistent "pen" like duration/dotted — the
+      // toolbar resets to no-accidental right after applying it, so the next
+      // unrelated new note placed elsewhere doesn't silently inherit it too.
+      const isOneShotAccidental = !!selected && patch.accidental !== undefined;
+      // isRest is NOT force-reset here the way accidental is: while a note
+      // stays selected, editTool.isRest must keep faithfully mirroring that
+      // note's true current state (so pressing the button again correctly
+      // toggles it back) — resetting it immediately broke exactly that.
+      // The "don't leak into unrelated new notes" concern is handled
+      // separately in handleAddNote, which resets it right after a note is
+      // actually created.
+      setEditTool((prev) => ({
+        ...prev,
+        ...patch,
+        ...(isOneShotAccidental ? { accidental: '' } : {}),
+      }));
+      if (patch.accidental !== undefined) {
+        // No note selected yet — arm it as a one-shot pen instead of applying
+        // immediately; the next note it touches (see handleSelectNote,
+        // handleAddNote, handleTogglePitch) consumes and clears it.
+        setAccidentalArmed(!selected && patch.accidental !== '');
+      }
+      if (patch.isRest !== undefined) {
+        setRestArmed(!selected && patch.isRest);
+      }
+      if (!selected) return;
+      // Duration and dotted are pen-only: pressing them sets what the NEXT
+      // mouse click inserts and must NOT change the currently-selected note
+      // (edit a placed note's length with ←/→ instead). Only rest and
+      // accidental still apply to the selection.
+      if (patch.isRest === undefined && patch.accidental === undefined) return;
+      setScore((prev) =>
+        updateNoteInScore(prev, selected, (note) => {
+          const isRest = patch.isRest ?? note.isRest;
+          let pitches = note.pitches;
+          if (patch.accidental !== undefined && pitches.length > 0) {
+            // A chord narrowed to one specific pitch (selectedPitchIndex set —
+            // see handleSelectNote) should only have THAT pitch's accidental
+            // changed, not every tone in the chord.
+            const narrowedIndex = pitches.length > 1 ? selectedPitchIndex : null;
+            pitches = pitches.map((p, i) =>
+              narrowedIndex === null || i === narrowedIndex
+                ? { ...p, accidental: patch.accidental!, manualAccidental: true }
+                : p,
+            );
+          }
+          if (!isRest && pitches.length === 0) {
+            pitches = [
+              selected.clef === 'treble'
+                ? { letter: 'B', accidental: '', octave: 4 }
+                : { letter: 'D', accidental: '', octave: 3 },
+            ];
+          }
+          // duration/dotted deliberately left unchanged (pen-only).
+          return { ...note, isRest, pitches };
+        }),
+      );
+    },
+    [selected, selectedPitchIndex, setScore],
+  );
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1185,10 +1250,58 @@ function App() {
         handleSetFinger(e.key === '0' ? null : Number(e.key));
         return;
       }
+      // 음표 도구 단축키: mirrors clicking the Toolbar's duration/점음표/쉼표/
+      // 임시표 buttons (see their titles for the same shortcut, shown on
+      // hover). Digits 1-6 only arm the toolbar's duration (same left-to-
+      // right order as DURATIONS) when nothing is selected — with a note
+      // selected, that same digit range already means fingering (just
+      // above), and duration is itself a "pen" that never touches a
+      // selected note anyway (edit its length with ←/→ instead). Ignored
+      // with any modifier held, and the accidental keys are ignored in 도수
+      // 입력 모드, which already claims b/# for typing scale-degree labels.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!selected && /^[1-6]$/.test(e.key)) {
+          e.preventDefault();
+          handleEditToolChange({ duration: DURATIONS[Number(e.key) - 1] });
+          return;
+        }
+        if (e.key === '.') {
+          e.preventDefault();
+          handleEditToolChange({ dotted: !editTool.dotted });
+          return;
+        }
+        if (e.key.toLowerCase() === 'r') {
+          e.preventDefault();
+          handleEditToolChange({ isRest: selected ? !editTool.isRest : true });
+          return;
+        }
+        if (!degreeInputMode) {
+          if (e.key === '#') {
+            e.preventDefault();
+            handleEditToolChange({ accidental: '#' });
+            return;
+          }
+          if (e.key === 'b') {
+            e.preventDefault();
+            handleEditToolChange({ accidental: 'b' });
+            return;
+          }
+          if (e.key === 'n') {
+            e.preventDefault();
+            handleEditToolChange({ accidental: 'n' });
+            return;
+          }
+          if (e.key === '-') {
+            e.preventDefault();
+            handleEditToolChange({ accidental: '' });
+            return;
+          }
+        }
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, score, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleStepGraceDuration, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote]);
+  }, [selected, selectedPitchIndex, selectedGrace, marquee, marqueeChords, marqueeLyrics, noteClipboard, chordClipboard, degreeInputMode, score, setScore, deleteNoteAndSelectAdjacent, handleDeleteMarquee, handleDeleteMarqueeChords, handleDeleteMarqueeLyrics, handleUndo, handleRedo, handleStepDuration, handleStepPitch, handleSetFinger, handleCopyNotes, handlePasteNotes, handleCopyChords, handlePasteChords, handleStepGracePitch, handleStepGraceDuration, handleToggleSelectedGracePosition, handleDeleteSelectedGrace, handleSelectPreviousNote, handleEditToolChange, editTool.dotted, editTool.isRest]);
 
   const handleDeselectNote = useCallback(() => {
     setSelected(null);
@@ -1231,70 +1344,6 @@ function App() {
   const handleAddLineBreak = useCallback((afterMeasureIndex: number) => {
     setScore((prev) => addLineBreak(prev, afterMeasureIndex));
   }, [setScore]);
-
-  const handleEditToolChange = useCallback(
-    (patch: Partial<EditTool>) => {
-      // Clicking an accidental button while a note is selected is a one-shot
-      // edit of that note, not a persistent "pen" like duration/dotted — the
-      // toolbar resets to no-accidental right after applying it, so the next
-      // unrelated new note placed elsewhere doesn't silently inherit it too.
-      const isOneShotAccidental = !!selected && patch.accidental !== undefined;
-      // isRest is NOT force-reset here the way accidental is: while a note
-      // stays selected, editTool.isRest must keep faithfully mirroring that
-      // note's true current state (so pressing the button again correctly
-      // toggles it back) — resetting it immediately broke exactly that.
-      // The "don't leak into unrelated new notes" concern is handled
-      // separately in handleAddNote, which resets it right after a note is
-      // actually created.
-      setEditTool((prev) => ({
-        ...prev,
-        ...patch,
-        ...(isOneShotAccidental ? { accidental: '' } : {}),
-      }));
-      if (patch.accidental !== undefined) {
-        // No note selected yet — arm it as a one-shot pen instead of applying
-        // immediately; the next note it touches (see handleSelectNote,
-        // handleAddNote, handleTogglePitch) consumes and clears it.
-        setAccidentalArmed(!selected && patch.accidental !== '');
-      }
-      if (patch.isRest !== undefined) {
-        setRestArmed(!selected && patch.isRest);
-      }
-      if (!selected) return;
-      // Duration and dotted are pen-only: pressing them sets what the NEXT
-      // mouse click inserts and must NOT change the currently-selected note
-      // (edit a placed note's length with ←/→ instead). Only rest and
-      // accidental still apply to the selection.
-      if (patch.isRest === undefined && patch.accidental === undefined) return;
-      setScore((prev) =>
-        updateNoteInScore(prev, selected, (note) => {
-          const isRest = patch.isRest ?? note.isRest;
-          let pitches = note.pitches;
-          if (patch.accidental !== undefined && pitches.length > 0) {
-            // A chord narrowed to one specific pitch (selectedPitchIndex set —
-            // see handleSelectNote) should only have THAT pitch's accidental
-            // changed, not every tone in the chord.
-            const narrowedIndex = pitches.length > 1 ? selectedPitchIndex : null;
-            pitches = pitches.map((p, i) =>
-              narrowedIndex === null || i === narrowedIndex
-                ? { ...p, accidental: patch.accidental!, manualAccidental: true }
-                : p,
-            );
-          }
-          if (!isRest && pitches.length === 0) {
-            pitches = [
-              selected.clef === 'treble'
-                ? { letter: 'B', accidental: '', octave: 4 }
-                : { letter: 'D', accidental: '', octave: 3 },
-            ];
-          }
-          // duration/dotted deliberately left unchanged (pen-only).
-          return { ...note, isRest, pitches };
-        }),
-      );
-    },
-    [selected, selectedPitchIndex, setScore],
-  );
 
   const handleDeleteSelected = useCallback(() => {
     if (!selected) return;

@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Accidental, DurationValue, Pitch, ScaleDegreeLabel, Score } from '../types/score';
-import { DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
+import { DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, DURATIONS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
-const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16', '32'];
 const LONG_PRESS_STEP_MS = 1000;
 const ACCIDENTALS: { value: Accidental; label: string }[] = [
   { value: '', label: '∅' },
@@ -476,7 +475,7 @@ export function Toolbar({
             onTouchStart={() => startLongPress(d)}
             onTouchEnd={clearLongPress}
             aria-label={DURATION_LABELS[d]}
-            title={`${DURATION_LABELS[d]} (길게 누르면 더 긴 음표로 전환)`}
+            title={`${DURATION_LABELS[d]} (길게 누르면 더 긴 음표로 전환) [단축키: ${DURATIONS.indexOf(d) + 1}]`}
           >
             <DurationIcon duration={d} isRest={editTool.isRest} />
           </button>
@@ -485,7 +484,7 @@ export function Toolbar({
           className={`tool-icon-btn ${editTool.dotted ? 'active' : ''}`}
           onClick={() => onEditToolChange({ dotted: !editTool.dotted })}
           aria-label={editTool.isRest ? '점쉼표' : '점음표'}
-          title={editTool.isRest ? '점쉼표' : '점음표'}
+          title={`${editTool.isRest ? '점쉼표' : '점음표'} [단축키: .]`}
         >
           <DottedToggleGlyph isRest={editTool.isRest} />
         </button>
@@ -497,21 +496,25 @@ export function Toolbar({
           // note it touches into a rest, one-shot (see onEditToolChange).
           onClick={() => onEditToolChange({ isRest: hasSelection ? !editTool.isRest : true })}
           aria-label="쉼표로 변환"
-          title="선택한 음표를 같은 박자의 쉼표로 변환"
+          title="선택한 음표를 같은 박자의 쉼표로 변환 [단축키: R]"
         >
           쉼표
         </button>
-        {ACCIDENTALS.map((a) => (
-          <button
-            key={a.value || 'none'}
-            className={`tool-icon-btn ${editTool.accidental === a.value ? 'active' : ''}`}
-            onClick={() => onEditToolChange({ accidental: a.value })}
-            aria-label={a.value === '' ? '임시표 없음' : a.value === '#' ? '샤프' : a.value === 'b' ? '플랫' : '내추럴'}
-            title={a.value === '' ? '임시표 없음' : a.value === '#' ? '샤프' : a.value === 'b' ? '플랫' : '내추럴'}
-          >
-            <span className="tool-glyph">{a.label}</span>
-          </button>
-        ))}
+        {ACCIDENTALS.map((a) => {
+          const name = a.value === '' ? '임시표 없음' : a.value === '#' ? '샤프' : a.value === 'b' ? '플랫' : '내추럴';
+          const shortcut = a.value === '' ? '-' : a.value;
+          return (
+            <button
+              key={a.value || 'none'}
+              className={`tool-icon-btn ${editTool.accidental === a.value ? 'active' : ''}`}
+              onClick={() => onEditToolChange({ accidental: a.value })}
+              aria-label={name}
+              title={`${name} [단축키: ${shortcut}]`}
+            >
+              <span className="tool-glyph">{a.label}</span>
+            </button>
+          );
+        })}
         <button
           className={`tool-compact ${showNoteOptions ? 'active' : ''}`}
           onClick={() => setShowNoteOptions((v) => !v)}
