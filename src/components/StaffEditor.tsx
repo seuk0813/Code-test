@@ -446,7 +446,7 @@ function StaffEditorInner({
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inlineEditor, score],
+    [inlineEditor, score, editTool],
   );
 
   const mouseGestureRef = useRef<MouseGesture>(null);
@@ -616,6 +616,18 @@ function StaffEditorInner({
     if (lockedPreview) renderLockedGhost(lockedPreview);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lockedPreview, editTool, score]);
+
+  // A locked preview's duration is normally frozen at whatever was armed
+  // when it was created (see commitLockedPreview's comment — needed so a
+  // mouse hold-cycle's chosen duration survives the commit). But a preview
+  // can also sit open for a while afterward (auto-chained after the last
+  // commit, or opened by Space off a selected note) while the user picks a
+  // different duration in the toolbar — that later choice should win, so a
+  // subsequent Space press places what the toolbar currently shows, not a
+  // stale duration from before the toggle was touched (see #233).
+  useEffect(() => {
+    setLockedPreview((prev) => (prev && prev.duration !== editTool.duration ? { ...prev, duration: editTool.duration } : prev));
+  }, [editTool.duration]);
 
   // While a preview is locked, arrow keys nudge it (↑↓ pitch, ←→ horizontal),
   // spacebar/Enter commits it, and Escape cancels — see the click-to-lock model.

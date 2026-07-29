@@ -300,7 +300,23 @@ export function Toolbar({
   const pickupMismatch = pickupTrailingMismatch(score);
 
   return (
-    <div className="toolbar">
+    <div
+      className="toolbar"
+      // A mouse-clicked toggle button (음표 길이, 점음표, 쉼표, 임시표, ...)
+      // would otherwise keep keyboard focus after the click, so a Space
+      // press right after immediately re-triggers THAT button instead of
+      // reaching App's document-level space handler (which ignores Space
+      // while a BUTTON is focused, to not fire note placement while
+      // interacting with a control). Blocking just the mousedown's default
+      // focus behavior stops the button from stealing focus while leaving
+      // its click (and real keyboard Tab-focus) untouched.
+      onMouseDown={(e) => {
+        // e.target is often an inner SVG glyph (an SVGElement, not an
+        // HTMLElement) for the duration/rest icons, so this must check
+        // Element (their common ancestor), not HTMLElement specifically.
+        if (e.target instanceof Element && e.target.closest('button')) e.preventDefault();
+      }}
+    >
       <div className="toolbar-row">
         <span className="group-label tool-group-label" title="곡 전체에 적용되는 기본 설정입니다">
           ⚙ 초기 설정
