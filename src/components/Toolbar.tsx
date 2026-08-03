@@ -30,6 +30,7 @@ const SCALE_DEGREE_LABEL_TEXT: Record<ScaleDegreeLabel, string> = {
   b13: 'b13',
   '13': '13',
   dim7: '디미니시7',
+  aug: '어그먼트',
 };
 
 /** Note-shape parameters for each duration, drawn as a small inline SVG icon. */

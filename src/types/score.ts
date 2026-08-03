@@ -237,6 +237,8 @@ export interface Score {
  * scoreUtils' DEGREE_TABLE — so checking "3" or "7" covers both qualities at
  * once. 'dim7' and '6' both name the same semitone (a diminished 7th is
  * enharmonic to a major 6th); when 'dim7' is checked it takes precedence.
+ * Likewise 'aug' and '#5'/'b13' all name the same semitone (an augmented
+ * fifth); when 'aug' is checked it takes precedence over both.
  *
  * The extended/altered tensions ('9', '#9', '11', '#11', '13', 'b13') are
  * jazz-lead-sheet ALTERNATE SPELLINGS for a semitone that already has a
@@ -260,6 +262,7 @@ export type ScaleDegreeLabel =
   | '#5'
   | 'b9'
   | 'dim7'
+  | 'aug'
   | '9'
   | '#9'
   | '11'

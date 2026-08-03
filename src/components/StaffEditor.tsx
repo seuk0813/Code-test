@@ -373,6 +373,11 @@ function StaffEditorInner({
   // area, since it doesn't affect layout size).
   const stackRef = useRef<HTMLDivElement>(null);
   const zoomLayerRef = useRef<HTMLDivElement>(null);
+  /** The scrollable viewport itself (.staff-scroll's parent of stackRef) — kept as
+   * its own ref (rather than stackRef.current?.parentElement each time) so the
+   * playback auto-follow below (see the playhead rAF loop) can read/set its
+   * scroll position directly. */
+  const staffScrollRef = useRef<HTMLDivElement>(null);
   const renderResultRef = useRef<RenderResult | null>(null);
   const suppressClickRef = useRef(false);
 
@@ -737,6 +742,40 @@ function StaffEditorInner({
       current: { treble: null, bass: null },
     };
 
+    /** Keeps the currently-sounding note in view during playback — called
+     * every tick (see below), so it takes effect on the very first frame
+     * after pressing play (jumping straight to wherever the seek bar sits,
+     * even mid-piece) and keeps re-centering as the playhead advances.
+     * Horizontal position is recentered every frame (a smooth "camera
+     * follow") via .staff-scroll's own overflow-x scrollbar. Vertical is
+     * different: .staff-scroll has no overflow-y (it grows with content;
+     * the PAGE itself scrolls between rows), so that's a window scroll
+     * instead, converting the row's logical Y span to viewport coordinates
+     * off the staff container's current on-screen position — only nudged
+     * when the row actually falls outside the viewport, so it doesn't
+     * fight a manual scroll every frame while still on the same row. */
+    const followPlayhead = (bars: { x: number; y0: number; y1: number }[]) => {
+      const scrollEl = staffScrollRef.current;
+      const staffEl = containerRef.current;
+      if (!scrollEl || !staffEl || bars.length === 0) return;
+      const zoom = zoomRef.current;
+      const x = bars[0].x * zoom;
+      const yTop = Math.min(...bars.map((b) => b.y0)) * zoom;
+      const yBottom = Math.max(...bars.map((b) => b.y1)) * zoom;
+
+      const targetLeft = x - scrollEl.clientWidth * 0.3;
+      const maxLeft = scrollEl.scrollWidth - scrollEl.clientWidth;
+      scrollEl.scrollLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+
+      const rect = staffEl.getBoundingClientRect();
+      const viewTop = rect.top + yTop;
+      const viewBottom = rect.top + yBottom;
+      const margin = 24;
+      if (viewTop < margin || viewBottom > window.innerHeight - margin) {
+        window.scrollBy({ top: viewTop - margin, behavior: 'auto' });
+      }
+    };
+
     const tick = () => {
       const result = renderResultRef.current;
       const beats = playbackClock.get() / secondsPerBeat;
@@ -753,6 +792,7 @@ function StaffEditorInner({
         if (!seg.isRest) nextLoc[clef] = { measureIndex: seg.measureIndex, clef, noteIndex: seg.noteIndex };
       });
       renderPlayback(overlayRef.current, { bars });
+      followPlayhead(bars);
 
       const changed =
         nextLoc.treble?.noteIndex !== lastLocRef.current.treble?.noteIndex ||
@@ -2794,7 +2834,7 @@ function StaffEditorInner({
   });
 
   return (
-    <div className="staff-scroll">
+    <div className="staff-scroll" ref={staffScrollRef}>
       <div className="staff-stack" ref={stackRef}>
         <div className="staff-zoom-layer" ref={zoomLayerRef}>
           <div

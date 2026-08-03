@@ -167,6 +167,7 @@ export const SCALE_DEGREE_LABELS: ScaleDegreeLabel[] = [
   'b13',
   '13',
   'dim7',
+  'aug',
 ];
 
 /** Same-semitone alternate spelling for a degree label that already has one
@@ -254,6 +255,7 @@ export function scaleDegreeFor(
   const soundingAccidental = pitch.accidental !== '' ? pitch.accidental : keySignatureAccidentalFor(pitch.letter, keySignature);
   const semitone = (pitchClass(pitch.letter, soundingAccidental) - pitchClass(chordRoot, chordRootAccidental) + 12) % 12;
   if (semitone === 9 && enabledLabels.includes('dim7')) return 'dim7';
+  if (semitone === 8 && enabledLabels.includes('aug')) return 'aug';
   const candidates = DEGREE_TABLE[semitone];
   const match = candidates?.find((c) => enabledLabels.includes(c.key));
   return match ? match.text : null;
