@@ -382,6 +382,55 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
   downloadBlob(blob, `${base}.pdf`);
 }
 
+/**
+ * Opens the browser's native print dialog directly on the score, without
+ * saving an intermediate file first — same page-per-16-measures rasterizing
+ * as saveScorePdf (see chunkScoreForPdf/renderScoreToPng), just handed to a
+ * fresh print-only window instead of a jsPDF document.
+ */
+export async function printScore(score: Score): Promise<void> {
+  // Opened FIRST, synchronously, before any await — most browsers only allow
+  // window.open to bypass the popup blocker while still inside the original
+  // click's call stack, so it has to happen before the async rasterizing
+  // below, not after.
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    window.alert('팝업이 차단되어 인쇄 창을 열 수 없습니다. 브라우저의 팝업 차단을 해제한 뒤 다시 시도해주세요.');
+    return;
+  }
+  printWindow.document.title = score.title || '악보';
+  printWindow.document.body.textContent = '악보를 준비하는 중입니다...';
+
+  const pages = chunkScoreForPdf(trimTrailingBlankMeasures(score));
+  const rendered = await Promise.all(pages.map((p) => renderScoreToPng(p)));
+
+  printWindow.document.body.textContent = '';
+  const style = printWindow.document.createElement('style');
+  style.textContent = `
+    @page { size: A4; margin: 0; }
+    * { margin: 0; padding: 0; }
+    body { background: #fff; }
+    img { display: block; width: 100%; height: auto; page-break-after: always; }
+    img:last-child { page-break-after: auto; }
+  `;
+  printWindow.document.head.appendChild(style);
+  rendered.forEach(({ dataUrl }) => {
+    const img = printWindow.document.createElement('img');
+    img.src = dataUrl;
+    printWindow.document.body.appendChild(img);
+  });
+
+  // Data-URL images decode near-instantly but not necessarily synchronously
+  // with append — wait for every one to actually finish before printing, so
+  // the dialog's preview isn't missing pages that hadn't painted yet.
+  const images = Array.from(printWindow.document.images);
+  await Promise.all(
+    images.map((img) => (img.complete ? Promise.resolve() : new Promise<void>((resolve) => { img.onload = () => resolve(); img.onerror = () => resolve(); }))),
+  );
+  printWindow.focus();
+  printWindow.print();
+}
+
 export function readScoreFile(file: File): Promise<Score> {
   return file.text().then((text) => normalizeScore(JSON.parse(text) as Score));
 }

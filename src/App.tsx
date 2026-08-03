@@ -68,6 +68,7 @@ import {
   loadAutosave,
   readScoreFile,
   saveAutosave,
+  printScore,
   saveRecentScore,
   saveScorePdf,
   saveScoreJson,
@@ -1661,6 +1662,10 @@ function App() {
     return () => document.removeEventListener('keydown', onSpace);
   }, [isPlaying, handlePlay, handlePause, selected]);
 
+  const handlePrint = useCallback(() => {
+    void printScore(score);
+  }, [score]);
+
   const handleExportMusicXml = useCallback(() => {
     const xml = exportMusicXml(score);
     downloadBlob(new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' }), `${score.title || 'score'}.musicxml`);
@@ -1764,7 +1769,7 @@ function App() {
               💾 저장
             </button>
             <LoadMenu recentScores={recentScores} onLoadFile={handleLoadJson} onLoadRecent={handleLoadRecent} />
-            <MoreMenu onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
+            <MoreMenu onPrint={handlePrint} onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
           </div>
         </div>
         <Toolbar

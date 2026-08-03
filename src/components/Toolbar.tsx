@@ -687,7 +687,15 @@ function ConnectButton({
 }
 
 /** "⋯" popover holding rarely-used actions (MusicXML / MIDI export) out of the main toolbar. */
-export function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml: () => void; onExportMidi: () => void }) {
+export function MoreMenu({
+  onPrint,
+  onExportMusicXml,
+  onExportMidi,
+}: {
+  onPrint: () => void;
+  onExportMusicXml: () => void;
+  onExportMidi: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -707,6 +715,14 @@ export function MoreMenu({ onExportMusicXml, onExportMidi }: { onExportMusicXml:
       </button>
       {open && (
         <div className="more-menu-popover">
+          <button
+            onClick={() => {
+              onPrint();
+              setOpen(false);
+            }}
+          >
+            인쇄하기
+          </button>
           <button
             onClick={() => {
               onExportMusicXml();
