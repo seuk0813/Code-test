@@ -454,6 +454,18 @@ const WRITTEN_FRACTION_FLOOR = 0.4;
  * fixed size regardless of what's actually written in it. Takes the denser
  * of the two clefs, since they share one measure width. */
 function measureContentWeight(measure: Measure, timeSignature: TimeSignature): number {
+  // A measure with NOTHING written yet (not composed at all — most often a
+  // freshly-added trailing measure the user hasn't reached) keeps its full
+  // traditional slot width instead of shrinking toward WRITTEN_FRACTION_FLOOR
+  // below. Shrinking these too collapses the whole ROW narrower than a
+  // normal row, stranding blank page space to the right of the score
+  // instead of the row filling the screen (see #237) — the written-fraction
+  // floor is only for a measure that HAS some real content but not enough
+  // of it to fill its own capacity (see #234's "lone note in an otherwise-
+  // blank measure" fix, which this must not undo).
+  if (measure.treble.notes.length === 0 && measure.bass.notes.length === 0) {
+    return fullMeasureWeight(timeSignature);
+  }
   const perClef = (notes: NoteEvent[]) =>
     notes.reduce((sum, n) => sum + NOTE_WIDTH_MIN + NOTE_WIDTH_PER_BEAT * Math.sqrt(Math.max(noteBeats(n), 0.01)), 0);
   const treble = perClef(measure.treble.notes);
