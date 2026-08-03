@@ -1271,6 +1271,13 @@ export function renderScore(
       // land at the identical X regardless of how many rests either clef
       // has elsewhere in the measure.
       const grandStaffBeatMap = buildBeatWeightMap([measure.treble.notes, measure.bass.notes]);
+      // A chord symbol sits above the treble staff only, so it never visually
+      // collides with the BASS clef/key glyphs — the narrower of the two
+      // clefs' own note-start (usually bass, since a treble clef glyph is
+      // wider) is a valid left bound for it, even though the notes
+      // themselves must still pin to the wider (sharedNoteStartX) one below
+      // to stay vertically aligned across the grand staff.
+      const chordLeftBoundX = Math.min(trebleStave.getNoteStartX(), bassStave.getNoteStartX());
       const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
@@ -1324,28 +1331,25 @@ export function renderScore(
           // which reads the treble noteHitboxes by X — line up for a click on
           // either staff.
           const melodyCenterXs: number[] = melodyStaveNotes.map((sn) => sn.getAbsoluteX());
-          if (!melodyFull) {
-            melodyStaveNotes.forEach((sn, i) => {
-              const fx = melodyNotes[i].x;
-              if (fx === undefined) return;
-              const desiredX = melodyNoteStartX + clamp01(fx) * melodyNoteAreaWidth;
-              sn.setXShift(desiredX - sn.getAbsoluteX());
-              melodyCenterXs[i] = desiredX;
-            });
-          } else {
+          {
             // Same beat-weighted override as the treble/bass staves below
             // (see #224, #230) — keeps note spacing proportional to duration
             // (stretched across the whole written content, with rests
             // compressed) instead of VexFlow's own uneven tick-context widths.
+            // A manually dragged note (melodyNotes[i].x) keeps that position
+            // regardless of melodyFull (#241).
             const melodyMap = buildBeatWeightMap([melodyNotes]);
             const melodyLeadingGap = leadingGapFor(melodyNoteAreaWidth);
             const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - melodyLeadingGap - TRAILING_GAP_PX);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
+              const fx = melodyNotes[i].x;
               const desiredX =
-                melodyNoteStartX +
-                melodyLeadingGap +
-                clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyWeightedAreaWidth;
+                fx !== undefined
+                  ? melodyNoteStartX + clamp01(fx) * melodyNoteAreaWidth
+                  : melodyNoteStartX +
+                    melodyLeadingGap +
+                    clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyWeightedAreaWidth;
               sn.setXShift(desiredX - sn.getAbsoluteX());
               melodyCenterXs[i] = desiredX;
               melodyCumBeat += noteBeats(melodyNotes[i]);
@@ -1474,8 +1478,9 @@ export function renderScore(
         const spacing = refY0 - stave.getYForNote(1);
         const noteStartX = stave.getNoteStartX();
         const noteAreaWidth = Math.max(40, stave.getX() + stave.getWidth() - NOTE_AREA_RIGHT_PAD - noteStartX);
-        // Once a measure is full it auto-formats (free X positions ignored) so
-        // the score tidies itself; until then notes sit where they were placed.
+        // A measure being full only decides the DEFAULT layout (auto-formatted
+        // so the score tidies itself); a note the user has explicitly dragged
+        // (notes[i].x) keeps its manual position either way — see #241.
         const full = isStaffMeasureFull({ notes }, effectiveTimeSignature);
 
         (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
@@ -1606,18 +1611,18 @@ export function renderScore(
             // xShift afterward did not track a large host move — VexFlow
             // silently ignores/clamps it, unlike the small fixed nudge which
             // does work). Correct grand-staff alignment for a grace-bearing
-            // note (#220) is worth more than perfectly even spacing here.
-            if (!full) {
-              staveNotes.forEach((sn, i) => {
-                const fx = notes[i].x;
-                if (fx === undefined) return;
-                const target = noteStartX + clamp01(fx) * noteAreaWidth;
-                const shift = target - sn.getAbsoluteX();
-                sn.setXShift(shift);
-                centerXs[i] = target;
-                hostShiftDeltas[i] = shift;
-              });
-            }
+            // note (#220) is worth more than perfectly even spacing here. A
+            // manual drag is honored even in a full measure (see #241) — only
+            // notes the user never touched (fx undefined) are left alone.
+            staveNotes.forEach((sn, i) => {
+              const fx = notes[i].x;
+              if (fx === undefined) return;
+              const target = noteStartX + clamp01(fx) * noteAreaWidth;
+              const shift = target - sn.getAbsoluteX();
+              sn.setXShift(shift);
+              centerXs[i] = target;
+              hostShiftDeltas[i] = shift;
+            });
           } else {
             // VexFlow's own formatted/joinVoices spacing is NOT proportional
             // to duration (see #224 — a beat shared with the other clef's
@@ -1632,14 +1637,14 @@ export function renderScore(
             // instead of being confined to a fraction of it — and rests are
             // compressed relative to real notes (see REST_WEIGHT) so a long
             // rest sitting between two short notes doesn't crowd them (see
-            // #230). A note the user has explicitly dragged (free-X, only
-            // possible while the measure isn't full — see notes[i].x) keeps
-            // that manual position instead.
+            // #230). A note the user has explicitly dragged (free-X — see
+            // notes[i].x) keeps that manual position instead, even once the
+            // measure fills up and would otherwise auto-arrange (#241).
             const leadingGap = leadingGapFor(noteAreaWidth);
             const weightedAreaWidth = Math.max(0, noteAreaWidth - leadingGap - TRAILING_GAP_PX);
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
-              const fx = !full ? notes[i].x : undefined;
+              const fx = notes[i].x;
               const target =
                 fx !== undefined
                   ? noteStartX + clamp01(fx) * noteAreaWidth
@@ -1837,7 +1842,7 @@ export function renderScore(
       // sits" and "which beat it's considered to start at" in the same
       // coordinate space, so a chord dragged to line up with a note actually
       // lines up with that note's beat too.
-      const chordNoteAreaWidth = Math.max(40, x + measureWidth - NOTE_AREA_RIGHT_PAD - sharedNoteStartX);
+      const chordNoteAreaWidth = Math.max(40, x + measureWidth - NOTE_AREA_RIGHT_PAD - chordLeftBoundX);
       // A chord dropped exactly on a note (see StaffEditor's chord-drag snap)
       // stores an offset computed from that note's BEAT, which VexFlow's own
       // formatter doesn't necessarily lay out at a perfectly linear fraction
@@ -1891,7 +1896,7 @@ export function renderScore(
         return (before ?? after)?.x ?? null;
       };
       measure.chords.forEach((chord: ChordSymbol) => {
-        const cx = xForBeat(chord.offset * measureDuration) ?? sharedNoteStartX + chord.offset * chordNoteAreaWidth;
+        const cx = xForBeat(chord.offset * measureDuration) ?? chordLeftBoundX + chord.offset * chordNoteAreaWidth;
         chordHitboxes.push({ measureIndex, chordId: chord.id, x: cx, y: chordY, halfWidth: 20 });
       });
       chordBandHitboxes.push({
@@ -1906,7 +1911,7 @@ export function renderScore(
         // chord now sits lower (CHORD_BAND_Y), so tapping just above the staff
         // to place a high note isn't swallowed by the chord band.
         y1: chordY + 3,
-        measureX: sharedNoteStartX,
+        measureX: chordLeftBoundX,
         measureWidth: chordNoteAreaWidth,
       });
 
