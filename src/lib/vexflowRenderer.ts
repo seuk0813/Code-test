@@ -165,41 +165,29 @@ interface DegreeMark {
 /** Scale-degree labels (see Score.showScaleDegrees / scoreUtils.scaleDegreeFor),
  * drawn just to the right of each note's highest pitch — like a numeric-
  * keypad entry sitting next to the note it annotates, not above the glyph.
- * `emphasize` (도수 입력 모드 — see renderScore's degreeInputMode) draws them
- * a bit larger with a pill background, since everything else on the staff
- * has just been dimmed behind them (see the dim-group wrap in renderScore)
- * and they're now the primary thing being edited — kept modest (not the
- * original 22px/15px-radius pass) so the pill doesn't balloon into a
- * neighboring note's own click area (see DegreeMarkHitbox / findDegreeMarkAt,
- * which now claims clicks in this radius explicitly regardless). */
+ * `emphasize` (도수 입력 모드 — see renderScore's degreeInputMode) leans on
+ * everything ELSE having been dimmed behind them (see the dim-group wrap in
+ * renderScore) rather than on any decoration of its own: a chord's stacked
+ * digits sit close enough together that a pill/circle behind each one merged
+ * into a wall of green and buried the numbers it was supposed to highlight
+ * (#246). The selected digit is called out by COLOR instead — it can't use a
+ * white-on-solid fill any more with no shape behind it, and the red applied
+ * to a clicked note lands on the (dimmed-out) note rather than the digit, so
+ * it needs its own visible marker. Click targeting is unaffected either way:
+ * findDegreeMarkAt claims its own radius explicitly (see DegreeMarkHitbox). */
 function drawDegreeMarks(svg: SVGSVGElement, marks: DegreeMark[], emphasize = false): void {
-  const fontSize = emphasize ? 15 : 12;
+  const fontSize = emphasize ? 13 : 12;
   marks.forEach((mark) => {
     const showSelected = emphasize && mark.selected;
-    if (emphasize) {
-      const bg = document.createElementNS(SVG_NS, 'circle');
-      bg.setAttribute('cx', String(mark.x + 6));
-      bg.setAttribute('cy', String(mark.y - 4));
-      bg.setAttribute('r', '10');
-      // A clicked/selected digit fills solid blue with white text instead of
-      // the usual light-green outline pill — a click on the note itself gets
-      // recolored red too, but that styling lands on the (dimmed-out) note,
-      // not the digit, so it reads as almost nothing; the digit needs its
-      // own unmistakable "this is the one I clicked" look.
-      bg.setAttribute('fill', showSelected ? '#2563eb' : '#eafbea');
-      bg.setAttribute('stroke', showSelected ? '#1d4ed8' : '#2f9e44');
-      bg.setAttribute('stroke-width', showSelected ? '2' : '1.5');
-      svg.appendChild(bg);
-    }
     const text = document.createElementNS(SVG_NS, 'text');
     text.setAttribute('x', String(mark.x));
     text.setAttribute('y', String(mark.y + 4));
     text.setAttribute('text-anchor', 'start');
-    text.setAttribute('font-size', String(fontSize));
+    text.setAttribute('font-size', String(showSelected ? fontSize + 2 : fontSize));
     text.setAttribute('font-family', "'Nanum Gothic', 'Malgun Gothic', sans-serif");
     text.setAttribute('font-weight', '700');
     text.setAttribute('stroke', 'none');
-    text.setAttribute('fill', showSelected ? '#ffffff' : '#2f9e44');
+    text.setAttribute('fill', showSelected ? '#2563eb' : '#2f9e44');
     text.textContent = mark.text;
     svg.appendChild(text);
   });
@@ -2328,13 +2316,34 @@ export function findGraceNoteAt(result: RenderResult, x: number, y: number): Gra
   return result.graceNoteHitboxes.find((g) => Math.abs(g.x - x) < 5 && Math.abs(g.y - y) < 12) ?? null;
 }
 
-/** Click target for an emphasized scale-degree digit in 도수 입력 모드 (see
- * DegreeMarkHitbox) — matches the enlarged pill's own on-screen circle
- * (centered a bit right/up of the mark's anchor, see drawDegreeMarks), so a
- * click on the digit resolves to the exact note/pitch it labels instead of
- * falling through to whatever note happens to be nearest underneath. */
+/**
+ * Click target for an emphasized scale-degree digit in 도수 입력 모드 (see
+ * DegreeMarkHitbox), so a click on one resolves to the exact note/pitch it
+ * labels instead of falling through to whatever note is nearest underneath.
+ *
+ * A stacked chord's digits sit only ~10px apart vertically, so this has to be
+ * precise on two counts (#246 — every click was landing on the digit BELOW
+ * the one aimed at). The box is centered on where the digit is actually
+ * drawn: `x + 6` is the middle of a start-anchored 1-2 character label, and
+ * `y` is the notehead's own baseline that drawDegreeMarks draws against — the
+ * old box sat 4px above that. And overlapping candidates are resolved by
+ * distance rather than by array order, which is pitch order (lowest first)
+ * and therefore always answered with the bottom-most digit of the stack.
+ */
 export function findDegreeMarkAt(result: RenderResult, x: number, y: number): DegreeMarkHitbox | null {
-  return result.degreeMarkHitboxes.find((d) => Math.hypot(d.x + 6 - x, d.y - 4 - y) < 13) ?? null;
+  let best: DegreeMarkHitbox | null = null;
+  let bestDistance = Infinity;
+  for (const d of result.degreeMarkHitboxes) {
+    const dx = x - (d.x + 6);
+    const dy = y - d.y;
+    if (Math.abs(dx) > 11 || Math.abs(dy) > 6) continue;
+    const distance = Math.hypot(dx, dy);
+    if (distance < bestDistance) {
+      best = d;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 /** Click target for a visual-only rest mark (see RestMarkHitbox / #187) — select, drag-to-move, or right-click-delete. Tolerance scales with the mark's own visual size. */
