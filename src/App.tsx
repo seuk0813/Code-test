@@ -49,6 +49,8 @@ import {
   moveRestMark,
   removeMeasure,
   removeNoteFromScore,
+  resolveAccidentalSpelling,
+  pitchWithAccidental,
   resizePickupMeasure,
   resizeTrailingMeasure,
   scaleDegreeKey,
@@ -334,7 +336,7 @@ function App() {
               return {
                 ...n,
                 pitches: n.pitches.map((p, i) =>
-                  narrowedIndex === null || i === narrowedIndex ? { ...p, accidental: armedAccidental, manualAccidental: true } : p,
+                  narrowedIndex === null || i === narrowedIndex ? pitchWithAccidental(p, armedAccidental) : p,
                 ),
               };
             }),
@@ -385,7 +387,16 @@ function App() {
         explicitAccidental || !cKeyBasedAccidentals
           ? explicitAccidental
           : keySignatureAccidentalFor(letter as Pitch['letter'], score.keySignature);
-      const pitch: Pitch = { letter: letter as Pitch['letter'], accidental, octave, manualAccidental: !!explicitAccidental };
+      // Placing on the 파 line with 플랫 armed means E, not "Fb" — same
+      // resolution as attaching one to an existing note (see
+      // resolveAccidentalSpelling), so the two entry paths agree.
+      const spelled = resolveAccidentalSpelling(letter as Pitch['letter'], octave, accidental);
+      const pitch: Pitch = {
+        letter: spelled.letter,
+        accidental: spelled.accidental,
+        octave: spelled.octave,
+        manualAccidental: !!explicitAccidental,
+      };
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x, editTool.tuplet);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
@@ -682,7 +693,10 @@ function App() {
           explicitAccidental || !cKeyBasedAccidentals
             ? explicitAccidental
             : keySignatureAccidentalFor(letter as Pitch['letter'], prev.keySignature);
-        return togglePitchInNote(prev, location, letter as Pitch['letter'], accidental, octave, !!explicitAccidental);
+        // Stacking a chord tone on the 파 line with 플랫 armed means E too —
+        // see resolveAccidentalSpelling / handleAddNote.
+        const spelled = resolveAccidentalSpelling(letter as Pitch['letter'], octave, accidental);
+        return togglePitchInNote(prev, location, spelled.letter, spelled.accidental, spelled.octave, !!explicitAccidental);
       });
       // One-shot: this added/toggled chord tone consumes the armed accidental.
       if (editTool.accidental) setEditTool((prev) => ({ ...prev, accidental: '' }));
@@ -1104,9 +1118,7 @@ function App() {
             // changed, not every tone in the chord.
             const narrowedIndex = pitches.length > 1 ? selectedPitchIndex : null;
             pitches = pitches.map((p, i) =>
-              narrowedIndex === null || i === narrowedIndex
-                ? { ...p, accidental: patch.accidental!, manualAccidental: true }
-                : p,
+              narrowedIndex === null || i === narrowedIndex ? pitchWithAccidental(p, patch.accidental!) : p,
             );
           }
           if (!isRest && pitches.length === 0) {

@@ -825,6 +825,47 @@ export function effectiveAccidental(pitch: Pitch, keySignature: string): Acciden
 }
 
 /** The sharp/flat a given letter carries in a key signature (e.g. 'B' in F major -> 'b'), or '' if unaffected. */
+/**
+ * Resolves an accidental that would name a pitch already spelled by a plain
+ * letter. There's no black key between E–F or B–C, so Fb IS E, E# IS F, Cb IS
+ * B and B# IS C — real notation writes those as the plain letter rather than
+ * stacking a redundant accidental on the original one. B#/Cb also cross the
+ * octave boundary (B#4 sounds as C5, Cb5 as B4), so the octave moves with
+ * them. Everything else (including genuinely useful accidentals like Eb or
+ * F#) is returned untouched.
+ */
+export function resolveAccidentalSpelling(
+  letter: Pitch['letter'],
+  octave: number,
+  accidental: Accidental,
+): { letter: Pitch['letter']; octave: number; accidental: Accidental } {
+  if (accidental === 'b') {
+    if (letter === 'F') return { letter: 'E', octave, accidental: '' };
+    if (letter === 'C') return { letter: 'B', octave: octave - 1, accidental: '' };
+  }
+  if (accidental === '#') {
+    if (letter === 'E') return { letter: 'F', octave, accidental: '' };
+    if (letter === 'B') return { letter: 'C', octave: octave + 1, accidental: '' };
+  }
+  return { letter, octave, accidental };
+}
+
+/** resolveAccidentalSpelling applied to a whole Pitch — the one way an
+ * accidental is ever attached to an existing note, so Fb/E#/Cb/B# can't be
+ * produced from any entry path. */
+export function pitchWithAccidental(pitch: Pitch, accidental: Accidental): Pitch {
+  const resolved = resolveAccidentalSpelling(pitch.letter, pitch.octave, accidental);
+  return {
+    ...pitch,
+    letter: resolved.letter,
+    octave: resolved.octave,
+    accidental: resolved.accidental,
+    // Still the user's deliberate choice even when it resolved to a plain
+    // letter — key-signature auto-styling must not restyle it afterwards.
+    manualAccidental: true,
+  };
+}
+
 export function keySignatureAccidentalFor(letter: Pitch['letter'], keySignature: string): Accidental {
   return KEY_SIGNATURE_ACCIDENTALS[keySignature]?.[letter] ?? '';
 }
