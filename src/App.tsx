@@ -1869,7 +1869,7 @@ function App() {
       <div className="status-line">
         {isPlaying
           ? `재생 중… ${playingMeasure !== null ? playingMeasure + 1 : 1}번 마디`
-          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이). Shift+드래그로 여러 음표 선택 후 Ctrl+C·V로 복사/붙여넣기, Delete로 삭제. 위 단추는 다음에 입력할 음표를 정합니다.'}
+          : '음표는 클릭으로 입력, 드래그로 이동, 우클릭으로 삭제. 선택한 음표는 방향키로 편집(↑↓ 음높이, ←→ 길이). Shift+드래그로 여러 음표 선택(Ctrl+드래그는 기존 선택에 추가, Ctrl+클릭은 하나씩 추가/해제) 후 Ctrl+C·V로 복사/붙여넣기, Delete로 삭제. 위 단추는 다음에 입력할 음표를 정합니다.'}
       </div>
       <StaffEditor
         ref={staffEditorRef}

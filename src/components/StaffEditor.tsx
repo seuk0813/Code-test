@@ -228,6 +228,27 @@ interface SymbolDrag {
   snappedX?: number | null;
 }
 
+// --- Additive (Ctrl/Cmd) multi-selection helpers -----------------------------
+// A selected note/chord/lyric is identified by value, not by object identity,
+// so toggling one in or out of a selection means comparing these keys.
+
+const noteKey = (n: NoteLocation) => `${n.measureIndex}:${n.clef}:${n.noteIndex}`;
+const chordKey = (c: { measureIndex: number; chordId: string }) => `${c.measureIndex}:${c.chordId}`;
+const lyricKey = (l: { measureIndex: number; lyricId: string }) => `${l.measureIndex}:${l.lyricId}`;
+
+/** `current` plus every entry of `added` it doesn't already hold — an additive
+ * (Ctrl+drag) rubber-band never double-adds what it sweeps over twice. */
+function mergeUnique<T>(current: T[], added: T[], key: (item: T) => string): T[] {
+  const seen = new Set(current.map(key));
+  return [...current, ...added.filter((item) => !seen.has(key(item)))];
+}
+
+/** `list` with `item` removed if it was there, appended if it wasn't — one Ctrl+click. */
+function toggleEntry<T>(list: T[], item: T, key: (item: T) => string): T[] {
+  const k = key(item);
+  return list.some((existing) => key(existing) === k) ? list.filter((existing) => key(existing) !== k) : [...list, item];
+}
+
 /** Mouse press gesture in progress on the staff. */
 type MouseGesture =
   | {
@@ -256,12 +277,16 @@ type MouseGesture =
       staffOrigin: 'staff' | 'melody';
     }
   | {
-      /** Shift+drag rubber-band that multi-selects every notehead inside it. */
+      /** Shift+drag (or Ctrl/Cmd+drag) rubber-band that multi-selects every notehead inside it. */
       kind: 'marquee';
       startX: number;
       startY: number;
       curX: number;
       curY: number;
+      /** Ctrl/Cmd instead of Shift: the box ADDS to whatever is already
+       * selected rather than replacing it, and a Ctrl+click that never
+       * dragged toggles just the one item under the pointer. */
+      additive: boolean;
     }
   | {
       /** Drag one of a selected rest mark's 4 corner handles (see RestMark / #187) to change its visual scale. */
@@ -2053,6 +2078,38 @@ function StaffEditorInner({
     }
   };
 
+  /**
+   * One Ctrl/Cmd+click: flips whatever is under the pointer in or out of the
+   * multi-selection, leaving everything else selected. Resolved in the same
+   * order a plain click would (chord symbol, then lyric, then note), so
+   * Ctrl+clicking something always toggles the item a normal click would have
+   * acted on — never a different one hiding underneath. Clicking empty space
+   * deliberately does nothing rather than clearing: with Ctrl held the user is
+   * building a selection up, and a slightly-missed click shouldn't discard it.
+   */
+  const toggleSelectionAt = (result: RenderResult, point: { x: number; y: number }) => {
+    const chordHit = findChordAt(result, point.x, point.y);
+    if (chordHit) {
+      onMarqueeChordSelect(toggleEntry(marqueeChords, { measureIndex: chordHit.measureIndex, chordId: chordHit.chordId }, chordKey));
+      return;
+    }
+    const lyricHit = findLyricAt(result, point.x, point.y);
+    if (lyricHit) {
+      onMarqueeLyricSelect(toggleEntry(marqueeLyrics, { measureIndex: lyricHit.measureIndex, lyricId: lyricHit.lyricId }, lyricKey));
+      return;
+    }
+    // Falls back to the nearest note within the usual click radius when the
+    // press didn't land dead-on a notehead, matching how plain clicking picks
+    // a note out of a cluster (see resolveClickPreferSelect).
+    const click = resolveClick(result, point.x, point.y);
+    const target =
+      click?.type === 'select'
+        ? { measureIndex: click.measureIndex, clef: click.clef, noteIndex: click.noteIndex }
+        : findNearbyNotesAt(result, point.x, point.y, SELECT_MODE_RADIUS)[0] ?? null;
+    if (!target) return;
+    onMarqueeSelect(toggleEntry(marquee, { measureIndex: target.measureIndex, clef: target.clef, noteIndex: target.noteIndex }, noteKey));
+  };
+
   const handleDocumentMouseUp = (event: MouseEvent) => {
     clearMouseHold();
     const gesture = mouseGestureRef.current;
@@ -2065,6 +2122,18 @@ function StaffEditorInner({
 
     if (gesture.kind === 'marquee') {
       renderMarqueeBox(overlayRef.current, null);
+      const dragged = Math.hypot(gesture.curX - gesture.startX, gesture.curY - gesture.startY) >= DRAG_THRESHOLD_PX;
+
+      // Ctrl+click with no drag: toggle just the one thing under the pointer,
+      // so a scattered selection can be assembled (or trimmed) click by
+      // click. Falls through to the box logic below when the pointer did
+      // move, which is then treated as an additive rubber-band.
+      if (gesture.additive && !dragged) {
+        toggleSelectionAt(result, { x: gesture.startX, y: gesture.startY });
+        suppressClickRef.current = true;
+        return;
+      }
+
       const x0 = Math.min(gesture.startX, gesture.curX);
       const x1 = Math.max(gesture.startX, gesture.curX);
       const y0 = Math.min(gesture.startY, gesture.curY);
@@ -2076,7 +2145,7 @@ function StaffEditorInner({
         if (!hb.ys.some((y) => y >= y0 && y <= y1)) return;
         picked.push({ measureIndex: hb.measureIndex, clef: hb.clef, noteIndex: hb.noteIndex });
       });
-      onMarqueeSelect(picked);
+      onMarqueeSelect(gesture.additive ? mergeUnique(marquee, picked, noteKey) : picked);
       // A chord symbol counts as selected when its label box (same box used
       // for click hit-testing, see findChordAt) overlaps the rubber-band.
       const pickedChords: { measureIndex: number; chordId: string }[] = [];
@@ -2088,7 +2157,7 @@ function StaffEditorInner({
         if (cx1 < x0 || cx0 > x1 || cy1 < y0 || cy0 > y1) return;
         pickedChords.push({ measureIndex: hb.measureIndex, chordId: hb.chordId });
       });
-      onMarqueeChordSelect(pickedChords);
+      onMarqueeChordSelect(gesture.additive ? mergeUnique(marqueeChords, pickedChords, chordKey) : pickedChords);
       // A lyric syllable counts as selected the same way (same box used for
       // click hit-testing, see findLyricAt).
       const pickedLyrics: { measureIndex: number; lyricId: string }[] = [];
@@ -2100,7 +2169,7 @@ function StaffEditorInner({
         if (lx1 < x0 || lx0 > x1 || ly1 < y0 || ly0 > y1) return;
         pickedLyrics.push({ measureIndex: hb.measureIndex, lyricId: hb.lyricId });
       });
-      onMarqueeLyricSelect(pickedLyrics);
+      onMarqueeLyricSelect(gesture.additive ? mergeUnique(marqueeLyrics, pickedLyrics, lyricKey) : pickedLyrics);
       suppressClickRef.current = true;
       return;
     }
@@ -2299,8 +2368,19 @@ function StaffEditorInner({
     // Shift+drag anywhere on the staff draws a rubber-band that multi-selects
     // every notehead inside it (for batch copy/paste). Takes priority over
     // note placement/selection so it works even when starting over a note.
-    if (event.shiftKey) {
-      mouseGestureRef.current = { kind: 'marquee', startX: point.x, startY: point.y, curX: point.x, curY: point.y };
+    // Ctrl/Cmd does the same but ADDS to the current selection instead of
+    // replacing it — and Ctrl+click without dragging toggles the single item
+    // under the pointer, so a scattered selection can be built up one note at
+    // a time (see the marquee branch of handleDocumentMouseUp).
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      mouseGestureRef.current = {
+        kind: 'marquee',
+        startX: point.x,
+        startY: point.y,
+        curX: point.x,
+        curY: point.y,
+        additive: event.ctrlKey || event.metaKey,
+      };
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
       return;
@@ -2721,6 +2801,11 @@ function StaffEditorInner({
   // chord/lyric right-click deletion, and suppresses the native menu.
   const handleContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    // macOS fires contextmenu for Ctrl+click, which is our additive
+    // multi-select gesture — deleting the chord/lyric under the pointer
+    // instead would be a nasty surprise. The mousedown handler has already
+    // claimed this press; just swallow the menu.
+    if (event.ctrlKey || event.metaKey) return;
     const result = renderResultRef.current;
     const point = eventPoint(event);
     if (!result || !point) return;
