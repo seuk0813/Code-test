@@ -32,6 +32,7 @@ import {
   chordLabel,
   cycleDurationLonger,
   cycleDurationShorter,
+  incompleteClefsIn,
   isStaffMeasureFull,
   isStaffMeasureOverflow,
   lineToPitch,
@@ -55,6 +56,8 @@ import {
   renderMarqueeBox,
   renderMarqueeHighlights,
   renderMeasureCompleteFlashes,
+  renderMeasureTools,
+  renderMeasureWarnings,
   renderPickupHandles,
   renderPlayback,
   renderSeekBar,
@@ -150,6 +153,12 @@ interface StaffEditorProps {
    * full width regardless of how little is written yet, so adding a measure's
    * first note doesn't immediately cramp the room to add the next one. */
   focusedMeasureIndex: number | null;
+  /** Hand-sizes one measure by dragging its right barline (see Measure.widthScale). */
+  onResizeMeasure: (measureIndex: number, widthScale: number) => void;
+  /** 자동정렬 button on a measure's barline: drops that measure's hand-dragged note Xs and width. */
+  onAutoAlignMeasure: (measureIndex: number) => void;
+  /** Red "!" badge on an under-filled measure: pads its short clefs out with rests. */
+  onFillMeasureRests: (measureIndex: number) => void;
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number, toMeasureIndex: number) => void;
   /** Sets which melody note (see ChordSymbol.startNoteIndex) a chord starts harmonically applying from — chosen via its "적용 시작 음표 선택" UI, separate from dragging its label (onMoveChord, purely cosmetic). */
@@ -357,6 +366,9 @@ function StaffEditorInner({
   onChangeDuration,
   onFocusMeasure,
   focusedMeasureIndex,
+  onResizeMeasure,
+  onAutoAlignMeasure,
+  onFillMeasureRests,
   onAddLineBreak,
   onMoveChord,
   onSetChordStartNote,
@@ -1057,6 +1069,212 @@ function StaffEditorInner({
     refreshPickupHandles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [score]);
+
+  // --- Per-measure barline tools (hand-resize + 자동정렬) ----------------------
+
+  /** Full-grand-staff vertical span of one measure's column, plus the x of its
+   * own RIGHT barline — the anchor every per-measure tool below hangs off. */
+  const measureBarGeometry = (measureIndex: number) => {
+    const result = renderResultRef.current;
+    const treble = result?.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
+    const bass = result?.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'bass');
+    if (!treble || !bass) return null;
+    const overhang = treble.spacing * 1.2;
+    return {
+      x: treble.x1,
+      x0: treble.x0,
+      y0: treble.refY0 - treble.spacing * 5 - overhang,
+      y1: bass.refY0 - bass.spacing * 1 + overhang,
+      spacing: treble.spacing,
+    };
+  };
+
+  /** Where the 자동정렬 button sits for a given barline: just below the bass
+   * staff, clear of both staves' own click regions and of the next row's
+   * chord band, with the drag arrows flanking it (see renderMeasureTools). */
+  const autoAlignButtonPos = (geo: { x: number; y1: number }) => ({ x: geo.x, y: geo.y1 + 16 });
+
+  const AUTO_ALIGN_BUTTON_RADIUS = 14;
+  const BARLINE_GRAB_TOL = 7;
+
+  /** Which measure's right barline the pointer is on (or just under, within
+   * reach of its 자동정렬 button), or null. Searched right-edge-first so the
+   * shared pixel between measure N's end and measure N+1's start resolves to
+   * N — the measure the tools actually act on. */
+  const findMeasureBarAt = (point: { x: number; y: number }): number | null => {
+    const result = renderResultRef.current;
+    if (!result) return null;
+    for (const treble of result.staffHitboxes) {
+      if (treble.clef !== 'treble') continue;
+      const geo = measureBarGeometry(treble.measureIndex);
+      if (!geo) continue;
+      const btn = autoAlignButtonPos(geo);
+      const onBar = Math.abs(point.x - geo.x) <= BARLINE_GRAB_TOL && point.y >= geo.y0 && point.y <= geo.y1;
+      // The button cluster's own band below the staff — wide enough to cover
+      // the flanking drag arrows too, so the tools don't vanish the moment
+      // the pointer leaves the barline on its way down to press the button.
+      const onCluster =
+        Math.abs(point.x - geo.x) <= 44 && point.y > geo.y1 && point.y <= btn.y + AUTO_ALIGN_BUTTON_RADIUS + 4;
+      if (onBar || onCluster) return treble.measureIndex;
+    }
+    return null;
+  };
+
+  /** True when the point is inside the 자동정렬 button of the given measure's barline. */
+  const overAutoAlignButton = (measureIndex: number, point: { x: number; y: number }): boolean => {
+    const geo = measureBarGeometry(measureIndex);
+    if (!geo) return false;
+    const btn = autoAlignButtonPos(geo);
+    return Math.hypot(point.x - btn.x, point.y - btn.y) <= AUTO_ALIGN_BUTTON_RADIUS;
+  };
+
+  /** Which measure's barline tools are currently showing, and whether the pointer is on its button. */
+  const hoverBarRef = useRef<{ measureIndex: number; buttonHot: boolean } | null>(null);
+  /** In-progress hand-resize of a measure (see Measure.widthScale): its starting rendered width and scale, so the drag maps pixels back to a scale without compounding. `moved` stays false for a press that never became a drag, which releases the click back to the seek-bar jump the barline normally does. */
+  const measureResizeRef = useRef<{
+    measureIndex: number;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    /** Total width of the row this measure sits in — the pool its share is drawn from. */
+    rowWidth: number;
+    startScale: number;
+    moved: boolean;
+  } | null>(null);
+
+  const refreshMeasureTools = () => {
+    const drag = measureResizeRef.current;
+    const hover = hoverBarRef.current;
+    const measureIndex = drag?.measureIndex ?? hover?.measureIndex ?? null;
+    const geo = measureIndex === null ? null : measureBarGeometry(measureIndex);
+    if (!geo) {
+      renderMeasureTools(overlayRef.current, null);
+      return;
+    }
+    const btn = autoAlignButtonPos(geo);
+    renderMeasureTools(overlayRef.current, {
+      x: geo.x,
+      y0: geo.y0,
+      y1: geo.y1,
+      buttonX: btn.x,
+      buttonY: btn.y,
+      dragging: !!drag,
+      buttonHot: !drag && !!hover?.buttonHot,
+    });
+  };
+
+  /**
+   * Maps the drag's pixel delta back onto the measure's width share, so the
+   * barline actually keeps up with the pointer. A measure's rendered width
+   * isn't proportional to its scale: every measure in the row splits one
+   * fixed total (see computeRowMeasureWidths), so growing this one shrinks
+   * the rest and the barline only travels a fraction of the extra weight.
+   * Inverting that — from the measure's FRACTION of its row (`a` now, `f`
+   * wanted) back to the weight fraction that produces it — cancels the
+   * pushback out. Always measured from the drag's ORIGINAL width/scale
+   * rather than accumulated per frame, so it can't drift as the neighbours
+   * resize underneath it.
+   */
+  const updateMeasureResize = (point: { x: number; y: number }) => {
+    const drag = measureResizeRef.current;
+    if (!drag) return;
+    const dx = point.x - drag.startX;
+    if (!drag.moved && Math.hypot(dx, point.y - drag.startY) < DRAG_THRESHOLD_PX) return;
+    drag.moved = true;
+    const a = drag.startWidth / drag.rowWidth;
+    // Capped short of the whole row: at f = 1 the inversion below divides by
+    // zero, and a measure that ate its entire system has nothing left to grab.
+    const f = Math.max(0.05, Math.min(0.85, (drag.startWidth + dx) / drag.rowWidth));
+    const multiplier = (f * (1 - a)) / ((1 - f) * a);
+    onResizeMeasure(drag.measureIndex, Math.max(0.35, Math.min(3, drag.startScale * multiplier)));
+  };
+
+  const handleMeasureResizeDocMouseMove = (event: MouseEvent) => {
+    const point = eventPoint(event);
+    if (point) updateMeasureResize(point);
+  };
+
+  const handleMeasureResizeDocMouseUp = () => {
+    const drag = measureResizeRef.current;
+    measureResizeRef.current = null;
+    document.removeEventListener('mousemove', handleMeasureResizeDocMouseMove);
+    document.removeEventListener('mouseup', handleMeasureResizeDocMouseUp);
+    // A press that never turned into a drag keeps the barline's own
+    // long-standing behaviour: jump the seek bar to that barline.
+    if (drag && !drag.moved) {
+      const seekTarget = findMeasureStartAt(drag.startX, drag.startY);
+      if (seekTarget !== null) onSeekBeat(measureStartBeat(score, seekTarget));
+    }
+    suppressClickRef.current = true;
+    refreshMeasureTools();
+  };
+
+  const startMeasureResize = (measureIndex: number, point: { x: number; y: number }) => {
+    const geo = measureBarGeometry(measureIndex);
+    const result = renderResultRef.current;
+    if (!geo || !result) return;
+    const startWidth = Math.max(40, geo.x - geo.x0);
+    // The measure's own row, identified by the staves sharing its baseline —
+    // its total width is what the drag redistributes within (see updateMeasureResize).
+    const self = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
+    const rowWidth = result.staffHitboxes
+      .filter((s) => s.clef === 'treble' && s.refY0 === self?.refY0)
+      .reduce((sum, s) => sum + (s.x1 - s.x0), 0);
+    measureResizeRef.current = {
+      measureIndex,
+      startX: point.x,
+      startY: point.y,
+      startWidth,
+      rowWidth: Math.max(startWidth + 40, rowWidth),
+      startScale: score.measures[measureIndex]?.widthScale ?? 1,
+      moved: false,
+    };
+    refreshMeasureTools();
+  };
+
+  // --- Under-filled measure warnings ------------------------------------------
+
+  /** Every measure that's been started but left short of its time signature,
+   * with the screen position of its red "!" badge — pinned just inside the
+   * measure's own right edge, above the treble staff. */
+  const measureWarnings = (): { measureIndex: number; x: number; y: number }[] => {
+    const result = renderResultRef.current;
+    if (!result) return [];
+    const spots: { measureIndex: number; x: number; y: number }[] = [];
+    score.measures.forEach((measure, measureIndex) => {
+      const ts = measureTimeSignature(score, measureIndex);
+      // A pickup/trailing measure is deliberately short — never a mistake.
+      if (measureIndex === 0 && score.pickupBeats !== undefined) return;
+      if (measureIndex === score.measures.length - 1 && score.trailingBeats !== undefined) return;
+      if (incompleteClefsIn(measure, ts).length === 0) return;
+      const treble = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
+      if (!treble) return;
+      spots.push({ measureIndex, x: treble.x1 - 13, y: treble.refY0 - treble.spacing * 5 - 20 });
+    });
+    return spots;
+  };
+
+  /** Which warning badge the pointer is currently hovering, so it can grow slightly. */
+  const hotWarningRef = useRef<number | null>(null);
+
+  const findMeasureWarningAt = (point: { x: number; y: number }): number | null =>
+    measureWarnings().find((s) => Math.hypot(point.x - s.x, point.y - s.y) <= 11)?.measureIndex ?? null;
+
+  const refreshMeasureWarnings = () => {
+    renderMeasureWarnings(
+      overlayRef.current,
+      measureWarnings().map((s) => ({ x: s.x, y: s.y, hot: s.measureIndex === hotWarningRef.current })),
+    );
+  };
+
+  // Both sets of badges are positioned from the rendered layout, so they have
+  // to be redrawn whenever anything that moves a measure does — which
+  // includes focus, since the focused measure keeps a wider slot.
+  useEffect(() => {
+    refreshMeasureWarnings();
+    refreshMeasureTools();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [score, focusedMeasureIndex]);
 
   // --- Shared placement helpers -----------------------------------------------
 
@@ -2109,6 +2327,32 @@ function StaffEditorInner({
       return;
     }
 
+    // Red "!" on an under-filled measure — pads it out with rests. Checked
+    // ahead of the chord band it overlaps, which would otherwise swallow it.
+    const warnMeasureIndex = findMeasureWarningAt(point);
+    if (warnMeasureIndex !== null) {
+      onFillMeasureRests(warnMeasureIndex);
+      suppressClickRef.current = true;
+      return;
+    }
+
+    // A measure's own right barline: press the 자동정렬 button hanging under
+    // it, or drag the bar itself sideways to hand-size the measure. A press
+    // that never moves still falls through to the seek-to-this-barline
+    // behaviour below (see handleMeasureResizeDocMouseUp).
+    const barMeasureIndex = findMeasureBarAt(point);
+    if (barMeasureIndex !== null) {
+      if (overAutoAlignButton(barMeasureIndex, point)) {
+        onAutoAlignMeasure(barMeasureIndex);
+        suppressClickRef.current = true;
+        return;
+      }
+      startMeasureResize(barMeasureIndex, point);
+      document.addEventListener('mousemove', handleMeasureResizeDocMouseMove);
+      document.addEventListener('mouseup', handleMeasureResizeDocMouseUp);
+      return;
+    }
+
     const barlineMeasureIndex = findMeasureStartAt(point.x, point.y);
     if (barlineMeasureIndex !== null) {
       onSeekBeat(measureStartBeat(score, barlineMeasureIndex));
@@ -2382,6 +2626,39 @@ function StaffEditorInner({
       }
     }
 
+    // Per-measure barline tools (hand-resize grip + 자동정렬 button) appear
+    // only while the pointer is actually on that barline, and the red "!"
+    // badges grow slightly under the pointer — both purely visual, so they
+    // run even while another gesture owns the press.
+    if (!measureResizeRef.current) {
+      const hoverPoint = eventPoint(event);
+      const barIndex = hoverPoint ? findMeasureBarAt(hoverPoint) : null;
+      const next = barIndex === null ? null : { measureIndex: barIndex, buttonHot: overAutoAlignButton(barIndex, hoverPoint!) };
+      const prev = hoverBarRef.current;
+      if (next?.measureIndex !== prev?.measureIndex || next?.buttonHot !== prev?.buttonHot) {
+        hoverBarRef.current = next;
+        refreshMeasureTools();
+      }
+
+      const nextWarning = hoverPoint ? findMeasureWarningAt(hoverPoint) : null;
+      if (nextWarning !== hotWarningRef.current) {
+        hotWarningRef.current = nextWarning;
+        refreshMeasureWarnings();
+      }
+
+      // The barline tools own this spot — showing an "you'd add a note here"
+      // ghost under them would promise something the click won't do.
+      const onTool = !!next || nextWarning !== null;
+      if (containerRef.current) {
+        containerRef.current.style.cursor = !onTool ? '' : next && !next.buttonHot && nextWarning === null ? 'ew-resize' : 'pointer';
+      }
+      if (onTool) {
+        clearGhost(overlayRef.current);
+        clearTooltip(overlayRef.current);
+        return;
+      }
+    }
+
     if (mouseGestureRef.current) return; // active press handled by document listeners
     if (lockedPreviewRef.current) return; // a locked preview owns the ghost; don't hover-draw over it
     const result = renderResultRef.current;
@@ -2422,6 +2699,14 @@ function StaffEditorInner({
     if (!boundaryResizeRef.current && hoverBoundaryRef.current !== null) {
       hoverBoundaryRef.current = null;
       refreshPickupHandles();
+    }
+    if (!measureResizeRef.current && hoverBarRef.current !== null) {
+      hoverBarRef.current = null;
+      refreshMeasureTools();
+    }
+    if (hotWarningRef.current !== null) {
+      hotWarningRef.current = null;
+      refreshMeasureWarnings();
     }
   };
 
@@ -2539,6 +2824,29 @@ function StaffEditorInner({
     if (nearSeekHandle(point)) {
       event.preventDefault();
       seekDraggingRef.current = true;
+      return;
+    }
+
+    // Red "!" on an under-filled measure — always on screen (no hover needed),
+    // so it taps the same as it clicks.
+    const warnMeasureIndex = findMeasureWarningAt(point);
+    if (warnMeasureIndex !== null) {
+      event.preventDefault();
+      onFillMeasureRests(warnMeasureIndex);
+      return;
+    }
+
+    // Touch has no hover to reveal the barline tools, so a touch that lands on
+    // a barline goes straight into a resize drag; releasing without moving
+    // still falls through to the seek jump (see handleTouchEnd).
+    const barMeasureIndex = findMeasureBarAt(point);
+    if (barMeasureIndex !== null) {
+      event.preventDefault();
+      if (overAutoAlignButton(barMeasureIndex, point)) {
+        onAutoAlignMeasure(barMeasureIndex);
+        return;
+      }
+      startMeasureResize(barMeasureIndex, point);
       return;
     }
 
@@ -2710,6 +3018,13 @@ function StaffEditorInner({
       return;
     }
 
+    if (measureResizeRef.current) {
+      event.preventDefault();
+      const point = event.touches[0] && eventPoint(event.touches[0]);
+      if (point) updateMeasureResize(point);
+      return;
+    }
+
     if (seekDraggingRef.current) {
       event.preventDefault();
       const point = event.touches[0] && eventPoint(event.touches[0]);
@@ -2768,6 +3083,17 @@ function StaffEditorInner({
     if (pinchRef.current) return;
     if (boundaryResizeRef.current) {
       boundaryResizeRef.current = null;
+      return;
+    }
+    if (measureResizeRef.current) {
+      const drag = measureResizeRef.current;
+      measureResizeRef.current = null;
+      // A tap that never became a drag keeps the barline's own seek jump.
+      if (!drag.moved) {
+        const seekTarget = findMeasureStartAt(drag.startX, drag.startY);
+        if (seekTarget !== null) onSeekBeat(measureStartBeat(score, seekTarget));
+      }
+      refreshMeasureTools();
       return;
     }
     if (seekDraggingRef.current) {

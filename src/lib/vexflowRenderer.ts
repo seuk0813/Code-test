@@ -507,7 +507,7 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number, 
     return false;
   });
 
-  const weights = row.map((measureIndex, localIndex) => {
+  const contentWeights = row.map((measureIndex, localIndex) => {
     if (localIndex === partialLocalIndex) return 0;
     const measure = score.measures[measureIndex];
     const timeSignature = measureTimeSignature(score, measureIndex);
@@ -523,6 +523,12 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number, 
     // to a different measure.
     return measureIndex === focusedMeasureIndex ? Math.max(contentWeight, fullMeasureWeight(timeSignature)) : contentWeight;
   });
+  // A hand-dragged measure width (see Measure.widthScale) only shifts that
+  // measure's SHARE of its row, never the row's own total: it's deliberately
+  // left out of naturalTotal below, so widening one measure narrows its
+  // neighbours instead of pushing the whole system off the right edge of the
+  // page (and shrinking one lets the neighbours reclaim that space).
+  const weights = contentWeights.map((w, localIndex) => w * (score.measures[row[localIndex]]?.widthScale ?? 1));
   const weightSum = weights.reduce((sum, w) => sum + w, 0);
 
   // Each non-partial slot's natural (pre-redistribution) width scales down
@@ -537,7 +543,7 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number, 
   const naturalTotal = row.reduce((sum, measureIndex, localIndex) => {
     if (localIndex === partialLocalIndex) return sum;
     const timeSignature = measureTimeSignature(score, measureIndex);
-    const scale = Math.min(1, weights[localIndex] / fullMeasureWeight(timeSignature));
+    const scale = Math.min(1, contentWeights[localIndex] / fullMeasureWeight(timeSignature));
     return sum + baseWidths[localIndex] * scale;
   }, 0);
   const targetRowWidth =

@@ -12,8 +12,11 @@ import {
   addRestMarkAt,
   adjacentIndexAfterDelete,
   attachOrRemoveGraceNote,
+  autoAlignMeasure,
   clearPickupMeasure,
   clearTrailingMeasure,
+  fillStaffMeasureWithRests,
+  incompleteClefsIn,
   cycleDurationLonger,
   cycleDurationShorter,
   createEmptyMeasure,
@@ -52,6 +55,8 @@ import {
   setGraceNotePitch,
   setManualScaleDegreeLabel,
   setMeasureTimeSignature,
+  setMeasureWidthScale,
+  measureTimeSignature,
   splitPickupMeasure,
   splitPitchFromNote,
   splitTrailingMeasure,
@@ -682,6 +687,45 @@ function App() {
       setAccidentalArmed(false);
     },
     [editTool.accidental, cKeyBasedAccidentals, accidentalArmed, setScore],
+  );
+
+  /** Dragging a measure's right barline hand-sizes it (see Measure.widthScale).
+   * Committed straight to the score on every drag frame so the staff redraws
+   * live under the pointer; the drag itself always recomputes from its own
+   * starting width, so this never compounds (see updateMeasureResize). */
+  const handleResizeMeasure = useCallback(
+    (measureIndex: number, widthScale: number) => {
+      setScore((prev) => setMeasureWidthScale(prev, measureIndex, widthScale));
+    },
+    [setScore],
+  );
+
+  /** 자동정렬 button on a measure's barline: throws away every hand-dragged
+   * note X in that measure along with any hand-dragged width, letting the
+   * renderer lay it out proportionally to the notes' own durations again. */
+  const handleAutoAlignMeasure = useCallback(
+    (measureIndex: number) => {
+      setScore((prev) => autoAlignMeasure(prev, measureIndex));
+    },
+    [setScore],
+  );
+
+  /** Red "!" badge on an under-filled measure: pads every clef that's been
+   * started but left short out to the time signature with rests, longest
+   * rest first (see fillStaffMeasureWithRests). */
+  const handleFillMeasureRests = useCallback(
+    (measureIndex: number) => {
+      setScore((prev) => {
+        const measure = prev.measures[measureIndex];
+        if (!measure) return prev;
+        const ts = measureTimeSignature(prev, measureIndex);
+        const short = incompleteClefsIn(measure, ts);
+        if (short.length === 0) return prev;
+        const filled = short.reduce((m, clef) => ({ ...m, [clef]: fillStaffMeasureWithRests(m[clef], ts) }), measure);
+        return { ...prev, measures: prev.measures.map((m, i) => (i === measureIndex ? filled : m)) };
+      });
+    },
+    [setScore],
   );
 
   /** Toggling "C키 기준 임시표" adds/removes the key-signature-implied
@@ -1845,6 +1889,9 @@ function App() {
         onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}
         focusedMeasureIndex={focusedMeasureIndex}
+        onResizeMeasure={handleResizeMeasure}
+        onAutoAlignMeasure={handleAutoAlignMeasure}
+        onFillMeasureRests={handleFillMeasureRests}
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
         onSetChordStartNote={handleSetChordStartNote}

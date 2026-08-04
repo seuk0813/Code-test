@@ -161,6 +161,14 @@ export interface Measure {
    * Undefined = use the score's time signature, same as every other measure.
    */
   timeSignatureOverride?: TimeSignature;
+  /**
+   * How much horizontal room this measure claims relative to what its own
+   * content would otherwise earn (see computeRowMeasureWidths) — set by
+   * dragging the measure's right barline. Purely a share of its ROW: widening
+   * one measure narrows its neighbours rather than making the row itself
+   * wider, so the score never overflows the page. Undefined = automatic.
+   */
+  widthScale?: number;
 }
 
 export interface TimeSignature {

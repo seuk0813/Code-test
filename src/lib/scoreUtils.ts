@@ -116,6 +116,91 @@ export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature
 }
 
 /**
+ * Which clefs of a measure are started but left short of the time signature —
+ * drives the red "이 마디는 박자가 모자랍니다" warning and its one-click rest
+ * fill (see fillStaffMeasureWithRests). A clef with NOTHING written in it is
+ * never reported: an untouched bass staff under a finished melody is a normal
+ * work-in-progress state, not a mistake, and warning about it would light up
+ * most of a lead-sheet-style score. Likewise a measure nobody has started at
+ * all reports nothing.
+ */
+export function incompleteClefsIn(measure: Measure, timeSignature: TimeSignature): Clef[] {
+  return (['treble', 'bass'] as Clef[]).filter(
+    (clef) => measure[clef].notes.length > 0 && !isStaffMeasureFull(measure[clef], timeSignature),
+  );
+}
+
+/** Rest durations usable for padding, longest first — every dotted/plain value
+ * whose beat length is a clean power-of-two fraction, so greedily taking the
+ * largest that still fits always lands exactly on the remainder (see
+ * fillStaffMeasureWithRests) rather than overshooting it. */
+const REST_FILL_UNITS: { duration: DurationValue; dotted: boolean }[] = [
+  { duration: 'w', dotted: false },
+  { duration: 'h', dotted: true },
+  { duration: 'h', dotted: false },
+  { duration: 'q', dotted: true },
+  { duration: 'q', dotted: false },
+  { duration: '8', dotted: true },
+  { duration: '8', dotted: false },
+  { duration: '16', dotted: true },
+  { duration: '16', dotted: false },
+  { duration: '32', dotted: false },
+];
+
+/**
+ * Appends however many rests it takes to bring one clef of a measure exactly
+ * up to its time signature's capacity — greedily taking the longest rest that
+ * still fits, so 3 remaining beats become one dotted half rest rather than
+ * three separate quarter rests. Returns the staff-measure unchanged when it's
+ * already full (or over).
+ */
+export function fillStaffMeasureWithRests(staffMeasure: StaffMeasure, timeSignature: TimeSignature): StaffMeasure {
+  let remaining = measureCapacityBeats(timeSignature) - staffMeasureBeats(staffMeasure);
+  if (remaining <= 1e-6) return staffMeasure;
+  const rests: NoteEvent[] = [];
+  // Bounded so a rounding-error remainder too small for even a 32nd rest
+  // can't spin here forever.
+  while (remaining > 1e-6 && rests.length < 64) {
+    const unit = REST_FILL_UNITS.find((u) => noteBeats(u) <= remaining + 1e-6);
+    if (!unit) break;
+    rests.push(createNote([], unit.duration, unit.dotted, true));
+    remaining -= noteBeats(unit);
+  }
+  return { ...staffMeasure, notes: [...staffMeasure.notes, ...rests] };
+}
+
+/** Drops every note's hand-dragged free X in a measure (see NoteEvent.x) and
+ * any hand-dragged measure width (see Measure.widthScale), so both fall back
+ * to the renderer's own duration-proportional layout — the "자동정렬" button
+ * on a measure's barline. */
+export function autoAlignMeasure(score: Score, measureIndex: number): Score {
+  const measure = score.measures[measureIndex];
+  if (!measure) return score;
+  const clearX = (sm: StaffMeasure): StaffMeasure => ({
+    ...sm,
+    notes: sm.notes.map(({ x: _dropped, ...rest }) => rest),
+  });
+  const { widthScale: _dropScale, ...withoutScale } = measure;
+  const measures = score.measures.map((m, i) =>
+    i === measureIndex ? { ...withoutScale, treble: clearX(m.treble), bass: clearX(m.bass) } : m,
+  );
+  return { ...score, measures };
+}
+
+/** Sets (or, passing undefined, clears) a measure's hand-dragged width share — see Measure.widthScale. */
+export function setMeasureWidthScale(score: Score, measureIndex: number, widthScale: number | undefined): Score {
+  const measures = score.measures.map((m, i) => {
+    if (i !== measureIndex) return m;
+    if (widthScale === undefined) {
+      const { widthScale: _drop, ...rest } = m;
+      return rest;
+    }
+    return { ...m, widthScale };
+  });
+  return { ...score, measures };
+}
+
+/**
  * How many beats the given measure spans for absolute-timing purposes (used
  * to place it on the playback/seek timeline) — the full time-signature
  * capacity for every ordinary measure. The exceptions are the two optional

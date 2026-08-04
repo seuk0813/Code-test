@@ -309,6 +309,151 @@ export function clearPickupHandles(svg: SVGSVGElement | null): void {
   renderPickupHandles(svg, null, null);
 }
 
+const MEASURE_TOOLS_GROUP_ID = 'measure-tools-group';
+
+export interface MeasureToolsSpec {
+  /** The barline being hovered/dragged — its own measure's right edge. */
+  x: number;
+  /** Vertical span of the grip line (the full grand staff). */
+  y0: number;
+  y1: number;
+  /** Centre of the 자동정렬 button, parked clear of the staff below the grip. */
+  buttonX: number;
+  buttonY: number;
+  /** Highlights the grip while a resize drag is actually in progress. */
+  dragging: boolean;
+  /** Highlights the button while the pointer is over it. */
+  buttonHot: boolean;
+}
+
+/** Grip + 자동정렬 button shown while the pointer is on a measure's right
+ * barline: drag the grip sideways to hand-size that measure (see
+ * Measure.widthScale), or press the button to throw that sizing away along
+ * with every hand-dragged note X in the measure (see autoAlignMeasure).
+ * Deliberately drawn on the interaction overlay rather than into the score
+ * SVG itself, so it never leaks into a printed page or PDF export. */
+export function renderMeasureTools(svg: SVGSVGElement | null, spec: MeasureToolsSpec | null): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${MEASURE_TOOLS_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', MEASURE_TOOLS_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  if (!spec) return;
+  const accent = '#7a5cff';
+  // A soft band BEHIND the barline rather than another thin line on top of
+  // it: the seek bar parks on barlines too, and two thin vertical strokes at
+  // the same x were impossible to tell apart.
+  const bandWidth = spec.dragging ? 11 : 8;
+  group.appendChild(
+    el('rect', {
+      x: spec.x - bandWidth / 2,
+      y: spec.y0,
+      width: bandWidth,
+      height: spec.y1 - spec.y0,
+      rx: bandWidth / 2,
+      fill: accent,
+      opacity: spec.dragging ? 0.35 : 0.18,
+    }),
+  );
+
+  // Drag arrows and the 자동정렬 button share one cluster in the open space
+  // below the staff, so neither has to fight the staff lines for legibility.
+  const arrowGap = 22;
+  [-1, 1].forEach((dir) => {
+    group!.appendChild(
+      el('path', {
+        d: `M${spec.buttonX + dir * (arrowGap + 7)} ${spec.buttonY - 6} L${spec.buttonX + dir * (arrowGap + 14)} ${spec.buttonY} L${spec.buttonX + dir * (arrowGap + 7)} ${spec.buttonY + 6} Z`,
+        fill: accent,
+        opacity: spec.dragging ? 1 : 0.75,
+      }),
+    );
+    group!.appendChild(
+      el('line', {
+        x1: spec.buttonX + dir * arrowGap,
+        y1: spec.buttonY,
+        x2: spec.buttonX + dir * (arrowGap + 7),
+        y2: spec.buttonY,
+        stroke: accent,
+        'stroke-width': 2,
+        opacity: spec.dragging ? 1 : 0.75,
+      }),
+    );
+  });
+
+  group.appendChild(
+    el('circle', {
+      cx: spec.buttonX,
+      cy: spec.buttonY,
+      r: 13,
+      fill: spec.buttonHot ? accent : '#ffffff',
+      stroke: accent,
+      'stroke-width': 2,
+    }),
+  );
+  // Three stacked bars of increasing length — a "tidy these up" glyph.
+  const barColor = spec.buttonHot ? '#ffffff' : accent;
+  [-4.5, 0, 4.5].forEach((dy, i) => {
+    const half = [3, 5, 7][i];
+    group!.appendChild(
+      el('line', {
+        x1: spec.buttonX - half,
+        y1: spec.buttonY + dy,
+        x2: spec.buttonX + half,
+        y2: spec.buttonY + dy,
+        stroke: barColor,
+        'stroke-width': 2,
+        'stroke-linecap': 'round',
+      }),
+    );
+  });
+}
+
+const MEASURE_WARNING_GROUP_ID = 'measure-warning-group';
+
+export interface MeasureWarningSpec {
+  x: number;
+  y: number;
+  hot: boolean;
+}
+
+/** Red "!" badges over the end of every measure left short of its time
+ * signature — pressing one pads that measure out with rests (see
+ * fillStaffMeasureWithRests). On the overlay, not in the score SVG, so an
+ * in-progress score still prints/exports clean. */
+export function renderMeasureWarnings(svg: SVGSVGElement | null, specs: MeasureWarningSpec[]): void {
+  if (!svg) return;
+  let group = svg.querySelector<SVGGElement>(`#${MEASURE_WARNING_GROUP_ID}`);
+  if (!group) {
+    group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('id', MEASURE_WARNING_GROUP_ID);
+    group.setAttribute('pointer-events', 'none');
+    svg.appendChild(group);
+  }
+  group.replaceChildren();
+  specs.forEach((spec) => {
+    const red = '#e03131';
+    group!.appendChild(
+      el('circle', {
+        cx: spec.x,
+        cy: spec.y,
+        r: spec.hot ? 11 : 9.5,
+        fill: red,
+        stroke: '#ffffff',
+        'stroke-width': 1.5,
+        opacity: spec.hot ? 1 : 0.85,
+      }),
+    );
+    group!.appendChild(
+      el('line', { x1: spec.x, y1: spec.y - 4.5, x2: spec.x, y2: spec.y + 1.5, stroke: '#ffffff', 'stroke-width': 2, 'stroke-linecap': 'round' }),
+    );
+    group!.appendChild(el('circle', { cx: spec.x, cy: spec.y + 4.5, r: 1.3, fill: '#ffffff' }));
+  });
+}
+
 const MARQUEE_BOX_GROUP_ID = 'marquee-box-group';
 const MARQUEE_HL_GROUP_ID = 'marquee-hl-group';
 
