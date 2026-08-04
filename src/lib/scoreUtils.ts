@@ -187,6 +187,22 @@ export function autoAlignMeasure(score: Score, measureIndex: number): Score {
   return { ...score, measures };
 }
 
+/** autoAlignMeasure over every measure at once — the toolbar's 전체 자동정렬
+ * button, for tidying a whole score rather than reaching for each measure's
+ * own barline button one at a time. */
+export function autoAlignScore(score: Score): Score {
+  return score.measures.reduce((s, _measure, i) => autoAlignMeasure(s, i), score);
+}
+
+/** Whether anything in the score carries hand-placed layout at all (a dragged
+ * note X or a dragged measure width) — lets the 전체 자동정렬 button disable
+ * itself when there'd be nothing to undo. */
+export function hasManualLayout(score: Score): boolean {
+  return score.measures.some(
+    (m) => m.widthScale !== undefined || m.treble.notes.some((n) => n.x !== undefined) || m.bass.notes.some((n) => n.x !== undefined),
+  );
+}
+
 /** Sets (or, passing undefined, clears) a measure's hand-dragged width share — see Measure.widthScale. */
 export function setMeasureWidthScale(score: Score, measureIndex: number, widthScale: number | undefined): Score {
   const measures = score.measures.map((m, i) => {

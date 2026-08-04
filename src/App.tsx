@@ -13,6 +13,8 @@ import {
   adjacentIndexAfterDelete,
   attachOrRemoveGraceNote,
   autoAlignMeasure,
+  autoAlignScore,
+  hasManualLayout,
   clearPickupMeasure,
   clearTrailingMeasure,
   fillStaffMeasureWithRests,
@@ -709,6 +711,12 @@ function App() {
     },
     [setScore],
   );
+
+  /** Toolbar's 전체 자동정렬: the same reset as one measure's barline button,
+   * applied to every measure at once. */
+  const handleAutoAlignAll = useCallback(() => {
+    setScore((prev) => autoAlignScore(prev));
+  }, [setScore]);
 
   /** Red "!" badge on an under-filled measure: pads every clef that's been
    * started but left short out to the time signature with rests, longest
@@ -1854,6 +1862,8 @@ function App() {
           onToggleShowScaleDegrees={handleToggleShowScaleDegrees}
           focusedMeasureIndex={focusedMeasureIndex}
           onSetMeasureTimeSignature={handleSetMeasureTimeSignature}
+          onAutoAlignAll={handleAutoAlignAll}
+          canAutoAlignAll={hasManualLayout(score)}
         />
       </div>
       <div className="status-line">

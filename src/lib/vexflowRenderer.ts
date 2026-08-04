@@ -1279,15 +1279,17 @@ export function renderScore(
       // other. Pin both staves to the wider of the two so every beat lines
       // up vertically across the grand staff, matching how real engraving
       // aligns simultaneous notes between clefs.
-      // A grace note (꾸밈음) attached to the FIRST note of a measure has
-      // nowhere to sit but immediately at noteStartX — VexFlow's own stave
-      // width calc reserves room for the clef/key/time glyphs but not for a
-      // leading grace note squeezed in right after them, so it rendered
-      // flush against (sometimes overlapping) those glyphs. Give it its own
-      // breathing room whenever either staff's first note carries one. Grace
-      // notes always draw on the left of their host now (see attachGraceNote),
-      // so this applies regardless of the note's `position` field.
-      const hasLeadingGraceNote = (['treble', 'bass'] as Clef[]).some((c) => !!measure[c].notes[0]?.graceNote);
+      // NOTE: a leading grace note (꾸밈음 on the FIRST note) used to get an
+      // extra 18px of note-start reserved here so it couldn't render flush
+      // against the clef/key/time glyphs. That was reserving the SAME space
+      // twice: the formatter below already widens the beat-0 tick context by
+      // the whole GraceNoteGroup's measured width, grace accidental included.
+      // Paying for it again pushed a grace-bearing measure's first note far
+      // right of its neighbours' and squashed the rest of that measure toward
+      // the barline — #244, reported as two 6/8 measures where only the one
+      // with a grace note sat off its meter glyph. Verified without it in the
+      // worst case (row-start measure, 4-flat key signature, sharp-bearing
+      // grace note): the grace note still clears every glyph comfortably.
       // A grace note's GraceNoteGroup modifier is positioned relative to its
       // host's tick-context X, computed once during the initial joinVoices
       // format() pass below — it does NOT track any further per-note
@@ -1310,7 +1312,7 @@ export function renderScore(
       // themselves must still pin to the wider (sharedNoteStartX) one below
       // to stay vertically aligned across the grand staff.
       const chordLeftBoundX = Math.min(trebleStave.getNoteStartX(), bassStave.getNoteStartX());
-      const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX()) + (hasLeadingGraceNote ? 18 : 0);
+      const sharedNoteStartX = Math.max(trebleStave.getNoteStartX(), bassStave.getNoteStartX());
       trebleStave.setNoteStartX(sharedNoteStartX);
       bassStave.setNoteStartX(sharedNoteStartX);
 
@@ -1327,10 +1329,10 @@ export function renderScore(
         if (showTimeSignature) {
           melodyStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
         }
-        // Mirrors the same leading-grace-note breathing room as the piano
-        // staves above (see hasLeadingGraceNote) — the melody staff shows the
-        // same treble notes (see deriveMelodyNotes), so it needs the same fix.
-        if (hasLeadingGraceNote) melodyStave.setNoteStartX(melodyStave.getNoteStartX() + 18);
+        // No extra leading-grace-note reserve here either, for the same
+        // double-counting reason as the piano staves above (#244) — this
+        // staff's own formatter already widens its beat-0 tick context by the
+        // grace note's full width.
         melodyStave.setContext(context).draw();
 
         // The melody staff mirrors measure.treble.notes index-for-index (see
@@ -1629,6 +1631,12 @@ export function renderScore(
           // landing to the RIGHT of the host that moved past it. Applied to
           // the grace note's own xShift below (in addition to GRACE_NUDGE_PX).
           const hostShiftDeltas: number[] = staveNotes.map(() => 0);
+          // Both clefs share one width, so the denser one governs how much
+          // room a leading gap may take (same "denser clef wins" rule
+          // measureContentWeight uses) — and both must resolve to the SAME
+          // gap, or a treble note and its simultaneous bass note would stop
+          // lining up vertically.
+          const leadingGap = leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length));
           if (measureHasGrace) {
             // Measures with a grace note anywhere keep the OLD behavior
             // (manual free-X drag honored, otherwise VexFlow's own natural
@@ -1672,12 +1680,6 @@ export function renderScore(
             // #230). A note the user has explicitly dragged (free-X — see
             // notes[i].x) keeps that manual position instead, even once the
             // measure fills up and would otherwise auto-arrange (#241).
-            // Both clefs share one width, so the denser one governs how much
-            // room a leading gap may take (same "denser clef wins" rule
-            // measureContentWeight uses) — and both must resolve to the SAME
-            // gap, or a treble note and its simultaneous bass note would stop
-            // lining up vertically.
-            const leadingGap = leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length));
             const weightedAreaWidth = Math.max(0, noteAreaWidth - leadingGap - TRAILING_GAP_PX);
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {

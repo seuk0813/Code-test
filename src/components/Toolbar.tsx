@@ -199,6 +199,10 @@ interface ToolbarProps {
   /** Sets (or, passing null, clears) a time signature override for JUST
    * `focusedMeasureIndex` — see Measure.timeSignatureOverride. */
   onSetMeasureTimeSignature: (measureIndex: number, timeSignature: { numerator: number; denominator: number } | null) => void;
+  /** 전체 자동정렬: drops hand-dragged note Xs and measure widths across the whole score (see autoAlignScore). */
+  onAutoAlignAll: () => void;
+  /** False when nothing in the score is hand-placed, so the button can disable itself. */
+  canAutoAlignAll: boolean;
   hasSelection: boolean;
   onDeleteSelected: () => void;
   onDeselectNote: () => void;
@@ -237,6 +241,8 @@ export function Toolbar({
   marqueeAllTuplet,
   focusedMeasureIndex,
   onSetMeasureTimeSignature,
+  onAutoAlignAll,
+  canAutoAlignAll,
   hasSelection,
   onDeleteSelected,
   onDeselectNote,
@@ -381,7 +387,7 @@ export function Toolbar({
           className={`tool-compact ${showKeyOptions ? 'active' : ''}`}
           onClick={() => setShowKeyOptions((v) => !v)}
           aria-label="설정 옵션 더보기"
-          title="이 마디만 박자 변경, 임시표/음정 도수 표기 옵션 더보기"
+          title="이 마디만 박자 변경, 전체 자동정렬, 임시표/음정 도수 표기 옵션 더보기"
         >
           +
         </button>
@@ -413,6 +419,21 @@ export function Toolbar({
               ))}
             </select>
           </label>
+        )}
+        {showKeyOptions && (
+          <button
+            className="tool-icon-btn"
+            onClick={onAutoAlignAll}
+            disabled={!canAutoAlignAll}
+            aria-label="전체 자동정렬"
+            title={
+              canAutoAlignAll
+                ? '악보의 모든 마디에서 손으로 옮긴 음표 위치와 직접 조절한 마디 폭을 지우고, 음표 길이에 맞춰 자동 배치로 되돌립니다. 한 마디만 정렬하려면 그 마디의 마디 선에 마우스를 올려 나오는 단추를 누르세요'
+                : '손으로 옮긴 음표나 직접 조절한 마디 폭이 없어 정렬할 것이 없습니다'
+            }
+          >
+            전체 자동정렬
+          </button>
         )}
         {showKeyOptions && (
           <button
