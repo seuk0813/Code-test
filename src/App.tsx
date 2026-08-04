@@ -563,17 +563,31 @@ function App() {
     setEditTool((t) => ({ ...t, graceNoteMode: !t.graceNoteMode }));
   }, [selected, score, setScore, handleSelectGrace]);
 
-  /** 셋잇단음표 (triplet) toolbar button: with a note already selected,
-   * toggles its `tuplet` flag directly (2/3 of its written duration — see
-   * NoteEvent.tuplet). With nothing selected, it's pen-only: toggles whether
-   * the NEXT newly-placed note is a triplet, mirroring how `dotted` behaves. */
+  /** Exactly 3 notes shift-drag-marquee-selected is the natural gesture for
+   * marking an existing run as a triplet (see computeTupletGroups, which
+   * only brackets runs of exactly 3 consecutive same-duration tupleted
+   * notes) — mirrors marqueeAllTuplet below for the button's active state. */
+  const marqueeAllTuplet =
+    marquee.length === 3 && marquee.every((loc) => score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex]?.tuplet);
+
+  /** 셋잇단음표 (triplet) toolbar button: with exactly 3 notes marquee-selected
+   * (shift-drag), toggles all 3 together into/out of a triplet group. With a
+   * single note selected instead, toggles its `tuplet` flag directly (2/3 of
+   * its written duration — see NoteEvent.tuplet). With nothing selected, it's
+   * pen-only: toggles whether the NEXT newly-placed note is a triplet,
+   * mirroring how `dotted` behaves. */
   const handleTupletButtonClick = useCallback(() => {
+    if (marquee.length === 3) {
+      const nextTuplet = !marqueeAllTuplet;
+      setScore((prev) => marquee.reduce((s, loc) => updateNoteInScore(s, loc, (note) => ({ ...note, tuplet: nextTuplet })), prev));
+      return;
+    }
     if (selected) {
       setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, tuplet: !note.tuplet })));
       return;
     }
     setEditTool((t) => ({ ...t, tuplet: !t.tuplet }));
-  }, [selected, setScore]);
+  }, [marquee, marqueeAllTuplet, selected, setScore]);
 
   /** Toolbar's "이 마디만 박자" control: sets/clears a per-measure time
    * signature override (see Measure.timeSignatureOverride) — e.g. one 3/8
@@ -1779,6 +1793,8 @@ function App() {
           onEditToolChange={handleEditToolChange}
           onGraceNoteButtonClick={handleGraceNoteButtonClick}
           onTupletButtonClick={handleTupletButtonClick}
+          tupletMarqueeEligible={marquee.length === 3}
+          marqueeAllTuplet={marqueeAllTuplet}
           hasSelection={!!selected}
           onDeleteSelected={handleDeleteSelected}
           onDeselectNote={handleDeselectNote}
@@ -1828,6 +1844,7 @@ function App() {
         onSelectGrace={handleSelectGrace}
         onChangeDuration={handleChangeDuration}
         onFocusMeasure={handleFocusMeasure}
+        focusedMeasureIndex={focusedMeasureIndex}
         onAddLineBreak={handleAddLineBreak}
         onMoveChord={handleMoveChord}
         onSetChordStartNote={handleSetChordStartNote}

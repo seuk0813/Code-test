@@ -495,7 +495,7 @@ function measureContentWeight(measure: Measure, timeSignature: TimeSignature): n
  * natural total width instead of being artificially stretched to match a
  * full row.
  */
-function computeRowMeasureWidths(row: number[], score: Score, capacity: number): number[] {
+function computeRowMeasureWidths(row: number[], score: Score, capacity: number, focusedMeasureIndex?: number | null): number[] {
   const baseWidths = row.map((_, localIndex) => (localIndex === 0 ? FIRST_MEASURE_WIDTH : MEASURE_WIDTH));
 
   const lastScoreIndex = score.measures.length - 1;
@@ -511,7 +511,17 @@ function computeRowMeasureWidths(row: number[], score: Score, capacity: number):
     if (localIndex === partialLocalIndex) return 0;
     const measure = score.measures[measureIndex];
     const timeSignature = measureTimeSignature(score, measureIndex);
-    return measure ? measureContentWeight(measure, timeSignature) : fullMeasureWeight(timeSignature);
+    if (!measure) return fullMeasureWeight(timeSignature);
+    const contentWeight = measureContentWeight(measure, timeSignature);
+    // The measure the user is actively working in never shrinks below its
+    // typical full width, even while sparsely written — placing a measure's
+    // very first note otherwise immediately shrank its slot toward
+    // WRITTEN_FRACTION_FLOOR, cramping the room available to click in the
+    // NEXT note right when the user most needs it. It's still free to grow
+    // past full width for genuinely dense content (Math.max keeps that), and
+    // reflows back down to its normal content-scaled width once focus moves
+    // to a different measure.
+    return measureIndex === focusedMeasureIndex ? Math.max(contentWeight, fullMeasureWeight(timeSignature)) : contentWeight;
   });
   const weightSum = weights.reduce((sum, w) => sum + w, 0);
 
@@ -1134,6 +1144,11 @@ export function renderScore(
    * focus while entering/deleting them (see the dim-group wrap below and
    * drawDegreeMarks' `emphasize` param). */
   degreeInputMode?: boolean,
+  /** The measure the user is actively working in (see App's focusedMeasureIndex)
+   * — kept at its typical full width regardless of how little is written yet,
+   * so placing a measure's first note doesn't immediately cramp the room left
+   * to add the next one (see computeRowMeasureWidths). */
+  focusedMeasureIndex?: number | null,
 ): RenderResult {
   // While playing, the sounding note is recolored instead of any selection —
   // so a prior selection doesn't also show red at the same time.
@@ -1149,7 +1164,7 @@ export function renderScore(
   );
 
   const capacity = measureCapacityBeats(score.timeSignature);
-  const rowMeasureWidths = rows.map((row) => computeRowMeasureWidths(row, score, capacity));
+  const rowMeasureWidths = rows.map((row) => computeRowMeasureWidths(row, score, capacity, focusedMeasureIndex));
   const rowWidths = rowMeasureWidths.map((widths) => widths.reduce((sum, w) => sum + w, 20));
   // The composer credit always sits above the 4th measure's slot (index 3 in
   // row 0) — even before that measure actually exists — so it never jumps

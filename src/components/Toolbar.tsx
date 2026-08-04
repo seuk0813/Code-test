@@ -186,8 +186,12 @@ interface ToolbarProps {
   /** 꾸밈음 button: with a note selected, attaches/removes a grace note on it
    * directly; with nothing selected, falls back to toggling 꾸밈음 mode (see App). */
   onGraceNoteButtonClick: () => void;
-  /** 셋잇단음표 button: with a note selected, toggles its `tuplet` flag directly; with nothing selected, toggles the pen (editTool.tuplet) for the next new note. */
+  /** 셋잇단음표 button: with exactly 3 notes shift-drag-marquee-selected, toggles all 3 together into/out of a triplet group; with a single note selected, toggles its `tuplet` flag directly; with nothing selected, toggles the pen (editTool.tuplet) for the next new note. */
   onTupletButtonClick: () => void;
+  /** True when exactly 3 notes are marquee-selected — the button targets that group instead of a single selection or the pen. */
+  tupletMarqueeEligible: boolean;
+  /** Whether all 3 marquee-selected notes already carry the triplet flag — drives the button's active state while tupletMarqueeEligible. */
+  marqueeAllTuplet: boolean;
   /** Last measure clicked/focused (see App's focusedMeasureIndex) — the
    * "이 마디만 박자 변경" control targets this measure. Null = no measure
    * focused yet, so the control stays disabled. */
@@ -229,6 +233,8 @@ export function Toolbar({
   onEditToolChange,
   onGraceNoteButtonClick,
   onTupletButtonClick,
+  tupletMarqueeEligible,
+  marqueeAllTuplet,
   focusedMeasureIndex,
   onSetMeasureTimeSignature,
   hasSelection,
@@ -536,10 +542,14 @@ export function Toolbar({
         )}
         {showNoteOptions && (
           <button
-            className={`tool-icon-btn ${editTool.tuplet ? 'active' : ''}`}
+            className={`tool-icon-btn ${(tupletMarqueeEligible ? marqueeAllTuplet : editTool.tuplet) ? 'active' : ''}`}
             onClick={onTupletButtonClick}
             aria-label="셋잇단음표"
-            title="음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다"
+            title={
+              tupletMarqueeEligible
+                ? '음표 3개를 선택한 상태이므로 누르면 이 3개를 하나의 셋잇단음표 그룹으로 묶습니다 (다시 누르면 해제)'
+                : '음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다. 음표 3개를 shift-드래그로 선택하면 한 번에 그룹으로 묶을 수 있습니다'
+            }
           >
             <span className="tool-glyph">♪³</span>
           </button>

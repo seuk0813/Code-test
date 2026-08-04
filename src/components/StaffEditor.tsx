@@ -146,6 +146,10 @@ interface StaffEditorProps {
   onSelectGrace: (location: NoteLocation | null) => void;
   onChangeDuration: (location: NoteLocation, duration: DurationValue) => void;
   onFocusMeasure: (measureIndex: number) => void;
+  /** The measure currently being worked in (App's focusedMeasureIndex) — kept at
+   * full width regardless of how little is written yet, so adding a measure's
+   * first note doesn't immediately cramp the room to add the next one. */
+  focusedMeasureIndex: number | null;
   onAddLineBreak: (afterMeasureIndex: number) => void;
   onMoveChord: (measureIndex: number, chordId: string, offset: number, toMeasureIndex: number) => void;
   /** Sets which melody note (see ChordSymbol.startNoteIndex) a chord starts harmonically applying from — chosen via its "적용 시작 음표 선택" UI, separate from dragging its label (onMoveChord, purely cosmetic). */
@@ -352,6 +356,7 @@ function StaffEditorInner({
   onSelectGrace,
   onChangeDuration,
   onFocusMeasure,
+  focusedMeasureIndex,
   onAddLineBreak,
   onMoveChord,
   onSetChordStartNote,
@@ -516,7 +521,7 @@ function StaffEditorInner({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode);
+    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
@@ -527,7 +532,7 @@ function StaffEditorInner({
     // current content size at whatever zoom level is already active — e.g.
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode]);
+  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex]);
 
   // Consumes pendingChainRef (see its declaration) the moment the render
   // above has refreshed renderResultRef.current for the just-committed note
