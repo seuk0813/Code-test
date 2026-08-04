@@ -310,10 +310,21 @@ const TRAILING_GAP_PX = 8;
  * normal-width measure but way too much on a narrow shrunk-for-sparse-
  * content one — see #234) instead of a flat constant, capped so it doesn't
  * eat too much of a very wide measure's area either. */
-const LEADING_GAP_FRACTION = 0.15;
-const LEADING_GAP_MAX_PX = 40;
-function leadingGapFor(noteAreaWidth: number): number {
-  return Math.min(LEADING_GAP_MAX_PX, noteAreaWidth * LEADING_GAP_FRACTION);
+const LEADING_GAP_FRACTION = 0.1;
+const LEADING_GAP_MAX_PX = 24;
+/** Hard ceiling on the leading gap as a share of the room each note actually
+ * gets. Sizing the gap off the measure's total width alone made it grow with
+ * the measure while the per-note spacing inside it SHRANK — a busy measure of
+ * 16ths ended up reserving a bigger margin before its first note (40px) than
+ * it gave between consecutive notes (23px), which is exactly the dead space
+ * at the start of each measure that #243 reports. Tying the cap to average
+ * per-note spacing keeps a sparse measure's breathing room (a lone whole note
+ * still clears the clef comfortably) while letting a dense one give nearly
+ * all of its width back to the notes. */
+const LEADING_GAP_SPACING_FRACTION = 0.45;
+function leadingGapFor(noteAreaWidth: number, noteCount = 1): number {
+  const averageSpacing = noteAreaWidth / Math.max(1, noteCount);
+  return Math.min(LEADING_GAP_MAX_PX, noteAreaWidth * LEADING_GAP_FRACTION, averageSpacing * LEADING_GAP_SPACING_FRACTION);
 }
 
 /**
@@ -1360,7 +1371,7 @@ export function renderScore(
             // A manually dragged note (melodyNotes[i].x) keeps that position
             // regardless of melodyFull (#241).
             const melodyMap = buildBeatWeightMap([melodyNotes]);
-            const melodyLeadingGap = leadingGapFor(melodyNoteAreaWidth);
+            const melodyLeadingGap = leadingGapFor(melodyNoteAreaWidth, melodyNotes.length);
             const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - melodyLeadingGap - TRAILING_GAP_PX);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
@@ -1661,7 +1672,12 @@ export function renderScore(
             // #230). A note the user has explicitly dragged (free-X — see
             // notes[i].x) keeps that manual position instead, even once the
             // measure fills up and would otherwise auto-arrange (#241).
-            const leadingGap = leadingGapFor(noteAreaWidth);
+            // Both clefs share one width, so the denser one governs how much
+            // room a leading gap may take (same "denser clef wins" rule
+            // measureContentWeight uses) — and both must resolve to the SAME
+            // gap, or a treble note and its simultaneous bass note would stop
+            // lining up vertically.
+            const leadingGap = leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length));
             const weightedAreaWidth = Math.max(0, noteAreaWidth - leadingGap - TRAILING_GAP_PX);
             let cumBeat = 0;
             staveNotes.forEach((sn, i) => {
