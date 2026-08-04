@@ -29,8 +29,8 @@ const SCALE_DEGREE_LABEL_TEXT: Record<ScaleDegreeLabel, string> = {
   '#5': '#5',
   b13: 'b13',
   '13': '13',
-  dim7: '디미니시7',
-  aug: '어그먼트',
+  dim7: 'dim7',
+  aug: 'aug',
 };
 
 /** Note-shape parameters for each duration, drawn as a small inline SVG icon. */
@@ -688,11 +688,11 @@ function ConnectButton({
 
 /** "⋯" popover holding rarely-used actions (MusicXML / MIDI export) out of the main toolbar. */
 export function MoreMenu({
-  onPrint,
+  onNewScore,
   onExportMusicXml,
   onExportMidi,
 }: {
-  onPrint: () => void;
+  onNewScore: () => void;
   onExportMusicXml: () => void;
   onExportMidi: () => void;
 }) {
@@ -717,11 +717,11 @@ export function MoreMenu({
         <div className="more-menu-popover">
           <button
             onClick={() => {
-              onPrint();
+              onNewScore();
               setOpen(false);
             }}
           >
-            인쇄하기
+            새로 만들기
           </button>
           <button
             onClick={() => {

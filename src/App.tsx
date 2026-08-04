@@ -1762,14 +1762,14 @@ function App() {
             >
               ⏹
             </button>
-            <button className="quick-action-button" onClick={handleNewScore} title="현재 악보를 지우고 새 악보를 시작합니다">
-              📄 새로 만들기
-            </button>
             <button className="quick-action-button" onClick={handleOpenSave} title="현재 악보를 파일로 저장합니다">
               💾 저장
             </button>
             <LoadMenu recentScores={recentScores} onLoadFile={handleLoadJson} onLoadRecent={handleLoadRecent} />
-            <MoreMenu onPrint={handlePrint} onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
+            <button className="quick-action-button" onClick={handlePrint} title="현재 악보를 바로 인쇄합니다">
+              🖨️ 인쇄하기
+            </button>
+            <MoreMenu onNewScore={handleNewScore} onExportMusicXml={handleExportMusicXml} onExportMidi={handleExportMidi} />
           </div>
         </div>
         <Toolbar
