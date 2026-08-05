@@ -313,19 +313,19 @@ const A4_WIDTH_PT = 595.28;
 const A4_HEIGHT_PT = 841.89;
 const PDF_MARGIN_PT = 28;
 
-/**
- * Draws a rasterized page's PNG onto the current page of `doc`, scaled to
- * fit within the A4 margins (keeping its aspect ratio) and pinned to the
- * top, over an explicitly white-filled page — so a page with only a few
- * measures still produces a full, clean A4 sheet instead of a page sized to
- * the score's own odd landscape dimensions (which used to leave a black/
- * clipped edge and a non-standard page size).
- */
-function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: number, height: number): void {
-  doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, A4_WIDTH_PT, A4_HEIGHT_PT, 'F');
-  if (!dataUrl) return;
+/** Baseline of the centered "- N -" page number, in pt from the page top. */
+const PAGE_NUMBER_BASELINE_PT = A4_HEIGHT_PT - PDF_MARGIN_PT / 2;
+const PAGE_NUMBER_FONT_PT = 10;
 
+/**
+ * Where a rasterized page of the given pixel size sits on an A4 sheet: scaled
+ * to fit inside the margins keeping its aspect ratio, centered horizontally
+ * and pinned to the top. Shared by the PDF writer and the print window (see
+ * printScore) so the two can't drift apart — printing used to stretch each
+ * page edge-to-edge instead, which magnified it past the paper and clipped
+ * the left-hand clefs and the top of the title (#247).
+ */
+function fitToA4(width: number, height: number): { drawW: number; drawH: number; offX: number; offY: number } {
   const availW = A4_WIDTH_PT - PDF_MARGIN_PT * 2;
   const availH = A4_HEIGHT_PT - PDF_MARGIN_PT * 2;
   const aspect = width / height;
@@ -335,8 +335,21 @@ function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: 
     drawH = availH;
     drawW = availH * aspect;
   }
-  const offX = (A4_WIDTH_PT - drawW) / 2;
-  const offY = PDF_MARGIN_PT;
+  return { drawW, drawH, offX: (A4_WIDTH_PT - drawW) / 2, offY: PDF_MARGIN_PT };
+}
+
+/**
+ * Draws a rasterized page's PNG onto the current page of `doc`, positioned by
+ * fitToA4, over an explicitly white-filled page — so a page with only a few
+ * measures still produces a full, clean A4 sheet instead of a page sized to
+ * the score's own odd landscape dimensions (which used to leave a black/
+ * clipped edge and a non-standard page size).
+ */
+function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: number, height: number): void {
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, A4_WIDTH_PT, A4_HEIGHT_PT, 'F');
+  if (!dataUrl) return;
+  const { drawW, drawH, offX, offY } = fitToA4(width, height);
   doc.addImage(dataUrl, 'PNG', offX, offY, drawW, drawH);
 }
 
@@ -357,9 +370,9 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
     if (i > 0) doc.addPage();
     const { dataUrl, width, height } = await renderScoreToPng(pages[i]);
     drawPngFitToA4Page(doc, dataUrl, width, height);
-    doc.setFontSize(10);
+    doc.setFontSize(PAGE_NUMBER_FONT_PT);
     doc.setTextColor(80, 80, 80);
-    doc.text(`- ${i + 1} -`, A4_WIDTH_PT / 2, A4_HEIGHT_PT - PDF_MARGIN_PT / 2, { align: 'center' });
+    doc.text(`- ${i + 1} -`, A4_WIDTH_PT / 2, PAGE_NUMBER_BASELINE_PT, { align: 'center' });
   }
 
   const blob = doc.output('blob');
@@ -405,19 +418,62 @@ export async function printScore(score: Score): Promise<void> {
   const rendered = await Promise.all(pages.map((p) => renderScoreToPng(p)));
 
   printWindow.document.body.textContent = '';
+  // Each sheet is a block of exactly A4's own pt dimensions with everything
+  // inside it absolutely positioned, so the browser lays the page out in the
+  // SAME coordinate space jsPDF writes into (see fitToA4) rather than
+  // scaling the image to whatever the paper happens to be. `overflow: hidden`
+  // plus purely absolute children also means no stray inline whitespace can
+  // push a phantom blank sheet out the end.
   const style = printWindow.document.createElement('style');
   style.textContent = `
     @page { size: A4; margin: 0; }
-    * { margin: 0; padding: 0; }
-    body { background: #fff; }
-    img { display: block; width: 100%; height: auto; page-break-after: always; }
-    img:last-child { page-break-after: auto; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .sheet {
+      position: relative;
+      box-sizing: border-box;
+      width: ${A4_WIDTH_PT}pt;
+      height: ${A4_HEIGHT_PT}pt;
+      overflow: hidden;
+      background: #fff;
+      page-break-after: always;
+      break-after: page;
+    }
+    .sheet:last-child { page-break-after: auto; break-after: auto; }
+    .sheet img { position: absolute; }
+    .page-number {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: ${PAGE_NUMBER_FONT_PT}pt;
+      line-height: 1;
+      color: rgb(80, 80, 80);
+    }
   `;
   printWindow.document.head.appendChild(style);
-  rendered.forEach(({ dataUrl }) => {
-    const img = printWindow.document.createElement('img');
-    img.src = dataUrl;
-    printWindow.document.body.appendChild(img);
+  rendered.forEach(({ dataUrl, width, height }, i) => {
+    const sheet = printWindow.document.createElement('div');
+    sheet.className = 'sheet';
+    if (dataUrl) {
+      const { drawW, drawH, offX, offY } = fitToA4(width, height);
+      const img = printWindow.document.createElement('img');
+      img.src = dataUrl;
+      img.style.left = `${offX}pt`;
+      img.style.top = `${offY}pt`;
+      img.style.width = `${drawW}pt`;
+      img.style.height = `${drawH}pt`;
+      sheet.appendChild(img);
+    }
+    // jsPDF positions text by its BASELINE; CSS positions a line box by its
+    // top, so back the baseline out by roughly the font's ascent to land the
+    // number on the same line as the PDF's.
+    const number = printWindow.document.createElement('div');
+    number.className = 'page-number';
+    number.style.top = `${PAGE_NUMBER_BASELINE_PT - PAGE_NUMBER_FONT_PT * 0.8}pt`;
+    number.textContent = `- ${i + 1} -`;
+    sheet.appendChild(number);
+    printWindow.document.body.appendChild(sheet);
   });
 
   // Data-URL images decode near-instantly but not necessarily synchronously

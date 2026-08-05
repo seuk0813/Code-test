@@ -1815,26 +1815,67 @@ export function renderScore(
                 }
               });
 
+              const markColorFor = (pitchIndex: number): string | null => {
+                if (!isSelected && !isPlaying) return null;
+                const narrowed = isSelected && !isPlaying && selectedPitchIndexForClef !== null && note.pitches.length > 1;
+                return narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
+              };
+
+              // Accidentals are drawn by hand rather than as VexFlow Accidental
+              // modifiers (so they can be recolored along with their note),
+              // which means reproducing the two placement rules that modifier
+              // would have handled — both of which were missing (#248):
+              //
+              // 1. A chord containing a second has one notehead DISPLACED by a
+              //    full notehead width, and pinning every accidental to the
+              //    note's single base X drew them straight through that head.
+              //    The whole accidental block goes left of the LEFTMOST head.
+              // 2. Several accidentals in one chord all landed on the same x,
+              //    stacked on top of each other. Real engraving staggers them
+              //    into columns, which is what the loop below does — top pitch
+              //    first, each accidental taking the leftmost column that has
+              //    nothing too close above or below it.
+              let headLeftX = centerXs[noteIndex];
+              try {
+                const heads = (sn as unknown as { noteHeads?: { getAbsoluteX(): number }[] }).noteHeads;
+                if (heads && heads.length > 0) headLeftX = Math.min(headLeftX, ...heads.map((h) => h.getAbsoluteX()));
+              } catch {
+                // Displacement isn't measurable on this note shape; the note's
+                // own left edge is still a safe (if slightly tight) base.
+              }
+              const accidentalColumnWidth = spacing * 1.25;
+              const accidentalMinSeparation = spacing * 2.2;
+              const columnYs: number[][] = [];
+              note.pitches
+                .map((pitch, pitchIndex) => ({ pitch, pitchIndex }))
+                .filter(
+                  ({ pitch, pitchIndex }) =>
+                    !!pitch.accidental &&
+                    !(hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)),
+                )
+                .sort((a, b) => ys[a.pitchIndex] - ys[b.pitchIndex])
+                .forEach(({ pitch, pitchIndex }) => {
+                  const y = ys[pitchIndex];
+                  let column = columnYs.findIndex((taken) => taken.every((other) => Math.abs(other - y) >= accidentalMinSeparation));
+                  if (column === -1) {
+                    columnYs.push([]);
+                    column = columnYs.length - 1;
+                  }
+                  columnYs[column].push(y);
+                  accidentalMarks.push({
+                    x: headLeftX - column * accidentalColumnWidth,
+                    y,
+                    type: pitch.accidental as Exclude<Accidental, ''>,
+                    color: markColorFor(pitchIndex),
+                  });
+                });
+
               note.pitches.forEach((pitch, pitchIndex) => {
                 if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
-                if (!pitch.accidental && pitch.finger === undefined) return;
-                let color: string | null = null;
-                if (isSelected || isPlaying) {
-                  const narrowed =
-                    isSelected && !isPlaying && selectedPitchIndexForClef !== null && note.pitches.length > 1;
-                  color = narrowed ? (pitchIndex === selectedPitchIndexForClef ? '#d6432b' : null) : '#d6432b';
-                }
-                if (pitch.accidental) {
-                  // Standard notation: the accidental sits to the LEFT of its
-                  // notehead, so it uses the note's left edge, not the right.
-                  accidentalMarks.push({ x: centerXs[noteIndex], y: ys[pitchIndex], type: pitch.accidental, color });
-                }
-                if (pitch.finger !== undefined) {
-                  // Fingering sits to the right of the notehead — accidentals
-                  // no longer live there too, so no extra offset is needed.
-                  const fingerX = noteheadRightX + FINGER_GAP;
-                  fingeringMarks.push({ x: fingerX, y: ys[pitchIndex], finger: pitch.finger, color });
-                }
+                if (pitch.finger === undefined) return;
+                // Fingering sits to the right of the notehead — accidentals
+                // no longer live there too, so no extra offset is needed.
+                fingeringMarks.push({ x: noteheadRightX + FINGER_GAP, y: ys[pitchIndex], finger: pitch.finger, color: markColorFor(pitchIndex) });
               });
             }
           });
