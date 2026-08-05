@@ -1843,8 +1843,16 @@ export function renderScore(
                 // Displacement isn't measurable on this note shape; the note's
                 // own left edge is still a safe (if slightly tight) base.
               }
-              const accidentalColumnWidth = spacing * 1.25;
-              const accidentalMinSeparation = spacing * 2.2;
+              // Accidentals should read as ONE even column sitting the same
+              // distance from the noteheads, not as a scattered fan (#249).
+              // The glyphs are narrow and short enough that even a chord
+              // stacked in thirds (one staff space apart) shares a single
+              // column cleanly — verified by eye, which is why the threshold
+              // sits just under one space. Only pitches a SECOND apart are
+              // genuinely too close to share, and those are exactly the
+              // chords VexFlow displaces a notehead in anyway.
+              const accidentalColumnWidth = spacing * 1.1;
+              const accidentalMinSeparation = spacing * 0.9;
               const columnYs: number[][] = [];
               note.pitches
                 .map((pitch, pitchIndex) => ({ pitch, pitchIndex }))
