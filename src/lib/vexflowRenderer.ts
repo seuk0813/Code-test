@@ -1838,24 +1838,50 @@ export function renderScore(
               // leftmost head with a stagger (which pushed accidentals far
               // from the notes they belong to, and split chords stacked in
               // thirds that would have sat together perfectly well).
-              let headLeftX = centerXs[noteIndex];
+              // Every accidental hangs off ITS OWN notehead, so it always sits
+              // the same short distance from the note it belongs to (#249).
+              //
+              // The subtlety is that a chord containing a SECOND can't print
+              // both noteheads in one column, so VexFlow shifts one of them
+              // sideways by exactly one notehead width — toward the stem side.
+              // An accidental has to travel with its own head or it ends up
+              // stranded far from its note (which is what a previous pass did
+              // by anchoring every accidental to the chord's leftmost head).
+              //
+              // NoteHead.getAbsoluteX() is NOT usable for this: it reports the
+              // displacement twice (a head that renders one width across is
+              // reported two widths across), so the position is derived from
+              // the note's own X plus the displacement flag instead.
+              const displacedHeads = (() => {
+                try {
+                  const heads = (sn as unknown as { noteHeads?: { isDisplaced(): boolean }[] }).noteHeads;
+                  if (heads && heads.length === note.pitches.length) return heads.map((h) => h.isDisplaced());
+                } catch {
+                  // Not measurable on this note shape — treat nothing as displaced.
+                }
+                return null;
+              })();
+              let headGlyphWidth = 0;
               try {
-                const heads = (sn as unknown as { noteHeads?: { getAbsoluteX(): number }[] }).noteHeads;
-                if (heads && heads.length > 0) headLeftX = Math.min(headLeftX, ...heads.map((h) => h.getAbsoluteX()));
+                headGlyphWidth = sn.getGlyphWidth();
               } catch {
-                // Displacement isn't measurable on this note shape; the note's
-                // own left edge is still a safe (if slightly tight) base.
+                // Leaves every head at the note's base X, as before.
               }
-              // One shared column, so the accidentals read as an even stack at
-              // a uniform distance from the noteheads (#249). Only a pair
-              // closer than one staff space — i.e. an actual SECOND — is
-              // forced out to a second column, because at half a space the two
-              // glyphs genuinely print on top of each other (confirmed by
-              // rendering it). Thirds and wider share the column cleanly, so
-              // an ordinary stacked chord stays perfectly aligned; a chord
-              // containing a second is also the case where VexFlow has already
-              // offset the noteheads themselves, so the split reads as
-              // deliberate rather than stray.
+              const stemDirection = sn.getStemDirection() === Stem.DOWN ? -1 : 1;
+              // Accidentals belong to the LEFT of the whole chord — dropping
+              // one into the gap between a displaced head and its neighbour
+              // prints it straight over that neighbour's notehead. So the
+              // column starts at the leftmost head, which is the base X unless
+              // a down-stem chord pushed a displaced head one width left.
+              const displacedLeft = stemDirection < 0 && !!displacedHeads?.some(Boolean);
+              const accidentalBaseX = centerXs[noteIndex] - (displacedLeft ? headGlyphWidth : 0);
+              // Then a single shared column, so they read as an even stack a
+              // uniform short distance from the notes (#249). Only a pair
+              // closer than one staff space — an actual SECOND — is pushed out
+              // to a second column, since at half a space the two glyphs
+              // genuinely print on top of each other. Thirds and wider share
+              // the column cleanly, so an ordinary stacked chord stays exactly
+              // aligned.
               const accidentalColumnWidth = spacing;
               const accidentalMinSeparation = spacing * 0.9;
               const columnYs: number[][] = [];
@@ -1876,7 +1902,7 @@ export function renderScore(
                   }
                   columnYs[column].push(y);
                   accidentalMarks.push({
-                    x: headLeftX - column * accidentalColumnWidth,
+                    x: accidentalBaseX - column * accidentalColumnWidth,
                     y,
                     type: pitch.accidental as Exclude<Accidental, ''>,
                     color: markColorFor(pitchIndex),
