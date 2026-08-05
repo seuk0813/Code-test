@@ -1822,19 +1822,22 @@ export function renderScore(
               };
 
               // Accidentals are drawn by hand rather than as VexFlow Accidental
-              // modifiers (so they can be recolored along with their note),
-              // which means reproducing the two placement rules that modifier
-              // would have handled — both of which were missing (#248):
+              // modifiers (so they can be recolored along with their note), so
+              // each one is placed just left of ITS OWN notehead. That single
+              // rule is what makes them line up: noteheads in a chord almost
+              // all share one x, so their accidentals land in one even column
+              // at a uniform distance (#249). The exception carries its own
+              // justification — a chord containing a SECOND has that notehead
+              // displaced sideways by VexFlow, and its accidental simply
+              // travels with it, which both keeps it off the displaced head
+              // (#248) and reads as deliberate rather than scattered.
               //
-              // 1. A chord containing a second has one notehead DISPLACED by a
-              //    full notehead width, and pinning every accidental to the
-              //    note's single base X drew them straight through that head.
-              //    The whole accidental block goes left of the LEFTMOST head.
-              // 2. Several accidentals in one chord all landed on the same x,
-              //    stacked on top of each other. Real engraving staggers them
-              //    into columns, which is what the loop below does — top pitch
-              //    first, each accidental taking the leftmost column that has
-              //    nothing too close above or below it.
+              // Reading each head's own x is what makes this work; an earlier
+              // pass anchored every accidental to the note's single base x
+              // (drawing them through a displaced head) and then to the
+              // leftmost head with a stagger (which pushed accidentals far
+              // from the notes they belong to, and split chords stacked in
+              // thirds that would have sat together perfectly well).
               let headLeftX = centerXs[noteIndex];
               try {
                 const heads = (sn as unknown as { noteHeads?: { getAbsoluteX(): number }[] }).noteHeads;
@@ -1843,15 +1846,17 @@ export function renderScore(
                 // Displacement isn't measurable on this note shape; the note's
                 // own left edge is still a safe (if slightly tight) base.
               }
-              // Accidentals should read as ONE even column sitting the same
-              // distance from the noteheads, not as a scattered fan (#249).
-              // The glyphs are narrow and short enough that even a chord
-              // stacked in thirds (one staff space apart) shares a single
-              // column cleanly — verified by eye, which is why the threshold
-              // sits just under one space. Only pitches a SECOND apart are
-              // genuinely too close to share, and those are exactly the
-              // chords VexFlow displaces a notehead in anyway.
-              const accidentalColumnWidth = spacing * 1.1;
+              // One shared column, so the accidentals read as an even stack at
+              // a uniform distance from the noteheads (#249). Only a pair
+              // closer than one staff space — i.e. an actual SECOND — is
+              // forced out to a second column, because at half a space the two
+              // glyphs genuinely print on top of each other (confirmed by
+              // rendering it). Thirds and wider share the column cleanly, so
+              // an ordinary stacked chord stays perfectly aligned; a chord
+              // containing a second is also the case where VexFlow has already
+              // offset the noteheads themselves, so the split reads as
+              // deliberate rather than stray.
+              const accidentalColumnWidth = spacing;
               const accidentalMinSeparation = spacing * 0.9;
               const columnYs: number[][] = [];
               note.pitches
