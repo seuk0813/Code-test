@@ -963,7 +963,12 @@ function App() {
    * its measure relative to the first selected one, so a multi-measure
    * selection pastes back across that same span (see handlePasteNotes). */
   const handleCopyNotes = useCallback(() => {
-    if (marquee.length === 0) return;
+    // Cleared rather than left alone when no note is selected — see the
+    // matching note in handleCopyChords.
+    if (marquee.length === 0) {
+      setNoteClipboard([]);
+      return;
+    }
     const minMeasure = Math.min(...marquee.map((l) => l.measureIndex));
     const ordered = [...marquee].sort(
       (a, b) => a.measureIndex - b.measureIndex || (a.clef === b.clef ? a.noteIndex - b.noteIndex : a.clef === 'treble' ? -1 : 1),
@@ -1013,7 +1018,13 @@ function App() {
    * first selected one, so a multi-measure selection pastes back across that
    * same span (see handlePasteChords). */
   const handleCopyChords = useCallback(() => {
-    if (marqueeChords.length === 0) return;
+    // Cleared rather than left alone when no chord is selected: copy runs both
+    // halves every time (see the Ctrl+C handler), so a stale chord clipboard
+    // would tag along on the next paste of a notes-only copy.
+    if (marqueeChords.length === 0) {
+      setChordClipboard([]);
+      return;
+    }
     const minMeasure = Math.min(...marqueeChords.map((m) => m.measureIndex));
     const ordered = [...marqueeChords].sort((a, b) => a.measureIndex - b.measureIndex);
     const copied = ordered
@@ -1175,31 +1186,32 @@ function App() {
         handleRedo();
         return;
       }
-      // Batch copy/paste of marquee-selected notes (or, if nothing's marked
-      // for notes, chord symbols instead — mirrors the same shift-drag ->
-      // Ctrl+C -> click a measure -> Ctrl+V flow for both).
+      // Batch copy/paste of a marquee selection. Notes and chord symbols are
+      // handled TOGETHER, not either/or: a rubber-band big enough to span a
+      // couple of rows naturally catches both, and treating notes as taking
+      // priority silently dropped every chord in the selection (#251). Each
+      // handler clears its own clipboard when its half of the selection is
+      // empty, so a notes-only copy can't leave stale chords behind to be
+      // pasted alongside later.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && (marquee.length > 0 || marqueeChords.length > 0)) {
         e.preventDefault();
-        if (marquee.length > 0) handleCopyNotes();
-        else handleCopyChords();
+        handleCopyNotes();
+        handleCopyChords();
         return;
       }
-      // Cut = copy then delete the same selection, same note-vs-chord priority as copy.
+      // Cut = copy then delete the same selection, both kinds together.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && (marquee.length > 0 || marqueeChords.length > 0)) {
         e.preventDefault();
-        if (marquee.length > 0) {
-          handleCopyNotes();
-          handleDeleteMarquee();
-        } else {
-          handleCopyChords();
-          handleDeleteMarqueeChords();
-        }
+        handleCopyNotes();
+        handleCopyChords();
+        if (marquee.length > 0) handleDeleteMarquee();
+        if (marqueeChords.length > 0) handleDeleteMarqueeChords();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && (noteClipboard.length > 0 || chordClipboard.length > 0)) {
         e.preventDefault();
-        if (noteClipboard.length > 0) handlePasteNotes();
-        else handlePasteChords();
+        handlePasteNotes();
+        handlePasteChords();
         return;
       }
       // 도수 입력 모드: digit keys type a manual scale-degree label override

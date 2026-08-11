@@ -269,6 +269,8 @@ type MouseGesture =
       startLine: number;
       /** The line currently "locked in" for the drag — starts equal to startLine and only updates once the pointer clears the sticky threshold (see stickyLineAt) so a mostly-horizontal drag doesn't flip pitch on tiny vertical jitter. */
       lastLine: number;
+      /** How far the press landed from the notehead's own line, in line units — subtracted back out so a purely sideways drag keeps the pitch it started on no matter where inside the notehead it was grabbed (see stickyPitchAt). */
+      grabLineOffset: number;
       /** Set when this gesture re-clicks/re-drags an already-selected chord's specific notehead (see G9/G10) — narrows both selection and move to just that one pitch. */
       narrowedPitchIndex?: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
@@ -350,6 +352,7 @@ type TouchGesture =
       startY: number;
       startLine: number;
       lastLine: number;
+      grabLineOffset: number;
       narrowedPitchIndex?: number;
       mode: 'undetermined' | 'drag' | 'durationCycle';
       cycleDuration: DurationValue;
@@ -1337,8 +1340,14 @@ function StaffEditorInner({
    * the raw Y has to clear the normal half-line boundary by a bit more
    * (STICKY_LINE_MARGIN) before the line actually changes, so small vertical
    * jitter during an otherwise-horizontal drag doesn't flip the pitch. */
-  const stickyPitchAt = (clef: Clef, staff: StaffHitbox, y: number, lastLine: number) => {
-    const raw = lineAt(staff, y);
+  const stickyPitchAt = (clef: Clef, staff: StaffHitbox, y: number, lastLine: number, grabLineOffset = 0) => {
+    // `grabLineOffset` cancels out WHERE INSIDE the notehead the drag started
+    // (see the note gesture's own field). A notehead is a full line-unit tall,
+    // so pressing near its top or bottom edge already puts the raw pointer
+    // line half a unit off the note's real line — past the threshold below,
+    // which made a purely sideways drag jump the note a step up or down
+    // before it had moved vertically at all (#250).
+    const raw = lineAt(staff, y) - grabLineOffset;
     const snappedLine = Math.abs(raw - lastLine) > 0.25 + STICKY_LINE_MARGIN ? Math.round(raw * 2) / 2 : lastLine;
     const { letter, octave } = lineToPitch(clef, snappedLine);
     return { snappedLine, letter, octave };
@@ -2070,7 +2079,7 @@ function StaffEditorInner({
       const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
       if (!staff) return;
       const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
-      const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine);
+      const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine, gesture.grabLineOffset);
       gesture.lastLine = snappedLine;
       // A manual drag is honored even once the measure is full (see #241),
       // so the ghost always just follows the cursor's X.
@@ -2226,7 +2235,7 @@ function StaffEditorInner({
     if (gesture.mode === 'drag') {
       const staff = point ? staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin) : undefined;
       if (point && staff) {
-        const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine);
+        const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine, gesture.grabLineOffset);
         const deltaLine = snappedLine - gesture.startLine;
         // Dragging a whole (not narrowed-to-one-pitch) note onto another
         // existing note merges the two into a single chord instead of just
@@ -2635,6 +2644,7 @@ function StaffEditorInner({
           : resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gestureStartLine = primaryPitch ? pitchToLine(location.clef, primaryPitch.letter, primaryPitch.octave) : 0;
+      const pressStaff = staffGeometryFor(result, location.measureIndex, location.clef, staffOrigin);
       const gesture: Extract<MouseGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
@@ -2642,6 +2652,7 @@ function StaffEditorInner({
         startY: point.y,
         startLine: gestureStartLine,
         lastLine: gestureStartLine,
+        grabLineOffset: pressStaff ? lineAt(pressStaff, point.y) - gestureStartLine : 0,
         narrowedPitchIndex,
         mode: 'undetermined',
         cycleDuration: note.duration,
@@ -3037,6 +3048,7 @@ function StaffEditorInner({
           : resolveNarrowedPitchIndex(location, point.x, point.y);
       const primaryPitch = narrowedPitchIndex !== undefined ? note.pitches[narrowedPitchIndex] : note.pitches[0];
       const gestureStartLine = primaryPitch ? pitchToLine(location.clef, primaryPitch.letter, primaryPitch.octave) : 0;
+      const pressStaff = staffGeometryFor(result, location.measureIndex, location.clef, staffOrigin);
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
@@ -3044,6 +3056,7 @@ function StaffEditorInner({
         startY: point.y,
         startLine: gestureStartLine,
         lastLine: gestureStartLine,
+        grabLineOffset: pressStaff ? lineAt(pressStaff, point.y) - gestureStartLine : 0,
         narrowedPitchIndex,
         mode: 'undetermined',
         cycleDuration: note.duration,
@@ -3157,7 +3170,7 @@ function StaffEditorInner({
     const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
     if (!staff) return;
     const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
-    const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine);
+    const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine, gesture.grabLineOffset);
     gesture.lastLine = snappedLine;
     // A manual drag is honored even once the measure is full (#241).
     renderDragGhost(staff, point.x, snappedLine, note.duration, (note.pitches[gesture.narrowedPitchIndex ?? 0]?.accidental ?? '') as Accidental);
@@ -3231,7 +3244,7 @@ function StaffEditorInner({
         if (point && result) {
           const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef, gesture.staffOrigin);
           if (staff) {
-            const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine);
+            const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine, gesture.grabLineOffset);
             const deltaLine = snappedLine - gesture.startLine;
             const isNarrowed = gesture.narrowedPitchIndex !== undefined && gesture.narrowedPitchIndex !== null;
             const sourceNote = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
