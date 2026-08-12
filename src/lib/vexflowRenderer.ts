@@ -1,20 +1,20 @@
 import {
-  Accidental as VexAccidental,
   Beam,
   Curve,
   Dot,
   Formatter,
   GraceNote,
-  GraceNoteGroup,
   Renderer,
   Stave,
   StaveConnector,
   StaveNote,
   StaveTie,
   Stem,
+  TickContext,
   Tuplet,
   Voice,
 } from 'vexflow';
+import type { RenderContext } from 'vexflow';
 import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score, TimeSignature } from '../types/score';
 import {
   chordLabel,
@@ -39,8 +39,24 @@ const NOTE_AREA_RIGHT_PAD = 16;
  * glyph size as the notehead itself, which reads as oversized — render them
  * smaller, independently of the notehead's own size. */
 const ACCIDENTAL_FONT_SIZE = 21;
+/** A grace note is engraved at roughly 2/3 the size of a full note, so its own
+ * accidental has to shrink with it — at the full ACCIDENTAL_FONT_SIZE a flat
+ * printed nearly as tall as the little notehead's whole stem. */
+const GRACE_ACCIDENTAL_FONT_SIZE = 15;
 /** Horizontal gap between an accidental glyph's right edge and the notehead's left edge. */
 const ACCIDENTAL_GAP = 2;
+/** Roughly how wide ♯/♭/♮ print at ACCIDENTAL_FONT_SIZE. Only used to work out
+ * how far left of a notehead its accidental reaches, so a grace note can be
+ * placed clear of it (see graceHostLeftBound) — the glyphs themselves are
+ * right-anchored and never depend on this. */
+const ACCIDENTAL_GLYPH_WIDTH = 11;
+
+/** Leftmost X anything already occupies for a note: its own notehead, or its
+ * accidental when it has one. What a grace note has to stay clear of. */
+function graceHostLeftBound(noteheadLeftX: number, leftmostAccidentalAnchorX: number | null): number {
+  if (leftmostAccidentalAnchorX === null) return noteheadLeftX;
+  return Math.min(noteheadLeftX, leftmostAccidentalAnchorX - ACCIDENTAL_GAP - ACCIDENTAL_GLYPH_WIDTH);
+}
 /** Fingering numbers are drawn slightly larger than accidentals, to the right of them. */
 const FINGER_FONT_SIZE = 16;
 /** Gap between a notehead's right edge and its fingering number. */
@@ -75,6 +91,8 @@ interface AccidentalMark {
   type: Exclude<Accidental, ''>;
   /** null = inherit the default (black) fill, same as the notehead. */
   color: string | null;
+  /** Overrides ACCIDENTAL_FONT_SIZE — only a grace note's own accidental uses this (see GRACE_ACCIDENTAL_FONT_SIZE). */
+  fontSize?: number;
 }
 
 function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void {
@@ -86,11 +104,46 @@ function drawAccidentalMarks(svg: SVGSVGElement, marks: AccidentalMark[]): void 
     text.setAttribute('x', String(mark.x - ACCIDENTAL_GAP));
     text.setAttribute('y', String(mark.y));
     text.setAttribute('text-anchor', 'end');
-    text.setAttribute('font-size', String(ACCIDENTAL_FONT_SIZE));
+    text.setAttribute('font-size', String(mark.fontSize ?? ACCIDENTAL_FONT_SIZE));
     text.setAttribute('stroke', 'none');
     if (mark.color) text.setAttribute('fill', mark.color);
     text.textContent = ACCIDENTAL_GLYPH[mark.type];
     svg.appendChild(text);
+  });
+}
+
+/**
+ * The short slur every acciaccatura carries, from its own notehead into the
+ * note it decorates. VexFlow draws this itself for a GraceNoteGroup, but the
+ * grace note is no longer a group modifier (see drawGraceNote for why), so
+ * the curve is drawn by hand from the two noteheads' final positions.
+ */
+interface GraceSlurMark {
+  /** Grace notehead center. */
+  x0: number;
+  y0: number;
+  /** Host notehead center. */
+  x1: number;
+  y1: number;
+  /** Bulge away from the stems: up when the grace note's stem points down, down when it points up. */
+  curveUp: boolean;
+  color: string | null;
+}
+
+function drawGraceSlurs(svg: SVGSVGElement, marks: GraceSlurMark[]): void {
+  marks.forEach((mark) => {
+    const dir = mark.curveUp ? -1 : 1;
+    // Start/end just clear of each notehead so the curve reads as connecting
+    // them rather than growing out of the middle of either glyph.
+    const y0 = mark.y0 + dir * 7;
+    const y1 = mark.y1 + dir * 7;
+    const midY = Math.max(y0 * dir, y1 * dir) * dir + dir * 6;
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', `M ${mark.x0} ${y0} Q ${(mark.x0 + mark.x1) / 2} ${midY} ${mark.x1} ${y1}`);
+    path.setAttribute('stroke', mark.color ?? '#000');
+    path.setAttribute('stroke-width', '1.1');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
   });
 }
 
@@ -608,12 +661,20 @@ const MELODY_BLOCK_HEIGHT = 150;
 const MELODY_CHORD_Y = 58;
 const MELODY_STAFF_Y = 60;
 const NOTE_HIT_RADIUS = 16;
-/** How much closer (px) to pull a grace notehead toward its host than
- * VexFlow's own GraceNoteGroup spacing places it (see the graceNotes.forEach
- * XShift pass) — measured empirically against VexFlow's ~14px default gap to
- * land around 8px, tight but not touching. Must leave findGraceNoteAt's own
- * x-tolerance (see there) still smaller than the resulting gap. */
-const GRACE_NUDGE_PX = 6;
+/** Gap (px) between a grace notehead's RIGHT edge and its host notehead's
+ * LEFT edge — the whole point of drawGraceNote's manual placement is that
+ * this distance is exact and identical everywhere, instead of whatever
+ * VexFlow's modifier layout happened to leave. Tight, but wide enough that
+ * findGraceNoteAt's own x-tolerance (see there) can't reach the host's
+ * center and steal a click meant for it. */
+const GRACE_HOST_GAP_PX = 9;
+/** Horizontal room a grace note occupies to the left of its host: its own
+ * notehead plus GRACE_HOST_GAP_PX, plus a little for an accidental when it
+ * has one. Reserved as leading space when the FIRST note of a measure
+ * carries a grace note, so the grace note can't back into the clef/meter
+ * glyphs (it is placed off its host, so nothing else would hold room for it). */
+const GRACE_SLOT_PX = 20;
+const GRACE_ACCIDENTAL_SLOT_PX = 11;
 export const MEASURES_PER_ROW = 4;
 /** Vertical space reserved at the very top for the centered title, always shown (even a click-to-edit placeholder). Sized to fit the title font size (see drawHeading's font-size). */
 const TITLE_BAND = 82;
@@ -854,20 +915,34 @@ const REST_KEY: Record<Clef, string> = {
   bass: 'd/3',
 };
 
-/** Attaches `note.graceNote` (see NoteEvent.graceNote) as a slashed,
- * slurred acciaccatura to `staveNote` — always engraved immediately to its
- * LEFT, matching how printed sheet music always shows a grace note leading
- * into the note it decorates (regardless of `position`, which only affects
- * playback timing — see playback.ts's isAfter — not which side it's drawn
- * on; VexFlow's own RIGHT placement for `position: 'after'` packed the grace
- * note within a couple pixels of its host, which both looked like an
- * overlapping smear and stole clicks meant for the host note, since the
- * grace-note hitbox is checked before the host's own). `isSelected` recolors
- * it red like a selected main note (see StaffEditor's grace-note selection).
- * Returns the created GraceNote so the caller can compute its hitbox once
- * the voice is drawn (its position isn't resolved until then), or null if
- * there was none. */
-function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSelected: boolean): GraceNote | null {
+/**
+ * Builds `note.graceNote` (see NoteEvent.graceNote) as a slashed acciaccatura
+ * — but does NOT attach it to its host in any way. It is a free-standing
+ * note that drawGraceNote positions and draws by hand once the host's final
+ * X is known.
+ *
+ * It used to be a GraceNoteGroup modifier on the host StaveNote, and that is
+ * exactly what made grace notes unplaceable. A GraceNoteGroup positions
+ * itself off its host's PRE-format tick-context X, not the host's final
+ * drawn X — and every staff here overrides note X after formatting (free-X
+ * drags, and the beat-proportional spacing of #224). So the grace note
+ * stayed behind wherever its host would have been, landing either smeared
+ * on top of some other note or stranded way off next to the clef, depending
+ * on which direction its host had moved. Re-applying the host's shift to the
+ * group's own xShift did not track it either — VexFlow clamps that.
+ *
+ * Drawing it manually makes its position a plain subtraction from the host's
+ * real notehead X, which is always right, and lets grace-bearing measures use
+ * the same spacing rules as every other measure (they used to be excluded, at
+ * the cost of grand-staff alignment). The accidental is hand-drawn too, for
+ * the same reason the main staves' are — see drawAccidentalMarks.
+ *
+ * `position` only affects playback timing (see playback.ts's isAfter), never
+ * which side it draws on: printed music always shows a grace note leading
+ * into the note it decorates. `isSelected` recolors it red like a selected
+ * main note (see StaffEditor's grace-note selection).
+ */
+function buildGraceNote(note: NoteEvent, clef: Clef, isSelected: boolean): GraceNote | null {
   if (!note.graceNote || note.isRest) return null;
   const g = note.graceNote;
   const graceStaveNote = new GraceNote({
@@ -876,19 +951,101 @@ function attachGraceNote(staveNote: StaveNote, note: NoteEvent, clef: Clef, isSe
     duration: g.duration ?? '8',
     slash: true,
   });
-  if (g.accidental) graceStaveNote.addModifier(new VexAccidental(g.accidental), 0);
   if (isSelected) {
     graceStaveNote.setStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
     graceStaveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
   }
-  // showSlur=true draws VexFlow's own curve from the grace note to its host —
-  // real engraving, always on, matching the standard convention that a grace
-  // note is always slurred to the note it decorates. Position is left at
-  // GraceNoteGroup's own default (Modifier.Position.LEFT) — see the doc
-  // comment above for why 'after' no longer moves it to the right.
-  const group = new GraceNoteGroup([graceStaveNote], true).beamNotes();
-  staveNote.addModifier(group, 0);
   return graceStaveNote;
+}
+
+/** Room a grace note needs to the left of its host's notehead, accidental included. */
+function graceSlotWidth(note: NoteEvent): number {
+  if (!note.graceNote || note.isRest) return 0;
+  return GRACE_SLOT_PX + (note.graceNote.accidental ? GRACE_ACCIDENTAL_SLOT_PX : 0);
+}
+
+/**
+ * Places `gn` immediately to the LEFT of its host and draws it, plus its slur
+ * into the host and (if any) its own accidental. Called only after the host
+ * has been drawn and its accidentals measured, so both `hostLeftBoundX` and
+ * `host.getNoteHeadBeginX()` are final.
+ *
+ * `hostLeftBoundX` is the leftmost X the host already occupies — its notehead,
+ * or its own accidental when it carries one (see graceHostLeftBound). Placing
+ * against the notehead alone printed the grace note straight through the
+ * host's flat/sharp, since that glyph hangs in exactly the space the grace
+ * note wants.
+ *
+ * A free-standing note still needs a TickContext to have an absolute X at all
+ * (Note.getAbsoluteX reads tickContext.getX()), so it gets a throwaway one of
+ * its own. Returns the grace notehead's center for the hitbox, or null if any
+ * of the geometry was unmeasurable.
+ */
+function drawGraceNote(
+  context: RenderContext,
+  stave: Stave,
+  host: StaveNote,
+  hostLeftBoundX: number,
+  gn: GraceNote,
+  accidental: Exclude<Accidental, ''> | null,
+  marks: { accidentals: AccidentalMark[]; slurs: GraceSlurMark[] },
+): { x: number; y: number } | null {
+  try {
+    gn.setStave(stave);
+    gn.setContext(context);
+    const tickContext = new TickContext();
+    tickContext.addTickable(gn);
+    tickContext.preFormat();
+
+    const glyphWidth = gn.getGlyphWidth();
+    // Right edge of the grace notehead sits GRACE_HOST_GAP_PX left of whatever
+    // the host's leftmost glyph is — so that gap is the same constant
+    // everywhere, whatever either note's size, stem side, or accidental.
+    const targetLeftX = hostLeftBoundX - GRACE_HOST_GAP_PX - glyphWidth;
+    // Placed by moving the TickContext, NOT by setXShift. The two are not
+    // interchangeable here: an acciaccatura's slash is drawn from
+    // getAbsoluteX() (see GraceNote.draw), which does NOT include xShift,
+    // while its notehead is drawn from getNoteHeadBeginX(), which does. Shift
+    // the note and the slash stays behind, stranded as a bare diagonal stroke
+    // out over the staff. Moving the tick context moves both together, since
+    // getAbsoluteX() reads straight off it.
+    tickContext.setX(tickContext.getX() + (targetLeftX - gn.getAbsoluteX()));
+    gn.draw();
+
+    const graceCenterX = targetLeftX + glyphWidth / 2;
+    const graceY = gn.getYs()[0];
+    const hostY = host.getYs()[0];
+    // The selection recolor lives on the GraceNote itself (buildGraceNote);
+    // reading it back keeps the hand-drawn accidental and slur in the same
+    // color as the notehead without a second copy of the "is this selected"
+    // rule that could drift out of step with it.
+    const color = gn.getStyle()?.fillStyle ?? null;
+
+    if (accidental) {
+      marks.accidentals.push({
+        x: targetLeftX,
+        y: graceY,
+        type: accidental,
+        color,
+        fontSize: GRACE_ACCIDENTAL_FONT_SIZE,
+      });
+    }
+    marks.slurs.push({
+      x0: graceCenterX,
+      y0: graceY,
+      // Ends under the host's own notehead, not under its accidental — the
+      // slur connects the two NOTES.
+      x1: host.getNoteHeadBeginX() + host.getGlyphWidth() / 2,
+      y1: hostY,
+      curveUp: gn.getStemDirection() === Stem.DOWN,
+      color,
+    });
+    return { x: graceCenterX, y: graceY };
+  } catch {
+    // Unmeasurable geometry (an unusual note shape) — skip the grace note
+    // rather than abort the whole row's render.
+    return null;
+  }
 }
 
 function buildStaveNotes(
@@ -921,7 +1078,7 @@ function buildStaveNotes(
       selectedGrace.measureIndex === measureIndex &&
       selectedGrace.clef === clef &&
       selectedGrace.noteIndex === noteIndex;
-    graceNotes.push(attachGraceNote(staveNote, note, clef, isGraceSelected));
+    graceNotes.push(buildGraceNote(note, clef, isGraceSelected));
 
     // Accidentals are NOT attached as VexFlow modifiers here — see
     // drawAccidentalMarks below for why, and how they're drawn instead.
@@ -975,25 +1132,31 @@ function buildStaveNotes(
  * independent selection — edits always target the treble staff's own note),
  * but it DOES support hiding the note currently being dragged, since a click
  * on this staff can now start that same drag (see StaffEditor's melody-staff
- * interaction handling). Accidentals are attached as real VexFlow modifiers
- * here (unlike the treble/bass staves' manual text-based accidentals)
- * because there's no free-X dragging on this staff to keep stable — VexFlow's
- * own modifier layout is simpler and fine.
+ * interaction handling).
+ *
+ * Accidentals here are hand-drawn text marks, exactly like the treble/bass
+ * staves' (see drawAccidentalMarks). They used to be real VexFlow Accidental
+ * modifiers on the theory that this staff had nothing to keep stable, but
+ * that left them printed at VexFlow's own full glyph size — visibly larger
+ * than the identical flat one staff below — and laid out by VexFlow's
+ * accidental formatter, which stacks them into columns of its own well left
+ * of the notehead they belong to and does not follow this staff's own
+ * beat-proportional X override. One code path for accidentals, one size,
+ * one position rule.
  */
-function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | null): StaveNote[] {
-  return notes.map((note, noteIndex) => {
+function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | null): { staveNotes: StaveNote[]; graceNotes: (GraceNote | null)[] } {
+  const graceNotes: (GraceNote | null)[] = [];
+  const staveNotes = notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY.treble] : note.pitches.map(pitchToVexKey);
     const staveNote = new StaveNote({ clef: 'treble', keys, duration: vexDurationString(note), autoStem: true });
     if (note.dotted) Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
-    if (!note.isRest && note.pitches[0]?.accidental) {
-      staveNote.addModifier(new VexAccidental(note.pitches[0].accidental), 0);
-    }
-    attachGraceNote(staveNote, note, 'treble', false);
+    graceNotes.push(buildGraceNote(note, 'treble', false));
     if (hiddenNoteIndex === noteIndex) {
       staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
     }
     return staveNote;
   });
+  return { staveNotes, graceNotes };
 }
 
 export interface DraggingNote {
@@ -1206,6 +1369,7 @@ export function renderScore(
   const lyricHitboxes: LyricHitbox[] = [];
   const lyricBandHitboxes: LyricBandHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
+  const graceSlurMarks: GraceSlurMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
   const degreeMarks: DegreeMark[] = [];
   const degreeLabels = computeScaleDegreeLabels(score);
@@ -1267,27 +1431,24 @@ export function renderScore(
       // other. Pin both staves to the wider of the two so every beat lines
       // up vertically across the grand staff, matching how real engraving
       // aligns simultaneous notes between clefs.
-      // NOTE: a leading grace note (꾸밈음 on the FIRST note) used to get an
-      // extra 18px of note-start reserved here so it couldn't render flush
-      // against the clef/key/time glyphs. That was reserving the SAME space
-      // twice: the formatter below already widens the beat-0 tick context by
-      // the whole GraceNoteGroup's measured width, grace accidental included.
-      // Paying for it again pushed a grace-bearing measure's first note far
-      // right of its neighbours' and squashed the rest of that measure toward
-      // the barline — #244, reported as two 6/8 measures where only the one
-      // with a grace note sat off its meter glyph. Verified without it in the
-      // worst case (row-start measure, 4-flat key signature, sharp-bearing
-      // grace note): the grace note still clears every glyph comfortably.
-      // A grace note's GraceNoteGroup modifier is positioned relative to its
-      // host's tick-context X, computed once during the initial joinVoices
-      // format() pass below — it does NOT track any further per-note
-      // setXShift override applied afterward (see the beat-proportional
-      // override further down, for #224). Overriding a grace-bearing note's
-      // X without also being able to reliably relocate its grace note left
-      // it detached/overlapping its host, so measures with any grace note
-      // skip that override entirely and keep VexFlow's own joinVoices
-      // layout, which already keeps a grace note correctly glued to its host.
-      const measureHasGrace = (['treble', 'bass'] as Clef[]).some((c) => measure[c].notes.some((n) => !!n.graceNote));
+      // A grace note is drawn by hand off its host's final notehead X (see
+      // drawGraceNote), not as a VexFlow modifier, so it takes no part in
+      // formatting and adds no width of its own anywhere. Nothing therefore
+      // holds room for one hanging off the measure's FIRST note, which is
+      // the one place it could back into the clef/key/time glyphs — so that
+      // one case reserves its width explicitly, as leading gap. Every clef
+      // must resolve to the SAME reserve or simultaneous notes would stop
+      // lining up vertically across the grand staff. (This replaces the old
+      // "grace-bearing measures opt out of beat-proportional spacing"
+      // workaround, which traded away grand-staff alignment — #220 — to keep
+      // GraceNoteGroup's fragile modifier placement intact.)
+      const graceLeadReserve = Math.max(
+        0,
+        ...(['treble', 'bass'] as Clef[]).map((c) => {
+          const first = measure[c].notes[0];
+          return first ? graceSlotWidth(first) : 0;
+        }),
+      );
       // Shared by BOTH clefs' beat-weighted positioning below (see
       // buildBeatWeightMap) so a treble note and a simultaneous bass note
       // land at the identical X regardless of how many rests either clef
@@ -1334,7 +1495,7 @@ export function renderScore(
           draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === 'treble'
             ? draggingNote.noteIndex
             : null;
-        const melodyStaveNotes = buildMelodyStaveNotes(melodyNotes, melodyHiddenNoteIndex);
+        const { staveNotes: melodyStaveNotes, graceNotes: melodyGraceNotes } = buildMelodyStaveNotes(melodyNotes, melodyHiddenNoteIndex);
         const melodyRefY0 = melodyStave.getYForNote(0);
         const melodySpacing = melodyRefY0 - melodyStave.getYForNote(1);
         const melodyNoteStartX = melodyStave.getNoteStartX();
@@ -1361,7 +1522,14 @@ export function renderScore(
             // A manually dragged note (melodyNotes[i].x) keeps that position
             // regardless of melodyFull (#241).
             const melodyMap = buildBeatWeightMap([melodyNotes]);
-            const melodyLeadingGap = leadingGapFor(melodyNoteAreaWidth, melodyNotes.length);
+            // Widened when the first note carries a grace note, for the same
+            // reason as the piano staves' graceLeadReserve: a hand-drawn grace
+            // note reserves no width of its own, so nothing else would keep it
+            // off this staff's clef/key/time glyphs.
+            const melodyLeadingGap = Math.max(
+              leadingGapFor(melodyNoteAreaWidth, melodyNotes.length),
+              melodyNotes[0] ? graceSlotWidth(melodyNotes[0]) : 0,
+            );
             const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - melodyLeadingGap - TRAILING_GAP_PX);
             let melodyCumBeat = 0;
             melodyStaveNotes.forEach((sn, i) => {
@@ -1409,11 +1577,51 @@ export function renderScore(
           melodyBeams.forEach((b) => b.setContext(context).draw());
           melodyTuplets.forEach((t) => t.setContext(context).draw());
 
+          // Same hand-drawn grace notes as the piano staves (see drawGraceNote).
+          // The melody staff carries no selection of its own, so nothing here
+          // is ever recolored — but the geometry rules are identical, which is
+          // the whole point of sharing the one code path. This line is always
+          // single-voiced (deriveMelodyNotes keeps only the top pitch), so the
+          // host's accidental anchor is simply its own notehead X — no column
+          // stacking to measure first, unlike the piano staves.
+          melodyGraceNotes.forEach((gn, noteIndex) => {
+            if (!gn) return;
+            const note = melodyNotes[noteIndex];
+            const g = note.graceNote;
+            const host = melodyStaveNotes[noteIndex];
+            try {
+              drawGraceNote(
+                context,
+                melodyStave!,
+                host,
+                graceHostLeftBound(host.getNoteHeadBeginX(), note.pitches[0]?.accidental ? melodyCenterXs[noteIndex] : null),
+                gn,
+                (g?.accidental || null) as Exclude<Accidental, ''> | null,
+                { accidentals: accidentalMarks, slurs: graceSlurMarks },
+              );
+            } catch {
+              // Host geometry unmeasurable — skip just this grace note.
+            }
+          });
+
           melodyStaveNotes.forEach((sn, noteIndex) => {
             const note = melodyNotes[noteIndex];
             const ys = note.isRest
               ? [melodyRefY0 - 3 * melodySpacing]
               : note.pitches.map((p) => melodyRefY0 - pitchToLine('treble', p.letter, p.octave) * melodySpacing);
+            // Accidentals: hand-drawn, exactly like the treble/bass staves'
+            // (see buildMelodyStaveNotes' note on why). No displaced-notehead
+            // or column-stacking case to handle here — the line is always
+            // single-voiced, so each accidental simply hangs off its own
+            // notehead's left edge.
+            if (!note.isRest && note.pitches[0]?.accidental && melodyHiddenNoteIndex !== noteIndex) {
+              accidentalMarks.push({
+                x: melodyCenterXs[noteIndex],
+                y: ys[0],
+                type: note.pitches[0].accidental as Exclude<Accidental, ''>,
+                color: null,
+              });
+            }
             let stemX = melodyCenterXs[noteIndex];
             if (!note.isRest) {
               try {
@@ -1611,47 +1819,17 @@ export function renderScore(
           // Free-X placement: shift each positioned note from its formatted spot
           // to the requested fraction of the note area.
           const centerXs: number[] = staveNotes.map((sn) => sn.getAbsoluteX());
-          // How far each note was pushed by the overrides below — a grace
-          // note's own X is computed from its host's PRE-override tick
-          // context position (not the host's final getAbsoluteX()), so
-          // moving the host without also moving its grace note by the same
-          // amount leaves the grace note behind at its old spot, sometimes
-          // landing to the RIGHT of the host that moved past it. Applied to
-          // the grace note's own xShift below (in addition to GRACE_NUDGE_PX).
-          const hostShiftDeltas: number[] = staveNotes.map(() => 0);
           // Both clefs share one width, so the denser one governs how much
           // room a leading gap may take (same "denser clef wins" rule
           // measureContentWeight uses) — and both must resolve to the SAME
           // gap, or a treble note and its simultaneous bass note would stop
-          // lining up vertically.
-          const leadingGap = leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length));
-          if (measureHasGrace) {
-            // Measures with a grace note anywhere keep the OLD behavior
-            // (manual free-X drag honored, otherwise VexFlow's own natural
-            // position left untouched) instead of the beat-proportional
-            // override below: a GraceNoteGroup's position is computed once,
-            // relative to its host's PRE-override tick-context X, during the
-            // initial joinVoices format() call above — pushing its host note
-            // any further than a small nudge (see GRACE_NUDGE_PX) leaves the
-            // grace note behind at its old spot, even detached to the RIGHT
-            // of a host that moved past it (confirmed empirically: even
-            // re-applying the exact same shift to the grace note's own
-            // xShift afterward did not track a large host move — VexFlow
-            // silently ignores/clamps it, unlike the small fixed nudge which
-            // does work). Correct grand-staff alignment for a grace-bearing
-            // note (#220) is worth more than perfectly even spacing here. A
-            // manual drag is honored even in a full measure (see #241) — only
-            // notes the user never touched (fx undefined) are left alone.
-            staveNotes.forEach((sn, i) => {
-              const fx = notes[i].x;
-              if (fx === undefined) return;
-              const target = noteStartX + clamp01(fx) * noteAreaWidth;
-              const shift = target - sn.getAbsoluteX();
-              sn.setXShift(shift);
-              centerXs[i] = target;
-              hostShiftDeltas[i] = shift;
-            });
-          } else {
+          // lining up vertically. A grace note on either clef's first note
+          // widens it just enough to hold that grace note (see graceLeadReserve).
+          const leadingGap = Math.max(
+            leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length)),
+            graceLeadReserve,
+          );
+          {
             // VexFlow's own formatted/joinVoices spacing is NOT proportional
             // to duration (see #224 — a beat shared with the other clef's
             // longer note gets pulled much wider than one that isn't, a
@@ -1678,63 +1856,20 @@ export function renderScore(
                   : noteStartX +
                     leadingGap +
                     clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * weightedAreaWidth;
-              const shift = target - sn.getAbsoluteX();
-              sn.setXShift(shift);
+              sn.setXShift(target - sn.getAbsoluteX());
               centerXs[i] = target;
-              hostShiftDeltas[i] = shift;
               cumBeat += noteBeats(notes[i]);
             });
           }
-
-          // VexFlow's own GraceNoteGroup spacing leaves a wider gap (~14px)
-          // than how a grace note usually engraves — nearly touching its
-          // host. Pull it in by a fixed amount rather than fight VexFlow's
-          // internal metrics directly. This has to be a FIXED nudge, not one
-          // computed from the grace note's current getAbsoluteX(): the grace
-          // note's position isn't actually resolved yet at this point (it's
-          // set during the GraceNoteGroup modifier's own draw, inside
-          // voice.draw() below) — reading it now returned a stale/unrelated
-          // value and shifted grace notes wildly off, next to entirely
-          // different notes. GRACE_NUDGE_PX must leave the final gap bigger
-          // than findGraceNoteAt's own x-tolerance (see there) so a click
-          // dead-center on the HOST note still falls outside the grace
-          // note's hit radius — shrinking the gap without also shrinking
-          // that radius is exactly what caused the grace note to silently
-          // steal host clicks last time.
-          graceNotes.forEach((gn, i) => {
-            if (!gn) return;
-            // A GraceNoteGroup positions itself from its host's PRE-override
-            // tick-context X, not the host's final getAbsoluteX() — so it
-            // doesn't automatically follow the host/free-X and beat-proportional
-            // overrides above. Without re-applying the same delta here, the
-            // grace note stays glued to where the host WOULD have been,
-            // which can even land it to the right of the host after a large
-            // override (see #224's beat-proportional rewrite). Grace notes
-            // sit to the LEFT of their host (smaller x) — moving one CLOSER
-            // to its host means increasing its x (adding, not subtracting).
-            gn.setXShift(gn.getXShift() + hostShiftDeltas[i] + GRACE_NUDGE_PX);
-          });
 
           voice.draw(context, stave);
           beams.forEach((b) => b.setContext(context).draw());
           tuplets.forEach((t) => t.setContext(context).draw());
 
-          // Grace note hitboxes: only resolvable now that the host note (and
-          // therefore its attached GraceNoteGroup modifier) has an actual
-          // drawn position — see attachGraceNote/StaffEditor's grace-note
-          // selection.
-          graceNotes.forEach((gn, noteIndex) => {
-            if (!gn) return;
-            const g = notes[noteIndex].graceNote;
-            let gx = centerXs[noteIndex];
-            try {
-              gx = gn.getAbsoluteX();
-            } catch {
-              // Fall back to the host note's own position if geometry isn't measurable.
-            }
-            const gy = g ? refY0 - pitchToLine(clef, g.letter, g.octave) * spacing : refY0;
-            graceNoteHitboxes.push({ measureIndex, clef, noteIndex, x: gx, y: gy });
-          });
+          // Leftmost accidental anchor X per note, filled in by the pass below
+          // — a grace note has to be placed clear of its host's accidental,
+          // not just its notehead (see graceHostLeftBound). null = no accidental.
+          const accidentalAnchorXs: (number | null)[] = staveNotes.map(() => null);
 
           // Collect (event, staveNote) in play order per clef so tie/slur
           // curves — drawn once at the very end, after every measure has its
@@ -1901,8 +2036,10 @@ export function renderScore(
                     column = columnYs.length - 1;
                   }
                   columnYs[column].push(y);
+                  const accidentalX = accidentalBaseX - column * accidentalColumnWidth;
+                  accidentalAnchorXs[noteIndex] = Math.min(accidentalAnchorXs[noteIndex] ?? Infinity, accidentalX);
                   accidentalMarks.push({
-                    x: accidentalBaseX - column * accidentalColumnWidth,
+                    x: accidentalX,
                     y,
                     type: pitch.accidental as Exclude<Accidental, ''>,
                     color: markColorFor(pitchIndex),
@@ -1917,6 +2054,36 @@ export function renderScore(
                 fingeringMarks.push({ x: noteheadRightX + FINGER_GAP, y: ys[pitchIndex], finger: pitch.finger, color: markColorFor(pitchIndex) });
               });
             }
+          });
+
+          // Grace notes go LAST, by hand, off each host's now-final geometry
+          // (see drawGraceNote) — never as a modifier VexFlow positions for
+          // us. It has to run after the accidental pass above, since a grace
+          // note is placed clear of its host's accidental as well as its
+          // notehead, and that pass is what measures where the accidental
+          // landed. Hitboxes come straight from the same placement, so click
+          // targets and drawn pixels can't disagree.
+          graceNotes.forEach((gn, noteIndex) => {
+            if (!gn) return;
+            const g = notes[noteIndex].graceNote;
+            const host = staveNotes[noteIndex];
+            let placed: { x: number; y: number } | null = null;
+            try {
+              placed = drawGraceNote(
+                context,
+                stave,
+                host,
+                graceHostLeftBound(host.getNoteHeadBeginX(), accidentalAnchorXs[noteIndex]),
+                gn,
+                (g?.accidental || null) as Exclude<Accidental, ''> | null,
+                { accidentals: accidentalMarks, slurs: graceSlurMarks },
+              );
+            } catch {
+              // Host geometry unmeasurable — fall back to its nominal X below.
+            }
+            const gx = placed?.x ?? centerXs[noteIndex];
+            const gy = placed?.y ?? (g ? refY0 - pitchToLine(clef, g.letter, g.octave) * spacing : refY0);
+            graceNoteHitboxes.push({ measureIndex, clef, noteIndex, x: gx, y: gy });
           });
         }
 
@@ -2158,6 +2325,7 @@ export function renderScore(
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
     drawAccidentalMarks(svg, accidentalMarks);
+    drawGraceSlurs(svg, graceSlurMarks);
     drawFingeringMarks(svg, fingeringMarks);
     drawConnectStubs(svg, connectStubs);
     drawRestMarks(svg, restMarkHitboxes, restMarkHandleHitboxes);
