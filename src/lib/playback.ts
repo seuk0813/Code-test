@@ -1,6 +1,6 @@
 import * as Tone from 'tone';
-import type { Clef, NoteEvent, Score } from '../types/score';
-import { measureStartBeat, noteBeats, pitchToToneNote, pitchToVexKey } from './scoreUtils';
+import type { NoteEvent, PartId, Score } from '../types/score';
+import { activeParts, measureStartBeat, noteBeats, pitchToToneNote, pitchToVexKey } from './scoreUtils';
 
 export interface PlaybackHandle {
   stop: () => void;
@@ -21,7 +21,7 @@ interface FlatNote {
 }
 
 /** Every note in a staff, across all measures, with its absolute beat offset — ties can span barlines. */
-function flattenStaffNotes(score: Score, clef: Clef): FlatNote[] {
+function flattenStaffNotes(score: Score, clef: PartId): FlatNote[] {
   const flat: FlatNote[] = [];
   score.measures.forEach((measure, measureIndex) => {
     let t = measureStartBeat(score, measureIndex);
@@ -167,16 +167,25 @@ export async function playScore(
     oscillator: { type: 'triangle' },
     envelope: baseEnvelope,
   }).toDestination();
+  // The melody staff (see Measure.melody) is a part of its own and sounds as
+  // one, but only while it is actually shown — see activeParts. It gets its
+  // own synth so the tune sings out over the piano rather than blending into
+  // the right hand.
+  const melodySynth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'triangle' },
+    envelope: baseEnvelope,
+    volume: 2,
+  }).toDestination();
 
   Tone.getTransport().stop();
   Tone.getTransport().cancel();
   Tone.getTransport().bpm.value = score.tempo;
 
   const secondsPerBeat = 60 / score.tempo;
-  const events: ScheduledEvent[] = [
-    ...buildStaffEvents(flattenStaffNotes(score, 'treble'), trebleSynth, score.keySignature, secondsPerBeat),
-    ...buildStaffEvents(flattenStaffNotes(score, 'bass'), bassSynth, score.keySignature, secondsPerBeat),
-  ];
+  const synthFor: Record<PartId, Tone.PolySynth> = { treble: trebleSynth, bass: bassSynth, melody: melodySynth };
+  const events: ScheduledEvent[] = activeParts(score).flatMap((part) =>
+    buildStaffEvents(flattenStaffNotes(score, part), synthFor[part], score.keySignature, secondsPerBeat),
+  );
 
   score.measures.forEach((_, measureIndex) => {
     Tone.getTransport().schedule((time) => {
@@ -194,12 +203,11 @@ export async function playScore(
   const totalSeconds = measureStartBeat(score, score.measures.length) * secondsPerBeat;
 
   const cleanup = () => {
-    trebleSynth.releaseAll();
-    bassSynth.releaseAll();
+    const synths = [trebleSynth, bassSynth, melodySynth];
+    synths.forEach((s) => s.releaseAll());
     Tone.getTransport().stop();
     Tone.getTransport().cancel();
-    trebleSynth.dispose();
-    bassSynth.dispose();
+    synths.forEach((s) => s.dispose());
   };
 
   Tone.getTransport().schedule((time) => {

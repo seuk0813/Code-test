@@ -1,5 +1,17 @@
 export type Clef = 'treble' | 'bass';
 
+/**
+ * Which staff a note belongs to: one of the piano grand staff's two clefs, or
+ * the standalone melody staff (see Score.showMelodyStaff), which is a part in
+ * its own right with its own notes — not a view of the treble staff.
+ *
+ * `Clef` stays exactly the two piano staves, so the many places that mean
+ * "both hands of the piano" (`['treble', 'bass']`) keep meaning that and
+ * can't accidentally pick up the melody part. Anything that addresses a
+ * NOTE — a location, a lookup, a mutation — takes a PartId instead.
+ */
+export type PartId = Clef | 'melody';
+
 /** VexFlow-style duration codes (without dot). */
 export type DurationValue = 'w' | 'h' | 'q' | '8' | '16' | '32';
 
@@ -100,7 +112,7 @@ export interface ChordSymbol {
   offset: number;
   /** The melody note (by index within the SAME measure's startNoteClef staff) this chord starts harmonically applying from, for scale-degree computation (see activeChordAt) — chosen via the chord's "적용 시작 음표 선택" UI. When unset, falls back to the offset-derived beat (legacy behavior), so old scores without this field keep working. */
   startNoteIndex?: number;
-  startNoteClef?: Clef;
+  startNoteClef?: PartId;
 }
 
 /** A single draggable lyric syllable placed in the band between the two staves. */
@@ -146,6 +158,19 @@ export interface Measure {
   id: string;
   treble: StaffMeasure;
   bass: StaffMeasure;
+  /**
+   * The standalone melody staff's own notes (see Score.showMelodyStaff) — an
+   * independent part, edited on its own and left alone by edits to the piano
+   * staves.
+   *
+   * It began life as a render-time view of `treble` (its top note per chord),
+   * which meant a lead sheet could never carry a melody that differed from
+   * the piano's right hand. Scores saved before it became real have no
+   * `melody` of their own; `normalizeScore` seeds one from what that derived
+   * view used to show, so an existing file opens looking exactly as it did
+   * and is independently editable from then on.
+   */
+  melody: StaffMeasure;
   /** Chord symbols shown above the measure. */
   chords: ChordSymbol[];
   /** Lyric syllables shown in the band between the treble and bass staves. */
@@ -210,11 +235,19 @@ export interface Score {
   trailingBeats?: number;
   /**
    * When true, each row additionally shows a standalone melody staff above
-   * the piano grand staff — chords above it, lyrics below it — mirroring the
-   * top note of each treble chord (see deriveMelodyNotes). The piano staff
-   * itself keeps its notes; this is a display-only lead-sheet-style layout
-   * toggle, not a separate composition. Undefined/false = the original
-   * layout (chords/lyrics directly on the piano treble staff).
+   * the piano grand staff — chords above it, lyrics below it — playing the
+   * measures' own `melody` notes (see Measure.melody). That staff is a real
+   * part: written, edited, played back, and exported independently of the
+   * piano staves, which keep their own notes untouched.
+   *
+   * Turning it ON for the first time seeds the melody part from the piano's
+   * right hand (the top note of each treble chord) so the staff starts out
+   * showing the tune that is already there rather than an empty line — see
+   * seedMelodyFromTreble. After that the two drift apart freely; turning the
+   * toggle off and on again never re-seeds over written melody notes.
+   *
+   * Undefined/false = the original layout (chords/lyrics directly on the
+   * piano treble staff, no melody staff shown or sounded).
    */
   showMelodyStaff?: boolean;
   /** When true, every note shows the scale degree it represents relative to
@@ -280,6 +313,7 @@ export type ScaleDegreeLabel =
 
 export interface NoteLocation {
   measureIndex: number;
-  clef: Clef;
+  /** Which part the note lives in — including the melody staff. Named `clef` for the piano staves it started out addressing. */
+  clef: PartId;
   noteIndex: number;
 }

@@ -15,12 +15,12 @@ import {
   Voice,
 } from 'vexflow';
 import type { RenderContext } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, Score, TimeSignature } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, PartId, Score, TimeSignature } from '../types/score';
 import {
+  ALL_PARTS,
   chordLabel,
   computeScaleDegreeLabels,
   computeScoreRows,
-  deriveMelodyNotes,
   isStaffMeasureFull,
   measureCapacityBeats,
   measureDurationBeats,
@@ -707,7 +707,7 @@ const PLACEHOLDER_COLOR = '#b8b8c2';
 
 export interface NoteHitbox {
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   noteIndex: number;
   centerX: number;
   /**
@@ -734,7 +734,7 @@ export interface NoteHitbox {
  * of its host, for pitch/position edits and deletion (see StaffEditor). */
 export interface GraceNoteHitbox {
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   /** The HOST note's index — a grace note has no index of its own, it's a sub-object of its host. */
   noteIndex: number;
   x: number;
@@ -750,7 +750,7 @@ export interface GraceNoteHitbox {
  * digit was actually clicked. */
 export interface DegreeMarkHitbox {
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   noteIndex: number;
   pitchIndex: number;
   x: number;
@@ -790,7 +790,7 @@ export interface RestMarkHandleHitbox {
 
 export interface StaffHitbox {
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   x0: number;
   x1: number;
   y0: number;
@@ -878,22 +878,19 @@ export interface ComposerHitbox {
 }
 
 export interface RenderResult {
+  /**
+   * Every written staff's notes, the lead-sheet melody staff's included —
+   * each entry says which part it belongs to (NoteHitbox.clef), so a lookup
+   * by (measureIndex, clef, noteIndex) is unambiguous on its own.
+   *
+   * The melody staff used to need a parallel pair of arrays, because back
+   * when it was a view of the treble staff its hitboxes carried the SAME
+   * identity as the treble ones and could only be told apart by which array
+   * they were in. It is its own part now (see Measure.melody), so it is just
+   * another clef in here.
+   */
   noteHitboxes: NoteHitbox[];
   staffHitboxes: StaffHitbox[];
-  /**
-   * The lead-sheet melody staff's own note hitboxes (see Score.showMelodyStaff)
-   * — same identity (measureIndex/clef:'treble'/noteIndex) as the matching
-   * entries in `noteHitboxes` since they're the same underlying treble notes,
-   * just positioned at the melody staff's own on-screen geometry. Kept in a
-   * separate array (rather than merged into noteHitboxes/staffHitboxes) so
-   * every existing (measureIndex, clef) lookup elsewhere keeps resolving to
-   * the real piano staff unambiguously; only the spatial click/hover
-   * resolution in StaffEditor consults this one specifically. Empty when
-   * showMelodyStaff is off.
-   */
-  melodyNoteHitboxes: NoteHitbox[];
-  /** Mirrors melodyNoteHitboxes for the melody staff's own stave hit-region. */
-  melodyStaffHitboxes: StaffHitbox[];
   chordHitboxes: ChordHitbox[];
   chordBandHitboxes: ChordBandHitbox[];
   graceNoteHitboxes: GraceNoteHitbox[];
@@ -910,9 +907,17 @@ export interface RenderResult {
   height: number;
 }
 
-const REST_KEY: Record<Clef, string> = {
+/** The real clef VexFlow should draw a part in — it has no notion of our
+ * melody part, which is written in treble clef (see PartId). */
+function vexClefFor(part: PartId): Clef {
+  return part === 'melody' ? 'treble' : part;
+}
+
+const REST_KEY: Record<PartId, string> = {
   treble: 'b/4',
   bass: 'd/3',
+  // The melody staff is written in treble clef, so its rests sit identically.
+  melody: 'b/4',
 };
 
 /**
@@ -942,11 +947,11 @@ const REST_KEY: Record<Clef, string> = {
  * into the note it decorates. `isSelected` recolors it red like a selected
  * main note (see StaffEditor's grace-note selection).
  */
-function buildGraceNote(note: NoteEvent, clef: Clef, isSelected: boolean): GraceNote | null {
+function buildGraceNote(note: NoteEvent, clef: PartId, isSelected: boolean): GraceNote | null {
   if (!note.graceNote || note.isRest) return null;
   const g = note.graceNote;
   const graceStaveNote = new GraceNote({
-    clef,
+    clef: vexClefFor(clef),
     keys: [pitchToVexKey({ letter: g.letter, accidental: g.accidental ?? '', octave: g.octave })],
     duration: g.duration ?? '8',
     slash: true,
@@ -1049,7 +1054,7 @@ function drawGraceNote(
 }
 
 function buildStaveNotes(
-  clef: Clef,
+  clef: PartId,
   measureIndex: number,
   notes: NoteEvent[],
   selected: NoteLocation | null,
@@ -1063,7 +1068,7 @@ function buildStaveNotes(
   const staveNotes = notes.map((note, noteIndex) => {
     const keys = note.isRest ? [REST_KEY[clef]] : note.pitches.map(pitchToVexKey);
     const staveNote = new StaveNote({
-      clef,
+      clef: vexClefFor(clef),
       keys,
       duration: vexDurationString(note),
       autoStem: true,
@@ -1125,43 +1130,9 @@ function buildStaveNotes(
   return { staveNotes, graceNotes };
 }
 
-/**
- * Builds StaveNotes for the lead-sheet melody staff (see Score.showMelodyStaff
- * / deriveMelodyNotes) — a simplified version of buildStaveNotes without
- * playback/selection styling (the melody staff never plays back or holds an
- * independent selection — edits always target the treble staff's own note),
- * but it DOES support hiding the note currently being dragged, since a click
- * on this staff can now start that same drag (see StaffEditor's melody-staff
- * interaction handling).
- *
- * Accidentals here are hand-drawn text marks, exactly like the treble/bass
- * staves' (see drawAccidentalMarks). They used to be real VexFlow Accidental
- * modifiers on the theory that this staff had nothing to keep stable, but
- * that left them printed at VexFlow's own full glyph size — visibly larger
- * than the identical flat one staff below — and laid out by VexFlow's
- * accidental formatter, which stacks them into columns of its own well left
- * of the notehead they belong to and does not follow this staff's own
- * beat-proportional X override. One code path for accidentals, one size,
- * one position rule.
- */
-function buildMelodyStaveNotes(notes: NoteEvent[], hiddenNoteIndex: number | null): { staveNotes: StaveNote[]; graceNotes: (GraceNote | null)[] } {
-  const graceNotes: (GraceNote | null)[] = [];
-  const staveNotes = notes.map((note, noteIndex) => {
-    const keys = note.isRest ? [REST_KEY.treble] : note.pitches.map(pitchToVexKey);
-    const staveNote = new StaveNote({ clef: 'treble', keys, duration: vexDurationString(note), autoStem: true });
-    if (note.dotted) Dot.buildAndAttach([staveNote], note.isRest ? { index: 0 } : { all: true });
-    graceNotes.push(buildGraceNote(note, 'treble', false));
-    if (hiddenNoteIndex === noteIndex) {
-      staveNote.setStyle({ fillStyle: 'transparent', strokeStyle: 'transparent' });
-    }
-    return staveNote;
-  });
-  return { staveNotes, graceNotes };
-}
-
 export interface DraggingNote {
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   noteIndex: number;
   /** When only one narrowed chord tone is being dragged, hide just that notehead instead of the whole note. */
   pitchIndex?: number | null;
@@ -1302,7 +1273,7 @@ export function renderScore(
   score: Score,
   selected: NoteLocation | null,
   draggingNote: DraggingNote | null,
-  playingLocations?: { treble: NoteLocation | null; bass: NoteLocation | null } | null,
+  playingLocations?: Partial<Record<PartId, NoteLocation | null>> | null,
   selectedPitchIndex?: number | null,
   selectedGrace?: NoteLocation | null,
   /** Currently-selected rest mark (see RestMark / #187) — draws its 4 corner handles. */
@@ -1357,8 +1328,6 @@ export function renderScore(
 
   const noteHitboxes: NoteHitbox[] = [];
   const staffHitboxes: StaffHitbox[] = [];
-  const melodyNoteHitboxes: NoteHitbox[] = [];
-  const melodyStaffHitboxes: StaffHitbox[] = [];
   const chordHitboxes: ChordHitbox[] = [];
   const graceNoteHitboxes: GraceNoteHitbox[] = [];
   const degreeMarkHitboxes: DegreeMarkHitbox[] = [];
@@ -1374,9 +1343,10 @@ export function renderScore(
   const degreeMarks: DegreeMark[] = [];
   const degreeLabels = computeScaleDegreeLabels(score);
   const connectStubs: ConnectStubMark[] = [];
-  const connectChains: Record<Clef, { event: NoteEvent; staveNote: StaveNote; rowIndex: number; ys: number[] }[]> = {
+  const connectChains: Record<PartId, { event: NoteEvent; staveNote: StaveNote; rowIndex: number; ys: number[] }[]> = {
     treble: [],
     bass: [],
+    melody: [],
   };
 
   rows.forEach((row, rowIndex) => {
@@ -1431,24 +1401,6 @@ export function renderScore(
       // other. Pin both staves to the wider of the two so every beat lines
       // up vertically across the grand staff, matching how real engraving
       // aligns simultaneous notes between clefs.
-      // A grace note is drawn by hand off its host's final notehead X (see
-      // drawGraceNote), not as a VexFlow modifier, so it takes no part in
-      // formatting and adds no width of its own anywhere. Nothing therefore
-      // holds room for one hanging off the measure's FIRST note, which is
-      // the one place it could back into the clef/key/time glyphs — so that
-      // one case reserves its width explicitly, as leading gap. Every clef
-      // must resolve to the SAME reserve or simultaneous notes would stop
-      // lining up vertically across the grand staff. (This replaces the old
-      // "grace-bearing measures opt out of beat-proportional spacing"
-      // workaround, which traded away grand-staff alignment — #220 — to keep
-      // GraceNoteGroup's fragile modifier placement intact.)
-      const graceLeadReserve = Math.max(
-        0,
-        ...(['treble', 'bass'] as Clef[]).map((c) => {
-          const first = measure[c].notes[0];
-          return first ? graceSlotWidth(first) : 0;
-        }),
-      );
       // Shared by BOTH clefs' beat-weighted positioning below (see
       // buildBeatWeightMap) so a treble note and a simultaneous bass note
       // land at the identical X regardless of how many rests either clef
@@ -1478,193 +1430,7 @@ export function renderScore(
         if (showTimeSignature) {
           melodyStave.addTimeSignature(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
         }
-        // No extra leading-grace-note reserve here either, for the same
-        // double-counting reason as the piano staves above (#244) — this
-        // staff's own formatter already widens its beat-0 tick context by the
-        // grace note's full width.
         melodyStave.setContext(context).draw();
-
-        // The melody staff mirrors measure.treble.notes index-for-index (see
-        // deriveMelodyNotes), so its own note/staff hitboxes carry the SAME
-        // (measureIndex, clef:'treble', noteIndex) identity as the real
-        // treble hitboxes below — clicking/dragging here (see StaffEditor)
-        // resolves through these first and writes back to that same treble
-        // data, keeping both staves in sync without a separate data model.
-        const melodyNotes = deriveMelodyNotes(measure.treble.notes);
-        const melodyHiddenNoteIndex =
-          draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === 'treble'
-            ? draggingNote.noteIndex
-            : null;
-        const { staveNotes: melodyStaveNotes, graceNotes: melodyGraceNotes } = buildMelodyStaveNotes(melodyNotes, melodyHiddenNoteIndex);
-        const melodyRefY0 = melodyStave.getYForNote(0);
-        const melodySpacing = melodyRefY0 - melodyStave.getYForNote(1);
-        const melodyNoteStartX = melodyStave.getNoteStartX();
-        const melodyNoteAreaWidth = Math.max(40, melodyStave.getX() + melodyStave.getWidth() - NOTE_AREA_RIGHT_PAD - melodyNoteStartX);
-        const melodyFull = isStaffMeasureFull({ notes: measure.treble.notes }, effectiveTimeSignature);
-
-        if (melodyStaveNotes.length > 0) {
-          const melodyVoice = new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false);
-          melodyVoice.addTickables(melodyStaveNotes);
-          new Formatter().joinVoices([melodyVoice]).format([melodyVoice], measureWidth - (isRowStart ? 108 : 28));
-
-          melodyStaveNotes.forEach((sn) => sn.setStave(melodyStave!));
-          // Mirrors the treble staff's free-X placement below (melodyNotes[i].x
-          // carries over from the treble note it was derived from), so the two
-          // staves' X positions — and thus chord-merge/insert-index detection,
-          // which reads the treble noteHitboxes by X — line up for a click on
-          // either staff.
-          const melodyCenterXs: number[] = melodyStaveNotes.map((sn) => sn.getAbsoluteX());
-          {
-            // Same beat-weighted override as the treble/bass staves below
-            // (see #224, #230) — keeps note spacing proportional to duration
-            // (stretched across the whole written content, with rests
-            // compressed) instead of VexFlow's own uneven tick-context widths.
-            // A manually dragged note (melodyNotes[i].x) keeps that position
-            // regardless of melodyFull (#241).
-            const melodyMap = buildBeatWeightMap([melodyNotes]);
-            // Widened when the first note carries a grace note, for the same
-            // reason as the piano staves' graceLeadReserve: a hand-drawn grace
-            // note reserves no width of its own, so nothing else would keep it
-            // off this staff's clef/key/time glyphs.
-            const melodyLeadingGap = Math.max(
-              leadingGapFor(melodyNoteAreaWidth, melodyNotes.length),
-              melodyNotes[0] ? graceSlotWidth(melodyNotes[0]) : 0,
-            );
-            const melodyWeightedAreaWidth = Math.max(0, melodyNoteAreaWidth - melodyLeadingGap - TRAILING_GAP_PX);
-            let melodyCumBeat = 0;
-            melodyStaveNotes.forEach((sn, i) => {
-              const fx = melodyNotes[i].x;
-              const desiredX =
-                fx !== undefined
-                  ? melodyNoteStartX + clamp01(fx) * melodyNoteAreaWidth
-                  : melodyNoteStartX +
-                    melodyLeadingGap +
-                    clamp01(melodyMap.total > 0 ? melodyMap.weightAt(melodyCumBeat) / melodyMap.total : 0) * melodyWeightedAreaWidth;
-              sn.setXShift(desiredX - sn.getAbsoluteX());
-              melodyCenterXs[i] = desiredX;
-              melodyCumBeat += noteBeats(melodyNotes[i]);
-            });
-          }
-
-          // Beams must be built BEFORE the voice is drawn — same reasoning as
-          // the treble/bass staves below: creating a Beam marks its notes so
-          // they skip drawing their own individual flag. Building it after
-          // voice.draw() left every note showing its own flag (the beam
-          // can't retroactively suppress glyphs already drawn) — the melody
-          // staff's 16th/8th-note runs never looked beamed at all. Only beam
-          // once the measure is full (free-placed notes' arbitrary X spacing
-          // would produce misshapen beams) — same gating as the treble/bass
-          // staves below.
-          let melodyBeams: Beam[] = [];
-          if (melodyFull) {
-            try {
-              const defaultGroups = Beam.getDefaultBeamGroups(`${effectiveTimeSignature.numerator}/${effectiveTimeSignature.denominator}`);
-              const pulseBeats = (defaultGroups[0]?.value() ?? 0.25) * 4;
-              const beamGroups = computeBeamNoteGroups(melodyNotes, melodyStaveNotes, pulseBeats, chordChangeBeats);
-              melodyBeams = beamGroups.map((group) => new Beam(group, true));
-            } catch {
-              // Beaming is a visual nicety; ignore failures on unusual groupings.
-            }
-          }
-          // Triplet brackets aren't gated by `full` the way auto-beaming is —
-          // a tupleted note's reduced beat cost (see noteBeats) is correct
-          // whether or not the measure happens to be exactly full.
-          const melodyTuplets = computeTupletGroups(melodyNotes, melodyStaveNotes).map((g) => {
-            const stemsDown = g[0]?.getStemDirection() === Stem.DOWN;
-            return new Tuplet(g, stemsDown ? { location: Tuplet.LOCATION_BOTTOM } : undefined);
-          });
-          melodyVoice.draw(context, melodyStave);
-          melodyBeams.forEach((b) => b.setContext(context).draw());
-          melodyTuplets.forEach((t) => t.setContext(context).draw());
-
-          // Same hand-drawn grace notes as the piano staves (see drawGraceNote).
-          // The melody staff carries no selection of its own, so nothing here
-          // is ever recolored — but the geometry rules are identical, which is
-          // the whole point of sharing the one code path. This line is always
-          // single-voiced (deriveMelodyNotes keeps only the top pitch), so the
-          // host's accidental anchor is simply its own notehead X — no column
-          // stacking to measure first, unlike the piano staves.
-          melodyGraceNotes.forEach((gn, noteIndex) => {
-            if (!gn) return;
-            const note = melodyNotes[noteIndex];
-            const g = note.graceNote;
-            const host = melodyStaveNotes[noteIndex];
-            try {
-              drawGraceNote(
-                context,
-                melodyStave!,
-                host,
-                graceHostLeftBound(host.getNoteHeadBeginX(), note.pitches[0]?.accidental ? melodyCenterXs[noteIndex] : null),
-                gn,
-                (g?.accidental || null) as Exclude<Accidental, ''> | null,
-                { accidentals: accidentalMarks, slurs: graceSlurMarks },
-              );
-            } catch {
-              // Host geometry unmeasurable — skip just this grace note.
-            }
-          });
-
-          melodyStaveNotes.forEach((sn, noteIndex) => {
-            const note = melodyNotes[noteIndex];
-            const ys = note.isRest
-              ? [melodyRefY0 - 3 * melodySpacing]
-              : note.pitches.map((p) => melodyRefY0 - pitchToLine('treble', p.letter, p.octave) * melodySpacing);
-            // Accidentals: hand-drawn, exactly like the treble/bass staves'
-            // (see buildMelodyStaveNotes' note on why). No displaced-notehead
-            // or column-stacking case to handle here — the line is always
-            // single-voiced, so each accidental simply hangs off its own
-            // notehead's left edge.
-            if (!note.isRest && note.pitches[0]?.accidental && melodyHiddenNoteIndex !== noteIndex) {
-              accidentalMarks.push({
-                x: melodyCenterXs[noteIndex],
-                y: ys[0],
-                type: note.pitches[0].accidental as Exclude<Accidental, ''>,
-                color: null,
-              });
-            }
-            let stemX = melodyCenterXs[noteIndex];
-            if (!note.isRest) {
-              try {
-                stemX = sn.getStemX();
-              } catch {
-                // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
-              }
-            }
-            const xs = ys.map((_, pitchIndex) => {
-              try {
-                return sn.noteHeads[pitchIndex]?.getAbsoluteX() ?? melodyCenterXs[noteIndex];
-              } catch {
-                return melodyCenterXs[noteIndex];
-              }
-            });
-            melodyNoteHitboxes.push({
-              measureIndex,
-              clef: 'treble',
-              noteIndex,
-              centerX: melodyCenterXs[noteIndex],
-              stemX,
-              ys,
-              xs,
-            });
-          });
-        }
-
-        const melodyContentStartOffset = isRowStart ? 100 : 20;
-        melodyStaffHitboxes.push({
-          measureIndex,
-          clef: 'treble',
-          x0: x,
-          x1: x + measureWidth,
-          y0: melodyStave.getYForLine(0) - STAVE_TOP_MARGIN,
-          y1: melodyStave.getYForLine(4) + STAVE_TOP_MARGIN,
-          refY0: melodyRefY0,
-          spacing: melodySpacing,
-          contentX0: x + melodyContentStartOffset,
-          contentWidth: measureWidth - melodyContentStartOffset,
-          noteStartX: melodyNoteStartX,
-          noteAreaWidth: melodyNoteAreaWidth,
-          full: melodyFull,
-        });
       }
 
       if (isRowStart) {
@@ -1679,10 +1445,60 @@ export function renderScore(
 
       const midY = (trebleStave.getYForLine(4) + bassStave.getYForLine(0)) / 2;
 
-      const clefEntries = ([
+      // Every written staff — the two piano clefs and, in lead-sheet layout,
+      // the melody part (see Measure.melody) — goes through ONE rendering
+      // pass. The melody staff used to have a parallel pass of its own, which
+      // is why it quietly lacked selection/playback highlighting, chord
+      // accidental columns, fingerings and degree labels that the piano
+      // staves had; sharing the pass is what gives it all of them.
+      //
+      // What stays per-staff is spacing: the melody has its own rhythm, so it
+      // gets its own beat-weight map and its own leading gap, and its voice
+      // is formatted on its own (see below). Only treble and bass share a map,
+      // because only they have to line up vertically with each other.
+      const melodyBeatMap = buildBeatWeightMap([measure.melody.notes]);
+      const pianoGapNoteCount = Math.max(measure.treble.notes.length, measure.bass.notes.length);
+      const staffSources: [PartId, Stave, NoteEvent[], number, number][] = [
         ['treble', trebleStave, measure.treble.notes, trebleStave.getYForLine(0) - STAVE_TOP_MARGIN, midY],
         ['bass', bassStave, measure.bass.notes, midY, bassStave.getYForLine(4) + STAVE_TOP_MARGIN],
-      ] as const).map(([clef, stave, notes, y0, y1]) => {
+      ];
+      if (melodyStave) {
+        staffSources.unshift([
+          'melody',
+          melodyStave,
+          measure.melody.notes,
+          melodyStave.getYForLine(0) - STAVE_TOP_MARGIN,
+          melodyStave.getYForLine(4) + STAVE_TOP_MARGIN,
+        ]);
+      }
+
+      const clefEntries = staffSources.map(([clef, stave, notes, y0, y1]) => {
+        const isPiano = clef !== 'melody';
+        const beatMap = isPiano ? grandStaffBeatMap : melodyBeatMap;
+        const gapNoteCount = isPiano ? pianoGapNoteCount : notes.length;
+        // A grace note is drawn by hand off its host's final notehead X (see
+        // drawGraceNote), not as a VexFlow modifier, so it takes no part in
+        // formatting and adds no width of its own anywhere. Nothing therefore
+        // holds room for one hanging off the measure's FIRST note, which is
+        // the one place it could back into the clef/key/time glyphs — so that
+        // one case reserves its width explicitly, as leading gap. Both piano
+        // clefs must resolve to the SAME reserve or simultaneous notes would
+        // stop lining up vertically across the grand staff; the melody staff
+        // answers only to itself. (This replaces the old "grace-bearing
+        // measures opt out of beat-proportional spacing" workaround, which
+        // traded away that alignment — #220 — to keep GraceNoteGroup's
+        // fragile modifier placement intact.)
+        const graceLeadReserve = isPiano
+          ? Math.max(
+              0,
+              ...(['treble', 'bass'] as Clef[]).map((c) => {
+                const first = measure[c].notes[0];
+                return first ? graceSlotWidth(first) : 0;
+              }),
+            )
+          : notes[0]
+            ? graceSlotWidth(notes[0])
+            : 0;
         const hiddenNoteIndex =
           draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === clef
             ? draggingNote.noteIndex
@@ -1713,14 +1529,17 @@ export function renderScore(
         // (notes[i].x) keeps its manual position either way — see #241.
         const full = isStaffMeasureFull({ notes }, effectiveTimeSignature);
 
-        (measure.restMarks ?? []).filter((r) => r.clef === clef).forEach((r) => {
+        // Rest marks are a piano-staff overlay only (RestMark.clef is a Clef,
+        // not a PartId) — the melody staff writes real rests instead.
+        const restMarkClef = isPiano ? (clef as Clef) : null;
+        if (restMarkClef !== null) (measure.restMarks ?? []).filter((r) => r.clef === restMarkClef).forEach((r) => {
           const scale = r.scale ?? 1;
           const isSelected = !!selectedRestMark && selectedRestMark.measureIndex === measureIndex && selectedRestMark.restMarkId === r.id;
           const markX = x + r.offset * measureWidth;
           const markY = refY0 - r.line * spacing;
           restMarkHitboxes.push({
             measureIndex,
-            clef,
+            clef: restMarkClef,
             restMarkId: r.id,
             x: markX,
             y: markY,
@@ -1733,7 +1552,7 @@ export function renderScore(
             (['nw', 'ne', 'sw', 'se'] as const).forEach((corner) => {
               restMarkHandleHitboxes.push({
                 measureIndex,
-                clef,
+                clef: restMarkClef,
                 restMarkId: r.id,
                 corner,
                 x: markX + (corner === 'nw' || corner === 'sw' ? -halfW : halfW),
@@ -1748,7 +1567,7 @@ export function renderScore(
         const voice = staveNotes.length > 0 ? new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false) : null;
         if (voice) voice.addTickables(staveNotes);
 
-        return { clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice };
+        return { clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve };
       });
 
       // Format treble and bass voices TOGETHER (not independently, as before)
@@ -1767,7 +1586,7 @@ export function renderScore(
         new Formatter().joinVoices(jointVoices).format(jointVoices, measureWidth - (isRowStart ? 108 : 28));
       }
 
-      clefEntries.forEach(({ clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice }) => {
+      clefEntries.forEach(({ clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve }) => {
         if (voice) {
           // Beams must be built before the notes are drawn: creating a Beam
           // marks its notes so they skip drawing their own individual flag.
@@ -1819,24 +1638,24 @@ export function renderScore(
           // Free-X placement: shift each positioned note from its formatted spot
           // to the requested fraction of the note area.
           const centerXs: number[] = staveNotes.map((sn) => sn.getAbsoluteX());
-          // Both clefs share one width, so the denser one governs how much
-          // room a leading gap may take (same "denser clef wins" rule
-          // measureContentWeight uses) — and both must resolve to the SAME
-          // gap, or a treble note and its simultaneous bass note would stop
-          // lining up vertically. A grace note on either clef's first note
-          // widens it just enough to hold that grace note (see graceLeadReserve).
-          const leadingGap = Math.max(
-            leadingGapFor(noteAreaWidth, Math.max(measure.treble.notes.length, measure.bass.notes.length)),
-            graceLeadReserve,
-          );
+          // The two piano clefs share one width, so the denser one governs how
+          // much room a leading gap may take (same "denser clef wins" rule
+          // measureContentWeight uses) — and both must resolve to the SAME gap,
+          // or a treble note and its simultaneous bass note would stop lining
+          // up vertically. The melody staff counts only its own notes (see
+          // gapNoteCount). A grace note on the first note widens it just enough
+          // to hold that grace note (see graceLeadReserve).
+          const leadingGap = Math.max(leadingGapFor(noteAreaWidth, gapNoteCount), graceLeadReserve);
           {
             // VexFlow's own formatted/joinVoices spacing is NOT proportional
             // to duration (see #224 — a beat shared with the other clef's
             // longer note gets pulled much wider than one that isn't, a
             // visibly uneven "zigzag"). Override with a beat-weighted X
-            // instead, using the SAME shared map both clefs consult (see
-            // grandStaffBeatMap/buildBeatWeightMap) so a treble note and a
-            // simultaneous bass note still land at the identical X. The map
+            // instead, from this staff's own map (see buildBeatWeightMap):
+            // the two piano clefs share one, so a treble note and a
+            // simultaneous bass note still land at the identical X, while the
+            // melody staff — an independent part with its own rhythm — uses
+            // its own and is under no obligation to line up with them. The map
             // only spans the furthest content written in EITHER clef (not
             // necessarily the full measure capacity), so a partially-written
             // measure's notes stretch across the whole available width
@@ -1855,7 +1674,7 @@ export function renderScore(
                   ? noteStartX + clamp01(fx) * noteAreaWidth
                   : noteStartX +
                     leadingGap +
-                    clamp01(grandStaffBeatMap.total > 0 ? grandStaffBeatMap.weightAt(cumBeat) / grandStaffBeatMap.total : 0) * weightedAreaWidth;
+                    clamp01(beatMap.total > 0 ? beatMap.weightAt(cumBeat) / beatMap.total : 0) * weightedAreaWidth;
               sn.setXShift(target - sn.getAbsoluteX());
               centerXs[i] = target;
               cumBeat += noteBeats(notes[i]);
@@ -2130,16 +1949,22 @@ export function renderScore(
       // committed position matches what was shown while dragging. Otherwise,
       // rather than falling straight back to the whole-measure linear
       // formula, interpolate between the nearest surrounding note onsets
-      // (pooled across both clefs) proportional to the beat gap between
-      // them — this tracks VexFlow's own (non-linear, duration-aware)
-      // spacing far more closely than a single measure-wide straight line,
-      // since it only ever extrapolates across the one local gap the chord
-      // actually falls within.
+      // proportional to the beat gap between them — this tracks VexFlow's own
+      // (non-linear, duration-aware) spacing far more closely than a single
+      // measure-wide straight line, since it only ever extrapolates across the
+      // one local gap the chord actually falls within.
+      //
+      // Which staves' onsets are pooled follows which staff the chord band
+      // actually sits above: in lead-sheet layout that is the melody staff
+      // (an independent part, spaced by its own rhythm — see Measure.melody),
+      // so pooling the piano's onsets there would line chords up with notes
+      // that aren't under them. Otherwise it's both piano clefs.
       const measureDuration = measureDurationBeats(score, measureIndex);
+      const chordAnchorParts: PartId[] = leadSheet ? ['melody'] : ['treble', 'bass'];
       const xForBeat = (targetBeat: number): number | null => {
         const EPS = 1e-3;
         const onsets: { beat: number; x: number }[] = [];
-        for (const c of ['treble', 'bass'] as Clef[]) {
+        for (const c of chordAnchorParts) {
           let beat = 0;
           const clefNotes = measure[c].notes;
           for (let i = 0; i < clefNotes.length; i++) {
@@ -2242,7 +2067,7 @@ export function renderScore(
 
   // Tie/slur curves: a note's `connectToNext` joins it to the following note
   // in the same staff. Drawn last so every note already has its final position.
-  (['treble', 'bass'] as const).forEach((clef) => {
+  ALL_PARTS.forEach((clef) => {
     const chain = connectChains[clef];
     for (let i = 0; i < chain.length - 1; i++) {
       const cur = chain[i];
@@ -2346,8 +2171,6 @@ export function renderScore(
   return {
     noteHitboxes,
     staffHitboxes,
-    melodyNoteHitboxes,
-    melodyStaffHitboxes,
     chordHitboxes,
     chordBandHitboxes,
     graceNoteHitboxes,
@@ -2469,14 +2292,14 @@ function drawLineBreakMarkers(svg: SVGSVGElement, markers: LineBreakHitbox[]): v
 export interface ClickResultSelect {
   type: 'select';
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   noteIndex: number;
 }
 
 export interface ClickResultAdd {
   type: 'add';
   measureIndex: number;
-  clef: Clef;
+  clef: PartId;
   line: number;
 }
 
@@ -2484,11 +2307,6 @@ export type ClickResult = ClickResultSelect | ClickResultAdd | null;
 
 export function findStaffAt(result: RenderResult, x: number, y: number): StaffHitbox | null {
   return result.staffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) ?? null;
-}
-
-/** Like findStaffAt, but also matches the lead-sheet melody staff (see Score.showMelodyStaff) — for click/hover resolution, which should work on either staff. Kept separate from findStaffAt itself so its many other (measureIndex, clef) callers keep resolving to the real piano staff unambiguously. */
-export function findAnyStaffAt(result: RenderResult, x: number, y: number): StaffHitbox | null {
-  return findStaffAt(result, x, y) ?? result.melodyStaffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) ?? null;
 }
 
 function resolveClickOn(staff: StaffHitbox, noteHitboxes: NoteHitbox[], x: number, y: number): ClickResult {
@@ -2511,12 +2329,7 @@ function resolveClickOn(staff: StaffHitbox, noteHitboxes: NoteHitbox[], x: numbe
 
 export function resolveClick(result: RenderResult, x: number, y: number): ClickResult {
   const staff = findStaffAt(result, x, y);
-  if (staff) return resolveClickOn(staff, result.noteHitboxes, x, y);
-
-  const melodyStaff = result.melodyStaffHitboxes.find((s) => x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1);
-  if (melodyStaff) return resolveClickOn(melodyStaff, result.melodyNoteHitboxes, x, y);
-
-  return null;
+  return staff ? resolveClickOn(staff, result.noteHitboxes, x, y) : null;
 }
 
 export function lineAt(staff: StaffHitbox, y: number): number {
@@ -2529,7 +2342,7 @@ export function xFractionAt(staff: StaffHitbox, x: number): number {
 }
 
 /** Where a new note should be spliced into the staff's note list for a given click X. */
-export function findInsertIndex(result: RenderResult, measureIndex: number, clef: Clef, x: number): number {
+export function findInsertIndex(result: RenderResult, measureIndex: number, clef: PartId, x: number): number {
   const notes = result.noteHitboxes
     .filter((n) => n.measureIndex === measureIndex && n.clef === clef)
     .sort((a, b) => a.noteIndex - b.noteIndex);
@@ -2639,7 +2452,7 @@ export function nearestPitchIndexAt(hb: NoteHitbox, x: number, y: number): numbe
 
 /** All notes within a generous radius of a point, nearest first — used by note-select mode to pick the closest existing note to a tap. Searches both the real staves and the lead-sheet melody staff (see Score.showMelodyStaff), since either can be tapped. */
 export function findNearbyNotesAt(result: RenderResult, x: number, y: number, radius: number): NoteHitbox[] {
-  return [...result.noteHitboxes, ...result.melodyNoteHitboxes]
+  return result.noteHitboxes
     .map((n) => ({ n, d: Math.min(...n.ys.map((ny, i) => Math.hypot((n.xs[i] ?? n.centerX) - x, ny - y))) }))
     .filter(({ d }) => d < radius)
     .sort((a, b) => a.d - b.d)

@@ -1,5 +1,5 @@
 import type { ChordSymbol, Measure, Score } from '../types/score';
-import { parseChordText } from './scoreUtils';
+import { deriveMelodyNotes, parseChordText } from './scoreUtils';
 import { renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
@@ -41,6 +41,14 @@ export function normalizeScore(score: Score): Score {
         chords: (m.chords ?? []).map(reparseChord),
         lyrics: m.lyrics ?? [],
         restMarks: m.restMarks ?? [],
+        // The melody staff used to be drawn from the treble staff's top notes
+        // rather than stored (see Measure.melody), so scores saved back then
+        // have no melody part of their own. Rebuilding what that view showed
+        // means such a file opens looking exactly as it was saved — and is
+        // independently editable from then on. A file saved with the melody
+        // staff switched off gets an empty part, matching a fresh measure;
+        // switching the staff on later seeds it (see seedMelodyFromTreble).
+        melody: m.melody ?? { notes: score.showMelodyStaff ? deriveMelodyNotes(m.treble?.notes ?? []) : [] },
       }),
     ),
   };

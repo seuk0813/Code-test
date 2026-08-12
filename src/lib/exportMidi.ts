@@ -1,6 +1,6 @@
 import MidiWriter from 'midi-writer-js';
 import type { Measure, NoteEvent, Score } from '../types/score';
-import { pitchToToneNote } from './scoreUtils';
+import { activeParts, pitchToToneNote } from './scoreUtils';
 
 const BASE_DURATION: Record<NoteEvent['duration'], string> = {
   w: '1',
@@ -48,8 +48,10 @@ function buildTrack(score: Score, pickNotes: (measure: Measure) => NoteEvent[]) 
 }
 
 export function exportMidi(score: Score): Blob {
-  const trebleTrack = buildTrack(score, (m) => m.treble.notes);
-  const bassTrack = buildTrack(score, (m) => m.bass.notes);
-  const writer = new MidiWriter.Writer([trebleTrack, bassTrack]);
+  // One track per sounding part (see activeParts) — the melody staff exports
+  // as its own track whenever it is in use, so the tune stays separable from
+  // the piano part instead of being folded into the right hand.
+  const tracks = activeParts(score).map((part) => buildTrack(score, (m) => m[part].notes));
+  const writer = new MidiWriter.Writer(tracks);
   return new Blob([writer.buildFile()], { type: 'audio/midi' });
 }

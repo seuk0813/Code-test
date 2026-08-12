@@ -56,7 +56,7 @@ function noteTicks(note: NoteEvent): number {
   return note.tuplet ? (dotted * 2) / 3 : dotted;
 }
 
-function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean, keySignature: string): string {
+function noteXml(note: NoteEvent, staff: 1 | 2 | null, isFirstOfChord: boolean, keySignature: string): string {
   const duration = noteTicks(note);
   const type = NOTE_TYPE[note.duration];
   const dotXml = note.dotted ? '<dot/>' : '';
@@ -64,10 +64,10 @@ function noteXml(note: NoteEvent, staff: 1 | 2, isFirstOfChord: boolean, keySign
   // 3-in-the-place-of-2 (standard triplet ratio — see scoreUtils' TUPLET_RATIO).
   const timeModXml = note.tuplet ? '<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>' : '';
   const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(note.pitches[0], keySignature);
-  return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}${timeModXml}<staff>${staff}</staff></note>`;
+  return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}${timeModXml}${staff === null ? '' : `<staff>${staff}</staff>`}</note>`;
 }
 
-function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2, keySignature: string): string {
+function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2 | null, keySignature: string): string {
   return notes
     .flatMap((note) => {
       if (note.isRest || note.pitches.length <= 1) {
@@ -83,6 +83,28 @@ function staffMeasureXml(notes: NoteEvent[], staff: 1 | 2, keySignature: string)
 
 function measureDurationTicks(notes: NoteEvent[]): number {
   return notes.reduce((sum, n) => sum + noteTicks(n), 0);
+}
+
+/**
+ * One measure of the standalone melody part (see Measure.melody), emitted as
+ * its OWN MusicXML `<part>` rather than a third staff of the piano part —
+ * which is what it is: an independent line with its own notes, exported so
+ * other notation software reads it as a separate instrument. Single-staff, so
+ * its notes carry no `<staff>` element at all.
+ */
+function melodyMeasureXml(measure: Measure, index: number, score: Score): string {
+  const ts = measureTimeSignature(score, index);
+  const timeChanged =
+    index > 0 &&
+    (ts.numerator !== measureTimeSignature(score, index - 1).numerator ||
+      ts.denominator !== measureTimeSignature(score, index - 1).denominator);
+  const attributes =
+    index === 0
+      ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${KEY_FIFTHS[score.keySignature] ?? 0}</fifths></key><time><beats>${ts.numerator}</beats><beat-type>${ts.denominator}</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>`
+      : timeChanged
+        ? `<attributes><time><beats>${ts.numerator}</beats><beat-type>${ts.denominator}</beat-type></time></attributes>`
+        : '';
+  return `<measure number="${index + 1}">${attributes}${staffMeasureXml(measure.melody.notes, null, score.keySignature)}</measure>`;
 }
 
 function measureXml(measure: Measure, index: number, score: Score): string {
@@ -105,13 +127,20 @@ function measureXml(measure: Measure, index: number, score: Score): string {
 
 export function exportMusicXml(score: Score): string {
   const measuresXml = score.measures.map((m, i) => measureXml(m, i, score)).join('');
+  // The melody part is exported only while it is actually in use (see
+  // activeParts) — with the lead-sheet layout off there is no melody staff in
+  // the score, and emitting an empty extra part would just clutter whatever
+  // opens the file.
+  const withMelody = score.showMelodyStaff === true;
+  const melodyMeasuresXml = withMelody ? score.measures.map((m, i) => melodyMeasureXml(m, i, score)).join('') : '';
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="4.0">
   <work><work-title>${escapeXml(score.title)}</work-title></work>
   <identification><creator type="composer">${escapeXml(score.composer)}</creator></identification>
-  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part-list>${withMelody ? '<score-part id="P0"><part-name>Melody</part-name></score-part>' : ''}<score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  ${withMelody ? `<part id="P0">${melodyMeasuresXml}</part>` : ''}
   <part id="P1">${measuresXml}</part>
 </score-partwise>`;
 }

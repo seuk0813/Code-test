@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, LoadMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, Pitch, Score } from './types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, PartId, Pitch, Score } from './types/score';
 import {
   addChordToScoreAt,
   addLineBreak,
@@ -17,6 +17,7 @@ import {
   hasManualLayout,
   clearPickupMeasure,
   clearTrailingMeasure,
+  activeParts,
   fillStaffMeasureWithRests,
   incompleteClefsIn,
   cycleDurationLonger,
@@ -65,6 +66,7 @@ import {
   splitPitchFromNote,
   splitTrailingMeasure,
   toggleGraceNote,
+  seedMelodyFromTreble,
   toggleGraceNotePosition,
   togglePitchInNote,
   updateNoteInScore,
@@ -172,7 +174,7 @@ function App() {
   const [marqueeChords, setMarqueeChords] = useState<{ measureIndex: number; chordId: string }[]>([]);
   // Lyric syllables multi-selected via the same shift+drag rubber-band, for batch delete.
   const [marqueeLyrics, setMarqueeLyrics] = useState<{ measureIndex: number; lyricId: string }[]>([]);
-  const [noteClipboard, setNoteClipboard] = useState<{ clef: Clef; note: NoteEvent; measureOffset: number }[]>([]);
+  const [noteClipboard, setNoteClipboard] = useState<{ clef: PartId; note: NoteEvent; measureOffset: number }[]>([]);
   // Chord clipboard for batch copy (Ctrl+C) / paste (Ctrl+V) of marquee-selected
   // chords — mirrors noteClipboard: measureOffset remembers which measure
   // (relative to the first selected one) each chord came from, so a
@@ -311,7 +313,15 @@ function App() {
   }, [selected, score]);
 
   const handleScoreMetaChange = useCallback((patch: Partial<Score>) => {
-    setScore((prev) => ({ ...prev, ...patch }));
+    setScore((prev) => {
+      const next = { ...prev, ...patch };
+      // Switching the melody staff on for the first time fills it in from the
+      // piano's right hand, so it opens showing the tune already written
+      // rather than an empty line (see seedMelodyFromTreble). It only ever
+      // fills EMPTY measures, so flipping the toggle off and on again never
+      // writes over a melody the user has since edited.
+      return patch.showMelodyStaff === true ? seedMelodyFromTreble(next) : next;
+    });
   }, [setScore]);
 
   const handleSelectNote = useCallback(
@@ -369,7 +379,7 @@ function App() {
   const handleAddNote = useCallback(
     (
       measureIndex: number,
-      clef: Clef,
+      clef: PartId,
       letter: string,
       octave: number,
       insertIndex: number,
@@ -404,8 +414,10 @@ function App() {
         // tool armed, drop a lightweight visual rest mark instead (see
         // RestMark/#187): it sketches a rest on top of the existing notes
         // rather than genuinely adding a new beat, so it stays droppable
-        // even where a real note/rest can't fit any more.
-        if (editTool.isRest) {
+        // even where a real note/rest can't fit any more. Piano staves only
+        // (RestMark.clef); a full melody staff just refuses, like any other
+        // overfull staff.
+        if (editTool.isRest && clef !== 'melody') {
           const line = pitchToLine(clef, letter as Pitch['letter'], octave);
           setScore((prev) => addRestMarkAt(prev, measureIndex, clef, x ?? 0.5, line));
           setRestArmed(false);
@@ -741,7 +753,7 @@ function App() {
         const measure = prev.measures[measureIndex];
         if (!measure) return prev;
         const ts = measureTimeSignature(prev, measureIndex);
-        const short = incompleteClefsIn(measure, ts);
+        const short = incompleteClefsIn(prev, measureIndex);
         if (short.length === 0) return prev;
         const filled = short.reduce((m, clef) => ({ ...m, [clef]: fillStaffMeasureWithRests(m[clef], ts) }), measure);
         return { ...prev, measures: prev.measures.map((m, i) => (i === measureIndex ? filled : m)) };
@@ -766,12 +778,17 @@ function App() {
         const accidental = turningOn ? keySignatureAccidentalFor(p.letter, score.keySignature) : '';
         return { ...p, accidental };
       };
+      const restyleStaff = (sm: { notes: NoteEvent[] }) => ({ notes: sm.notes.map((n) => ({ ...n, pitches: n.pitches.map(restyle) })) });
       setScore((prev) => ({
         ...prev,
         measures: prev.measures.map((measure) => ({
           ...measure,
-          treble: { notes: measure.treble.notes.map((n) => ({ ...n, pitches: n.pitches.map(restyle) })) },
-          bass: { notes: measure.bass.notes.map((n) => ({ ...n, pitches: n.pitches.map(restyle) })) },
+          treble: restyleStaff(measure.treble),
+          bass: restyleStaff(measure.bass),
+          // The melody part gets the same treatment: it is written in the same
+          // key as everything else, so a key-signature-derived accidental
+          // belongs on its notes too.
+          melody: restyleStaff(measure.melody),
         })),
       }));
       return turningOn;
@@ -978,7 +995,7 @@ function App() {
         const note = score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex];
         return note ? { clef: loc.clef, note, measureOffset: loc.measureIndex - minMeasure } : null;
       })
-      .filter((x): x is { clef: Clef; note: NoteEvent; measureOffset: number } => x !== null);
+      .filter((x): x is { clef: PartId; note: NoteEvent; measureOffset: number } => x !== null);
     setNoteClipboard(copied);
   }, [marquee, score]);
 
@@ -1608,7 +1625,7 @@ function App() {
   );
 
   const handleSetChordStartNote = useCallback(
-    (measureIndex: number, chordId: string, clef: Clef, noteIndex: number) => {
+    (measureIndex: number, chordId: string, clef: PartId, noteIndex: number) => {
       setScore((prev) => setChordStartNote(prev, measureIndex, chordId, clef, noteIndex));
     },
     [setScore],
@@ -1690,7 +1707,7 @@ function App() {
     const secondsPerBeat = 60 / score.tempo;
     const currentBeat = elapsedSeconds / secondsPerBeat;
     let onset = 0;
-    (['treble', 'bass'] as const).forEach((clef) => {
+    activeParts(score).forEach((clef) => {
       score.measures.forEach((measure, mi) => {
         let t = measureStartBeat(score, mi);
         measure[clef].notes.forEach((n) => {
@@ -1827,7 +1844,7 @@ function App() {
         className={`melody-staff-toggle ${score.showMelodyStaff ? 'active' : ''}`}
         onClick={() => handleScoreMetaChange({ showMelodyStaff: !score.showMelodyStaff })}
         aria-label="멜로디+가사 보표 형식"
-        title="켜면 피아노 보표 위에 코드/가사가 붙은 별도의 멜로디 보표가 추가됩니다 (악보집 형식). 끄면 원래대로 피아노 보표에 코드/가사가 직접 표시됩니다"
+        title="켜면 피아노 보표 위에 코드/가사가 붙은 멜로디 보표가 추가됩니다 (악보집 형식). 멜로디 보표는 따로 편집·재생·내보내기 되는 독립 파트이며, 처음 켤 때만 오른손 맨 윗음으로 채워집니다. 끄면 원래대로 피아노 보표에 코드/가사가 직접 표시됩니다"
       >
         멜로디+가사 보표
       </button>

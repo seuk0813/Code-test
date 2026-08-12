@@ -8,6 +8,7 @@ import type {
   Measure,
   NoteEvent,
   NoteLocation,
+  PartId,
   Pitch,
   RestMark,
   ScaleDegreeLabel,
@@ -43,6 +44,20 @@ export const DURATION_LABELS: Record<DurationValue, string> = {
 /** Left-to-right toolbar order — also the digit-key shortcut order (1-6, see
  * App's keydown handler), so key 'N' always matches the Nth button. */
 export const DURATIONS: DurationValue[] = ['w', 'h', 'q', '8', '16', '32'];
+
+/** Every part a note can live in, in staff order (see PartId). */
+export const ALL_PARTS: PartId[] = ['melody', 'treble', 'bass'];
+
+/**
+ * The parts a score currently shows and sounds. The melody staff is a real
+ * part with its own notes either way, but it only counts while the lead-sheet
+ * layout is switched on (Score.showMelodyStaff) — with it off there is no
+ * melody staff on the page, so anything written there stays put and silent
+ * rather than doubling the piano part.
+ */
+export function activeParts(score: Score): PartId[] {
+  return score.showMelodyStaff ? ALL_PARTS : ['treble', 'bass'];
+}
 
 /** Standard 3-in-the-time-of-2 triplet ratio — a tupleted note takes 2/3 of
  * its written duration (see NoteEvent.tuplet). Applied after the dotted
@@ -116,17 +131,23 @@ export function isStaffMeasureOverflow(staffMeasure: StaffMeasure, timeSignature
 }
 
 /**
- * Which clefs of a measure are started but left short of the time signature —
- * drives the red "이 마디는 박자가 모자랍니다" warning and its one-click rest
- * fill (see fillStaffMeasureWithRests). A clef with NOTHING written in it is
+ * Which of a measure's staves are started but left short of the time signature
+ * — drives the red "이 마디는 박자가 모자랍니다" warning and its one-click rest
+ * fill (see fillStaffMeasureWithRests). A staff with NOTHING written in it is
  * never reported: an untouched bass staff under a finished melody is a normal
  * work-in-progress state, not a mistake, and warning about it would light up
  * most of a lead-sheet-style score. Likewise a measure nobody has started at
  * all reports nothing.
  */
-export function incompleteClefsIn(measure: Measure, timeSignature: TimeSignature): Clef[] {
-  return (['treble', 'bass'] as Clef[]).filter(
-    (clef) => measure[clef].notes.length > 0 && !isStaffMeasureFull(measure[clef], timeSignature),
+export function incompleteClefsIn(score: Score, measureIndex: number): PartId[] {
+  const measure = score.measures[measureIndex];
+  if (!measure) return [];
+  const timeSignature = measureTimeSignature(score, measureIndex);
+  // Only the parts actually on the page (see activeParts) — a melody written
+  // earlier and since hidden isn't something to warn about, since there is no
+  // melody staff on screen to point the warning at.
+  return activeParts(score).filter(
+    (part) => measure[part].notes.length > 0 && !isStaffMeasureFull(measure[part], timeSignature),
   );
 }
 
@@ -182,7 +203,7 @@ export function autoAlignMeasure(score: Score, measureIndex: number): Score {
   });
   const { widthScale: _dropScale, ...withoutScale } = measure;
   const measures = score.measures.map((m, i) =>
-    i === measureIndex ? { ...withoutScale, treble: clearX(m.treble), bass: clearX(m.bass) } : m,
+    i === measureIndex ? { ...withoutScale, treble: clearX(m.treble), bass: clearX(m.bass), melody: clearX(m.melody) } : m,
   );
   return { ...score, measures };
 }
@@ -199,7 +220,9 @@ export function autoAlignScore(score: Score): Score {
  * itself when there'd be nothing to undo. */
 export function hasManualLayout(score: Score): boolean {
   return score.measures.some(
-    (m) => m.widthScale !== undefined || m.treble.notes.some((n) => n.x !== undefined) || m.bass.notes.some((n) => n.x !== undefined),
+    (m) =>
+      m.widthScale !== undefined ||
+      (['treble', 'bass', 'melody'] as PartId[]).some((part) => m[part].notes.some((n) => n.x !== undefined)),
   );
 }
 
@@ -426,7 +449,7 @@ export function computeScaleDegreeLabels(score: Score): Map<string, string> {
   const enabled = score.scaleDegreeLabels ?? DEFAULT_SCALE_DEGREE_LABELS;
   const sortedChords = flattenChords(score);
   if (sortedChords.length > 0) {
-    (['treble', 'bass'] as Clef[]).forEach((clef) => {
+    activeParts(score).forEach((clef) => {
       score.measures.forEach((measure, measureIndex) => {
         let beat = measureStartBeat(score, measureIndex);
         measure[clef].notes.forEach((note, noteIndex) => {
@@ -459,7 +482,7 @@ export function computeScaleDegreeLabels(score: Score): Map<string, string> {
 /** Shared key format for both computeScaleDegreeLabels' output map and
  * Score.manualScaleDegreeLabels — keep call sites (rendering, degree input
  * mode) from hand-rolling the template and drifting apart. */
-export function scaleDegreeKey(clef: Clef, measureIndex: number, noteIndex: number, pitchIndex: number): string {
+export function scaleDegreeKey(clef: PartId, measureIndex: number, noteIndex: number, pitchIndex: number): string {
   return `${clef}:${measureIndex}:${noteIndex}:${pitchIndex}`;
 }
 
@@ -498,6 +521,7 @@ function clampMeasureOffset(x: number): number {
 interface MeasureSplitHalf {
   treble: StaffMeasure;
   bass: StaffMeasure;
+  melody: StaffMeasure;
   chords: ChordSymbol[];
   lyrics: LyricSyllable[];
   restMarks: RestMark[];
@@ -518,6 +542,7 @@ function splitMeasureContent(measure: Measure, splitBeat: number, capacity: numb
   };
   const treble = splitStaff(measure.treble);
   const bass = splitStaff(measure.bass);
+  const melody = splitStaff(measure.melody);
   const frac = Math.min(0.999, Math.max(0.001, splitBeat / capacity));
   function splitByOffset<T extends { offset: number }>(items: T[]): { head: T[]; tail: T[] } {
     const head: T[] = [];
@@ -532,8 +557,8 @@ function splitMeasureContent(measure: Measure, splitBeat: number, capacity: numb
   const lyrics = splitByOffset(measure.lyrics);
   const restMarks = splitByOffset(measure.restMarks ?? []);
   return {
-    head: { treble: treble.head, bass: bass.head, chords: chords.head, lyrics: lyrics.head, restMarks: restMarks.head },
-    tail: { treble: treble.tail, bass: bass.tail, chords: chords.tail, lyrics: lyrics.tail, restMarks: restMarks.tail },
+    head: { treble: treble.head, bass: bass.head, melody: melody.head, chords: chords.head, lyrics: lyrics.head, restMarks: restMarks.head },
+    tail: { treble: treble.tail, bass: bass.tail, melody: melody.tail, chords: chords.tail, lyrics: lyrics.tail, restMarks: restMarks.tail },
   };
 }
 
@@ -573,6 +598,7 @@ export function clearPickupMeasure(score: Score): Score {
     id: head.id,
     treble: { notes: [...head.treble.notes, ...tail.treble.notes] },
     bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
+    melody: { notes: [...head.melody.notes, ...tail.melody.notes] },
     chords: mergeOffsets(head.chords, tail.chords),
     lyrics: mergeOffsets(head.lyrics, tail.lyrics),
     restMarks: mergeOffsets(head.restMarks ?? [], tail.restMarks ?? []),
@@ -622,6 +648,7 @@ export function clearTrailingMeasure(score: Score): Score {
     id: tail.id,
     treble: { notes: [...head.treble.notes, ...tail.treble.notes] },
     bass: { notes: [...head.bass.notes, ...tail.bass.notes] },
+    melody: { notes: [...head.melody.notes, ...tail.melody.notes] },
     chords: mergeOffsets(head.chords, tail.chords),
     lyrics: mergeOffsets(head.lyrics, tail.lyrics),
     restMarks: mergeOffsets(head.restMarks ?? [], tail.restMarks ?? []),
@@ -668,6 +695,7 @@ export function createEmptyMeasure(): Measure {
     id: nextId('m'),
     treble: emptyStaffMeasure(),
     bass: emptyStaffMeasure(),
+    melody: emptyStaffMeasure(),
     chords: [],
     lyrics: [],
     restMarks: [],
@@ -722,9 +750,11 @@ const LETTERS: Pitch['letter'][] = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
  * than assumed, since getting this wrong silently shifts every clicked pitch
  * by a fixed number of steps.
  */
-const CLEF_LINE0_REFERENCE: Record<Clef, { letter: Pitch['letter']; octave: number }> = {
+const CLEF_LINE0_REFERENCE: Record<PartId, { letter: Pitch['letter']; octave: number }> = {
   treble: { letter: 'C', octave: 4 },
   bass: { letter: 'E', octave: 2 },
+  // The melody staff is written in treble clef, so it reads identically.
+  melody: { letter: 'C', octave: 4 },
 };
 
 /**
@@ -732,7 +762,7 @@ const CLEF_LINE0_REFERENCE: Record<Clef, { letter: Pitch['letter']; octave: numb
  * 0.5 per diatonic step) into a natural pitch. Used to map a mouse click's Y
  * position to a pitch on the staff.
  */
-export function lineToPitch(clef: Clef, line: number): { letter: Pitch['letter']; octave: number } {
+export function lineToPitch(clef: PartId, line: number): { letter: Pitch['letter']; octave: number } {
   const ref = CLEF_LINE0_REFERENCE[clef];
   const steps = Math.round(line * 2);
   const refIndex = LETTERS.indexOf(ref.letter);
@@ -746,7 +776,7 @@ export function lineToPitch(clef: Clef, line: number): { letter: Pitch['letter']
  * Inverse of lineToPitch: the fractional stave line a pitch sits on for a clef.
  * Used to size ledger lines and stem direction for the hover/drag preview.
  */
-export function pitchToLine(clef: Clef, letter: Pitch['letter'], octave: number): number {
+export function pitchToLine(clef: PartId, letter: Pitch['letter'], octave: number): number {
   const ref = CLEF_LINE0_REFERENCE[clef];
   const refIndex = LETTERS.indexOf(ref.letter);
   const letterIndex = LETTERS.indexOf(letter);
@@ -754,7 +784,7 @@ export function pitchToLine(clef: Clef, letter: Pitch['letter'], octave: number)
   return steps / 2;
 }
 
-/** Index of a chord's highest-sounding pitch (treble-clef line order) — the one shown on the derived melody staff and the one melody-staff edits/drags apply to. */
+/** Index of a chord's highest-sounding pitch (treble-clef line order) — the one a chord contributes when the melody part is seeded from the piano's right hand (see deriveMelodyNotes). */
 export function topPitchIndex(pitches: Pitch[]): number {
   let bestIndex = 0;
   let bestLine = -Infinity;
@@ -769,21 +799,43 @@ export function topPitchIndex(pitches: Pitch[]): number {
 }
 
 /**
- * Derives the melody-staff notes shown by the lead-sheet layout (see
- * Score.showMelodyStaff): the same rhythm as the treble staff, but chords
- * collapsed to just their highest pitch (the customary "top line" of a piano
- * part's right hand). Rests and already-single-pitch notes pass through
- * unchanged. A rendering-time view derived from the treble staff's own notes
- * — edits made by clicking on it (see StaffEditor) are applied back to that
- * same treble data (the highest pitch when narrowed to one), not stored separately.
+ * The tune already implied by a piano right hand: the same rhythm, with every
+ * chord collapsed to just its highest pitch (the customary "top line").
+ *
+ * This used to BE the melody staff — it was recomputed on every render and the
+ * staff had no notes of its own, so a lead sheet could never carry a melody
+ * that differed from the piano part. The melody is now a real part
+ * (Measure.melody); this only supplies its starting content, so that turning
+ * the staff on shows the tune that is already written rather than a blank
+ * line. Notes are given fresh ids: they are new, independent notes from here
+ * on, not references to the treble ones they were copied from.
  */
 export function deriveMelodyNotes(notes: NoteEvent[]): NoteEvent[] {
   return notes.map((note) => {
-    if (note.isRest || note.pitches.length <= 1) return note;
-    const top = note.pitches[topPitchIndex(note.pitches)];
-    return { ...note, pitches: [top] };
+    const pitches = note.isRest || note.pitches.length <= 1 ? note.pitches : [note.pitches[topPitchIndex(note.pitches)]];
+    return { ...note, id: nextId('n'), pitches: pitches.map((p) => ({ ...p })) };
   });
 }
+
+/**
+ * Fills in each measure's melody part from its treble staff (see
+ * deriveMelodyNotes), for the first time the melody staff is switched on.
+ *
+ * Only measures whose melody is still EMPTY are seeded, so the toggle is safe
+ * to flip off and back on: once anything has been written on the melody staff,
+ * that measure is the user's and is never overwritten. A measure whose treble
+ * staff is empty too simply stays empty.
+ */
+export function seedMelodyFromTreble(score: Score): Score {
+  if (score.measures.every((m) => m.melody.notes.length > 0 || m.treble.notes.length === 0)) return score;
+  return {
+    ...score,
+    measures: score.measures.map((measure) =>
+      measure.melody.notes.length > 0 ? measure : { ...measure, melody: { notes: deriveMelodyNotes(measure.treble.notes) } },
+    ),
+  };
+}
+
 
 /**
  * VexFlow's own autoStem rule (see calculateOptimalStemDirection): a note
@@ -1051,7 +1103,7 @@ export function editChordText(score: Score, measureIndex: number, chordId: strin
 /** Sets which melody note (see ChordSymbol.startNoteIndex/startNoteClef) a
  * chord starts harmonically applying from, chosen via its "적용 시작 음표
  * 선택" UI — independent of the chord's own draggable label offset. */
-export function setChordStartNote(score: Score, measureIndex: number, chordId: string, clef: Clef, noteIndex: number): Score {
+export function setChordStartNote(score: Score, measureIndex: number, chordId: string, clef: PartId, noteIndex: number): Score {
   const measures = score.measures.map((m, i) =>
     i === measureIndex
       ? { ...m, chords: m.chords.map((c) => (c.id === chordId ? { ...c, startNoteIndex: noteIndex, startNoteClef: clef } : c)) }
@@ -1327,7 +1379,7 @@ function cloneStaffMeasure(sm: StaffMeasure): StaffMeasure {
   return { notes: [...sm.notes] };
 }
 
-function updateMeasure(score: Score, measureIndex: number, clef: Clef, updater: (sm: StaffMeasure) => StaffMeasure): Score {
+function updateMeasure(score: Score, measureIndex: number, clef: PartId, updater: (sm: StaffMeasure) => StaffMeasure): Score {
   const measures = score.measures.map((measure, i) => {
     if (i !== measureIndex) return measure;
     const updated = updater(cloneStaffMeasure(measure[clef]));
@@ -1348,6 +1400,7 @@ export function cloneMeasure(measure: Measure): Measure {
   return {
     id: nextId('m'),
     treble: { notes: cloneNotes(measure.treble.notes) },
+    melody: { notes: cloneNotes(measure.melody.notes) },
     bass: { notes: cloneNotes(measure.bass.notes) },
     chords: measure.chords.map((c) => ({ ...c, id: nextId('c') })),
     lyrics: measure.lyrics.map((l) => ({ ...l, id: nextId('ly') })),
@@ -1382,7 +1435,7 @@ export interface AddNoteResult {
 export function addNoteToScore(
   score: Score,
   measureIndex: number,
-  clef: Clef,
+  clef: PartId,
   note: NoteEvent,
   insertIndex?: number,
 ): AddNoteResult {
