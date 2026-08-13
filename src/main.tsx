@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { reloadWhenWritesFinish } from './lib/reloadGuard'
 
 // Auto-reload past stale caches: fetch the freshly-deployed build id (never
 // cached) and, if it differs from the one baked into this page, reload via a
@@ -17,7 +18,11 @@ function checkForNewVersion() {
       // disagree transiently: only navigate once per target version.
       if (url.searchParams.get('v') === data.v) return
       url.searchParams.set('v', data.v)
-      window.location.replace(url.toString())
+      // Never navigate out from under a file being written to disk — that is
+      // what left saved scores as 0-byte files. See reloadGuard for the full
+      // sequence; in short, the focus listener below fires at precisely the
+      // moment a native save dialog closes, which is mid-write.
+      reloadWhenWritesFinish(() => window.location.replace(url.toString()))
     })
     .catch(() => {
       /* offline or version.json missing — keep the current page */

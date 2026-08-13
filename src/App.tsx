@@ -83,6 +83,7 @@ import {
   saveRecentScore,
   saveScorePdf,
   saveScoreJson,
+  PartialSaveError,
   type RecentScoreEntry,
 } from './lib/fileIO';
 import { playScore, type PlaybackHandle } from './lib/playback';
@@ -1787,13 +1788,42 @@ function App() {
   const handleSaveConfirm = useCallback(
     (format: SaveFormat) => {
       setSaveOpen(false);
+      // A save that fails after the file was created leaves a 0-byte file
+      // exactly where the user asked their score to go (see PartialSaveError)
+      // — the one failure they must not find out about later. Say so, and
+      // hand them a download of the same data so nothing is actually lost.
+      const reportPartialSave = (err: unknown, blob: Blob, filename: string) => {
+        if (!(err instanceof PartialSaveError)) throw err;
+        downloadBlob(blob, filename);
+        window.alert(
+          `${err.message}\n\n같은 내용을 다운로드 폴더에 "${filename}"(으)로 내려받았습니다. ` +
+            `비어 있는 파일은 지우고 이 파일을 쓰시거나, 원하는 위치에 다시 저장해주세요.`,
+        );
+      };
       if (format === 'json') {
-        void saveScoreJson(score, score.title).then(() => {
-          saveRecentScore(score);
-          setRecentScores(getRecentScores());
-        });
+        void saveScoreJson(score, score.title)
+          .then(() => {
+            saveRecentScore(score);
+            setRecentScores(getRecentScores());
+          })
+          .catch((err) => {
+            // Recorded as recently-worked-on either way: the score itself is
+            // fine, only the file on disk isn't.
+            saveRecentScore(score);
+            setRecentScores(getRecentScores());
+            reportPartialSave(
+              err,
+              new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' }),
+              `${(score.title || 'score').replace(/\.json$/i, '')}.json`,
+            );
+          });
       } else {
-        void saveScorePdf(score, score.title);
+        void saveScorePdf(score, score.title).catch((err) => {
+          if (!(err instanceof PartialSaveError)) throw err;
+          // No second copy to hand over here — re-rendering the whole PDF just
+          // to re-fail is not worth it; the user re-runs 저장 instead.
+          window.alert(`${err.message}\n\n비어 있는 파일은 지우고 다시 저장해주세요.`);
+        });
       }
     },
     [score],

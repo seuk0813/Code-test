@@ -1,4 +1,5 @@
 import type { ChordSymbol, Measure, Score } from '../types/score';
+import { withReloadHeld } from './reloadGuard';
 import { deriveMelodyNotes, parseChordText } from './scoreUtils';
 import { renderScore } from './vexflowRenderer';
 
@@ -73,6 +74,8 @@ interface FileSystemWritable {
 }
 interface FileSystemFileHandleLike {
   createWritable(): Promise<FileSystemWritable>;
+  /** Reads the file back — used to confirm the bytes actually landed (see writeThroughPicker). */
+  getFile(): Promise<File>;
 }
 type ShowSaveFilePicker = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandleLike>;
 
@@ -81,37 +84,104 @@ export function hasNativeSavePicker(): boolean {
   return typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 }
 
-/**
- * Saves the score as JSON via the OS-native "Save As" dialog when the browser
- * supports the File System Access API — the user picks the exact folder and
- * filename, like any desktop program. Falls back to a plain browser download
- * (goes to the default Downloads folder; the browser doesn't allow JS to pick
- * a location without that API) on browsers that don't support it (Safari,
- * Firefox, iOS).
- */
-export async function saveScoreJson(score: Score, filename?: string): Promise<void> {
-  const base = (filename || score.title || 'score').replace(/\.json$/i, '');
-  const blob = new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' });
+/** Thrown when the native picker created the file but the content never made
+ * it there — the caller has to tell the user, because a broken (0-byte) file
+ * is now sitting exactly where they asked their score to be saved. */
+export class PartialSaveError extends Error {
+  filename: string;
+  constructor(filename: string, options?: { cause?: unknown }) {
+    super(`저장이 끝나기 전에 중단되어 "${filename}" 파일이 비어 있습니다.`, options);
+    this.name = 'PartialSaveError';
+    this.filename = filename;
+  }
+}
 
-  if (hasNativeSavePicker()) {
+/** What writeThroughPicker did, so callers can report it accurately. */
+type SaveOutcome =
+  /** Written to the user's chosen location and verified. */
+  | { kind: 'saved' }
+  /** User dismissed the save dialog — nothing was created. */
+  | { kind: 'cancelled' }
+  /** No native picker (or it failed before creating anything) — nothing exists yet, caller should download instead. */
+  | { kind: 'unavailable' };
+
+/**
+ * Writes `blob` through the OS-native "Save As" dialog, so the user picks the
+ * exact folder and filename like in any desktop program.
+ *
+ * Two things here are not incidental, both learned from saved scores turning
+ * up as 0-byte files:
+ *
+ * - The whole write runs inside withReloadHeld. The picker creates the file
+ *   the instant the user confirms, but the content only lands at `close()` —
+ *   and the app's own new-version check fires on exactly the focus event that
+ *   the dialog closing produces, navigating away mid-write. See reloadGuard.
+ *
+ * - Once a handle exists, a failure is NOT silently swallowed into a download
+ *   fallback. By then an empty file is already on disk (and if the user chose
+ *   to overwrite, it has replaced their previous save), so it throws
+ *   PartialSaveError for the caller to surface. Failures BEFORE that point
+ *   cost nothing and report 'unavailable' so the caller can just download.
+ */
+async function writeThroughPicker(blob: Blob, filename: string, options: SaveFilePickerOptions): Promise<SaveOutcome> {
+  if (!hasNativeSavePicker()) return { kind: 'unavailable' };
+
+  let handle: FileSystemFileHandleLike;
+  try {
+    const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
+    handle = await showSaveFilePicker(options);
+  } catch (err) {
+    // AbortError = the user dismissed the dialog, which creates nothing.
+    if (err instanceof Error && err.name === 'AbortError') return { kind: 'cancelled' };
+    // Anything else (picker unsupported at runtime, permission refused) also
+    // happens before a file exists — fall back to a plain download.
+    return { kind: 'unavailable' };
+  }
+
+  // From here a file exists on disk, so every path must account for it.
+  return withReloadHeld(async () => {
     try {
-      const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
-      const handle = await showSaveFilePicker({
-        suggestedName: `${base}.json`,
-        types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
-      });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      return;
     } catch (err) {
-      // AbortError = user cancelled the picker; don't fall back to a download in that case.
-      if (err instanceof Error && err.name === 'AbortError') return;
-      // Any other failure (e.g. picker unsupported at runtime): fall through to plain download.
+      throw new PartialSaveError(filename, { cause: err });
     }
-  }
+    // close() resolving is not by itself proof the bytes are there — a sync
+    // client or antivirus hook can still truncate the file behind us. Read it
+    // back and check, so a broken save is caught here rather than discovered
+    // weeks later when the file won't open.
+    try {
+      const written = await handle.getFile();
+      if (written.size === 0 && blob.size > 0) throw new PartialSaveError(filename);
+    } catch (err) {
+      if (err instanceof PartialSaveError) throw err;
+      // getFile() itself failing says nothing about the write — don't cry wolf.
+    }
+    return { kind: 'saved' as const };
+  });
+}
 
-  downloadBlob(blob, `${base}.json`);
+/**
+ * Saves the score as JSON via the OS-native "Save As" dialog when the browser
+ * supports the File System Access API. Falls back to a plain browser download
+ * (goes to the default Downloads folder; the browser doesn't allow JS to pick
+ * a location without that API) on browsers that don't support it (Safari,
+ * Firefox, iOS).
+ *
+ * Throws PartialSaveError if the save was interrupted after the file was
+ * created — see writeThroughPicker.
+ */
+export async function saveScoreJson(score: Score, filename?: string): Promise<void> {
+  const base = (filename || score.title || 'score').replace(/\.json$/i, '');
+  const name = `${base}.json`;
+  const blob = new Blob([JSON.stringify(score, null, 2)], { type: 'application/json' });
+
+  const outcome = await writeThroughPicker(blob, name, {
+    suggestedName: name,
+    types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+  });
+  if (outcome.kind === 'unavailable') downloadBlob(blob, name);
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -385,22 +455,13 @@ export async function saveScorePdf(score: Score, filename?: string): Promise<voi
 
   const blob = doc.output('blob');
   const base = (filename || 'score').replace(/\.pdf$/i, '');
-  if (hasNativeSavePicker()) {
-    try {
-      const showSaveFilePicker = (window as unknown as { showSaveFilePicker: ShowSaveFilePicker }).showSaveFilePicker;
-      const handle = await showSaveFilePicker({
-        suggestedName: `${base}.pdf`,
-        types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') return;
-    }
-  }
-  downloadBlob(blob, `${base}.pdf`);
+  const name = `${base}.pdf`;
+  // Same interrupted-write protection as the JSON save — see writeThroughPicker.
+  const outcome = await writeThroughPicker(blob, name, {
+    suggestedName: name,
+    types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+  });
+  if (outcome.kind === 'unavailable') downloadBlob(blob, name);
 }
 
 /**
