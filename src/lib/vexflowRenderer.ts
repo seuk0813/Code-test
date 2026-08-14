@@ -709,18 +709,27 @@ export interface NoteHitbox {
   measureIndex: number;
   clef: PartId;
   noteIndex: number;
+  /**
+   * Middle of the note's notehead glyph — where the note LOOKS like it is, so
+   * this is what anything the user aims at should measure against.
+   *
+   * Deliberately not VexFlow's own idea of a note's X, which is the notehead's
+   * LEFT EDGE. That is the right anchor for drawing (accidentals hang off it,
+   * ledger lines start there) and the renderer keeps using it internally, but
+   * as a click target it is half a notehead off — see where this is built.
+   */
   centerX: number;
   /**
    * X of the note's stem (its "tail"), which for an up-stem note sits at the
    * notehead's right edge and for a down-stem note at its left edge — used
-   * for the playback bar so it lines up with the note itself instead of the
-   * notehead glyph's left edge (what centerX actually measures).
+   * for the playback bar so it lines up with the note's stem rather than the
+   * middle of its head.
    */
   stemX: number;
   /** Y of each notehead (a chord has several), for pitch-aware click hit-testing. */
   ys: number[];
   /**
-   * X of each notehead, paired index-for-index with `ys`. VexFlow shifts
+   * Middle of each notehead, paired index-for-index with `ys`. VexFlow shifts
    * adjacent noteheads (a 2nd apart) left/right so they don't overlap —
    * `centerX` is only the note's own nominal column, so a chord tone that
    * got shifted needs its own X for accurate click hit-testing. Falls back
@@ -1716,18 +1725,63 @@ export function renderScore(
                 // Some note shapes (e.g. single whole notes) have no stem; fall back to centerX.
               }
             }
-            const xs = ys.map((_, pitchIndex) => {
+            // VexFlow reports a note's X as its notehead's LEFT EDGE, not the
+            // middle of the glyph — `centerXs` (the drawing anchor) is that
+            // left edge, which is what accidentals and ledger lines want. A
+            // click target must not be: pointing at a note means pointing at
+            // the middle of the round black head you can see, so every hitbox
+            // X below is shifted to the glyph's true centre.
+            //
+            // Without this the whole ±NOTE_HIT_RADIUS window sat half a
+            // notehead too far left, and a click aimed dead-centre at a note
+            // could miss it while a click just off its left side hit — you had
+            // to aim slightly left of whatever you wanted. Most visible at a
+            // measure's left edge, where the misaimed click lands on the
+            // barline/clef area instead of on a neighbouring note.
+            let headGlyphWidth = 0;
+            try {
+              headGlyphWidth = sn.getGlyphWidth();
+            } catch {
+              // Unmeasurable glyph — leave the anchor at the left edge, as before.
+            }
+            // A chord containing a SECOND can't print both noteheads in one
+            // column, so VexFlow shifts one of them a full notehead sideways,
+            // toward the stem side. That head has to be clickable where it is
+            // actually drawn, so its own X carries the same displacement.
+            //
+            // Derived from the note's base X rather than read off the head
+            // itself: NoteHead.getAbsoluteX() applies the displacement a
+            // SECOND time on top of the already-displaced position it stores
+            // at draw time, reporting a displaced head one whole notehead
+            // further out than it is drawn. That put the displaced head's
+            // click target off the head entirely — it could not be grabbed at
+            // all — which is the same trap the accidental placement below
+            // documents and avoids in the same way.
+            const stemDirection = (() => {
               try {
-                return sn.noteHeads[pitchIndex]?.getAbsoluteX() ?? centerXs[noteIndex];
+                return sn.getStemDirection() === Stem.DOWN ? -1 : 1;
               } catch {
-                return centerXs[noteIndex];
+                return 1;
               }
-            });
+            })();
+            const displacedHeads = (() => {
+              try {
+                const heads = (sn as unknown as { noteHeads?: { isDisplaced(): boolean }[] }).noteHeads;
+                if (heads && heads.length === note.pitches.length) return heads.map((h) => h.isDisplaced());
+              } catch {
+                // Not measurable on this note shape — treat nothing as displaced.
+              }
+              return null;
+            })();
+            const xs = ys.map(
+              (_, pitchIndex) =>
+                centerXs[noteIndex] + (displacedHeads?.[pitchIndex] ? headGlyphWidth * stemDirection : 0) + headGlyphWidth / 2,
+            );
             const hb: NoteHitbox = {
               measureIndex,
               clef,
               noteIndex,
-              centerX: centerXs[noteIndex],
+              centerX: centerXs[noteIndex] + headGlyphWidth / 2,
               stemX,
               ys,
               xs,
