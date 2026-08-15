@@ -1116,11 +1116,24 @@ function StaffEditorInner({
 
   const AUTO_ALIGN_BUTTON_RADIUS = 14;
   const BARLINE_GRAB_TOL = 7;
+  /** Half-height of the drag arrows flanking the 자동정렬 button, plus a little
+   * slack — they are drawn ±6px around the button's own centre line (see
+   * renderMeasureTools' arrow paths). */
+  const ARROW_GRAB_HALF_HEIGHT = 10;
+  /** How far the arrows reach out from the button's centre: the arrow line
+   * starts at 22px and its head ends at 36px (see renderMeasureTools). */
+  const ARROW_GRAB_REACH = 38;
 
-  /** Which measure's right barline the pointer is on (or just under, within
-   * reach of its 자동정렬 button), or null. Searched right-edge-first so the
-   * shared pixel between measure N's end and measure N+1's start resolves to
-   * N — the measure the tools actually act on. */
+  /** Which measure's right barline the pointer is near enough for its tools to
+   * SHOW, or null. Deliberately generous — it has to span the whole trip from
+   * the barline down to the button, or the tools would blink out from under
+   * the pointer on the way there. Searched right-edge-first so the shared pixel
+   * between measure N's end and measure N+1's start resolves to N — the
+   * measure the tools actually act on.
+   *
+   * Showing the tools is ALL this governs. Deciding what a press does is a
+   * different question with a much smaller answer — see findMeasureBarPressAt.
+   */
   const findMeasureBarAt = (point: { x: number; y: number }): number | null => {
     const result = renderResultRef.current;
     if (!result) return null;
@@ -1130,12 +1143,44 @@ function StaffEditorInner({
       if (!geo) continue;
       const btn = autoAlignButtonPos(geo);
       const onBar = Math.abs(point.x - geo.x) <= BARLINE_GRAB_TOL && point.y >= geo.y0 && point.y <= geo.y1;
-      // The button cluster's own band below the staff — wide enough to cover
-      // the flanking drag arrows too, so the tools don't vanish the moment
-      // the pointer leaves the barline on its way down to press the button.
       const onCluster =
         Math.abs(point.x - geo.x) <= 44 && point.y > geo.y1 && point.y <= btn.y + AUTO_ALIGN_BUTTON_RADIUS + 4;
       if (onBar || onCluster) return treble.measureIndex;
+    }
+    return null;
+  };
+
+  /**
+   * Which measure's barline tools a PRESS actually lands on, and which part —
+   * or null, which means the press belongs to whatever is underneath instead.
+   *
+   * Only the controls that are really drawn count: the grip band on the
+   * barline itself, the round 자동정렬 button, and the two drag arrows beside
+   * it. Presses used to be taken by the same generous region that merely
+   * SHOWS the tools (see findMeasureBarAt) — a ~88x34px rectangle hanging
+   * below the staff, nearly all of it empty space. That rectangle sits exactly
+   * where ledger-line notes under the bass staff are written, and because the
+   * barline branch runs before note handling, those notes could not be
+   * clicked at all: every press near them started a measure resize instead.
+   */
+  const findMeasureBarPressAt = (point: { x: number; y: number }): { measureIndex: number; part: 'grip' | 'button' | 'arrow' } | null => {
+    const result = renderResultRef.current;
+    if (!result) return null;
+    for (const treble of result.staffHitboxes) {
+      if (treble.clef !== 'treble') continue;
+      const geo = measureBarGeometry(treble.measureIndex);
+      if (!geo) continue;
+      const btn = autoAlignButtonPos(geo);
+      if (Math.hypot(point.x - btn.x, point.y - btn.y) <= AUTO_ALIGN_BUTTON_RADIUS) {
+        return { measureIndex: treble.measureIndex, part: 'button' };
+      }
+      const dx = Math.abs(point.x - btn.x);
+      if (dx <= ARROW_GRAB_REACH && Math.abs(point.y - btn.y) <= ARROW_GRAB_HALF_HEIGHT) {
+        return { measureIndex: treble.measureIndex, part: 'arrow' };
+      }
+      if (Math.abs(point.x - geo.x) <= BARLINE_GRAB_TOL && point.y >= geo.y0 && point.y <= geo.y1) {
+        return { measureIndex: treble.measureIndex, part: 'grip' };
+      }
     }
     return null;
   };
@@ -2409,17 +2454,20 @@ function StaffEditorInner({
     }
 
     // A measure's own right barline: press the 자동정렬 button hanging under
-    // it, or drag the bar itself sideways to hand-size the measure. A press
-    // that never moves still falls through to the seek-to-this-barline
+    // it, or drag the bar (or its arrows) sideways to hand-size the measure. A
+    // press that never moves still falls through to the seek-to-this-barline
     // behaviour below (see handleMeasureResizeDocMouseUp).
-    const barMeasureIndex = findMeasureBarAt(point);
-    if (barMeasureIndex !== null) {
-      if (overAutoAlignButton(barMeasureIndex, point)) {
-        onAutoAlignMeasure(barMeasureIndex);
+    // A note the user can actually see always outranks the barline tools'
+    // invisible drag affordances. The 자동정렬 button is the exception — it is
+    // a real, visible button, so it keeps its own press.
+    const barPress = findMeasureBarPressAt(point);
+    if (barPress && (barPress.part === 'button' || resolveClick(result, point.x, point.y)?.type !== 'select')) {
+      if (barPress.part === 'button') {
+        onAutoAlignMeasure(barPress.measureIndex);
         suppressClickRef.current = true;
         return;
       }
-      startMeasureResize(barMeasureIndex, point);
+      startMeasureResize(barPress.measureIndex, point);
       document.addEventListener('mousemove', handleMeasureResizeDocMouseMove);
       document.addEventListener('mouseup', handleMeasureResizeDocMouseUp);
       return;
@@ -2910,16 +2958,19 @@ function StaffEditorInner({
     }
 
     // Touch has no hover to reveal the barline tools, so a touch that lands on
-    // a barline goes straight into a resize drag; releasing without moving
-    // still falls through to the seek jump (see handleTouchEnd).
-    const barMeasureIndex = findMeasureBarAt(point);
-    if (barMeasureIndex !== null) {
+    // one goes straight into a resize drag; releasing without moving still
+    // falls through to the seek jump (see handleTouchEnd).
+    // A note the user can actually see always outranks the barline tools'
+    // invisible drag affordances. The 자동정렬 button is the exception — it is
+    // a real, visible button, so it keeps its own press.
+    const barPress = findMeasureBarPressAt(point);
+    if (barPress && (barPress.part === 'button' || resolveClick(result, point.x, point.y)?.type !== 'select')) {
       event.preventDefault();
-      if (overAutoAlignButton(barMeasureIndex, point)) {
-        onAutoAlignMeasure(barMeasureIndex);
+      if (barPress.part === 'button') {
+        onAutoAlignMeasure(barPress.measureIndex);
         return;
       }
-      startMeasureResize(barMeasureIndex, point);
+      startMeasureResize(barPress.measureIndex, point);
       return;
     }
 
