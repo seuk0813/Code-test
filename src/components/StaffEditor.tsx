@@ -532,11 +532,31 @@ function StaffEditorInner({
   // here (instead of placing immediately); arrow keys nudge it, and a second
   // click or spacebar commits it. Held in a ref too so the keydown listener and
   // mouse handlers read the current value without stale closures.
+  /**
+   * The blue "next note goes here" preview.
+   *
+   * Its horizontal position is stored as a FRACTION of its measure's note
+   * area, never as an absolute X. Measure widths are content-scaled and the
+   * measure being worked in is held at full width (see the renderer's
+   * computeRowMeasureWidths), so the moment focus moves — which is exactly
+   * what Tab and a measure-crossing chain step do — the previous measure
+   * shrinks and every measure after it slides sideways. An absolute X
+   * captured a moment earlier is stale the instant that happens: it was
+   * pinned to the START of the next measure and ended up two thirds of the
+   * way into it, leaving room for only a few more notes.
+   *
+   * A fraction re-resolves against whatever the layout currently is, so the
+   * preview stays where it was aimed no matter how the measures reflow.
+   */
+  /** One ←/→ nudge of the locked preview: an eighth of the measure's note area. */
+  const PREVIEW_STEP_FRAC = 1 / 8;
+
   const [lockedPreview, setLockedPreview] = useState<{
     measureIndex: number;
     clef: PartId;
     line: number;
-    x: number;
+    /** 0 = the measure's note-area start, 1 = its end. See above. */
+    xFrac: number;
     duration: DurationValue;
   } | null>(null);
   const lockedPreviewRef = useRef<typeof lockedPreview>(null);
@@ -696,9 +716,8 @@ function StaffEditorInner({
         setLockedPreview({ ...lp, line: lp.line + (e.key === 'ArrowUp' ? 0.5 : -0.5) });
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
-        const step = staff.noteAreaWidth / 8;
-        const nx = lp.x + (e.key === 'ArrowRight' ? step : -step);
-        setLockedPreview({ ...lp, x: Math.min(staff.noteStartX + staff.noteAreaWidth, Math.max(staff.noteStartX, nx)) });
+        const next = lp.xFrac + (e.key === 'ArrowRight' ? PREVIEW_STEP_FRAC : -PREVIEW_STEP_FRAC);
+        setLockedPreview({ ...lp, xFrac: Math.min(1, Math.max(0, next)) });
       } else if (e.code === 'Space' || e.key === 'Enter') {
         e.preventDefault();
         commitLockedPreview();
@@ -709,7 +728,7 @@ function StaffEditorInner({
           // before it, same measure/clef — or the previous measure's last
           // note if the preview sits at this one's very start), closing the
           // preview — the "edit what I just typed" move (item 5).
-          const insertIdx = findInsertIndex(result, lp.measureIndex, lp.clef, lp.x);
+          const insertIdx = findInsertIndex(result, lp.measureIndex, lp.clef, previewXOn(staff, lp.xFrac));
           let prevLoc: NoteLocation | null = null;
           if (insertIdx > 0) {
             prevLoc = { measureIndex: lp.measureIndex, clef: lp.clef, noteIndex: insertIdx - 1 };
@@ -731,7 +750,7 @@ function StaffEditorInner({
           const nextStaff = result.staffHitboxes.find((s) => s.measureIndex === lp.measureIndex + 1 && s.clef === lp.clef);
           if (nextStaff) {
             onFocusMeasure(lp.measureIndex + 1);
-            setLockedPreview({ ...lp, measureIndex: lp.measureIndex + 1, x: nextStaff.noteStartX });
+            setLockedPreview({ ...lp, measureIndex: lp.measureIndex + 1, xFrac: 0 });
           }
         }
       } else if (e.key === 'Escape') {
@@ -1507,17 +1526,22 @@ function StaffEditorInner({
     pendingChainRef.current = { measureIndex, clef, noteIndex };
   };
 
+  /** Absolute X of a preview fraction against a staff's CURRENT geometry (see lockedPreview). */
+  const previewXOn = (staff: StaffHitbox, xFrac: number) =>
+    staff.noteStartX + Math.min(1, Math.max(0, xFrac)) * staff.noteAreaWidth;
+
   /** Draws the locked placement preview (a stronger, more opaque ghost than the
    * hover preview) at a locked position. */
-  const renderLockedGhost = (lp: { measureIndex: number; clef: PartId; line: number; x: number; duration: DurationValue }) => {
+  const renderLockedGhost = (lp: { measureIndex: number; clef: PartId; line: number; xFrac: number; duration: DurationValue }) => {
     const result = renderResultRef.current;
     if (!result) return;
     const staff = staffGeometryFor(result, lp.measureIndex, lp.clef);
     if (!staff) return;
-    const isChord = chordMergeTargetAt(lp.measureIndex, lp.clef, lp.x) !== null;
+    const x = previewXOn(staff, lp.xFrac);
+    const isChord = chordMergeTargetAt(lp.measureIndex, lp.clef, x) !== null;
     renderGhost(overlayRef.current, {
       kind: 'note',
-      x: lp.x,
+      x,
       y: staff.refY0 - lp.line * staff.spacing,
       duration: lp.duration,
       isRest: editTool.isRest && !isChord,
@@ -1544,7 +1568,7 @@ function StaffEditorInner({
     const staff = staffGeometryFor(result, lp.measureIndex, lp.clef);
     // Keyboard-driven commit (spacebar/Enter) — the new note stays
     // unselected/black (see item 3) instead of taking over `selected`.
-    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, lp.x, lp.duration, false);
+    if (staff) commitAdd(lp.measureIndex, lp.clef, staff, lp.line, previewXOn(staff, lp.xFrac), lp.duration, false);
     setLockedPreview(null);
     clearGhost(overlayRef.current);
   };
@@ -1585,9 +1609,14 @@ function StaffEditorInner({
         nx = prevStaff.noteStartX + prevStaff.noteAreaWidth - step;
       }
     }
-    nx = Math.min(targetStaff.noteStartX + targetStaff.noteAreaWidth, Math.max(targetStaff.noteStartX, nx));
     onFocusMeasure(measureIndex);
-    setLockedPreview({ measureIndex, clef: location.clef, line, x: nx, duration: editTool.duration });
+    setLockedPreview({
+      measureIndex,
+      clef: location.clef,
+      line,
+      xFrac: xFractionAt(targetStaff, nx),
+      duration: editTool.duration,
+    });
     return true;
   };
 
@@ -1603,7 +1632,7 @@ function StaffEditorInner({
     if (!result || !note || !targetStaff) return false;
     const line = note.pitches.length > 0 ? pitchToLine(location.clef, note.pitches[0].letter, note.pitches[0].octave) : 0;
     onFocusMeasure(targetMeasureIndex);
-    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, x: targetStaff.noteStartX, duration: editTool.duration });
+    setLockedPreview({ measureIndex: targetMeasureIndex, clef: location.clef, line, xFrac: 0, duration: editTool.duration });
     return true;
   };
 
@@ -2231,12 +2260,14 @@ function StaffEditorInner({
       // the mousedown 'add' hold interval) — that held duration, not
       // whatever's armed in the toolbar, is what gets locked/committed here.
       const lp = lockedPreviewRef.current;
+      const gestureStaff = staffGeometryFor(result, gesture.measureIndex, gesture.clef);
       const sameSpot =
         !!lp &&
+        !!gestureStaff &&
         lp.measureIndex === gesture.measureIndex &&
         lp.clef === gesture.clef &&
         lp.line === gesture.line &&
-        Math.abs(lp.x - gesture.x) < TOUCH_PREVIEW_RADIUS;
+        Math.abs(previewXOn(gestureStaff, lp.xFrac) - gesture.x) < TOUCH_PREVIEW_RADIUS;
       // Focus moves to this measure on every such click, not just on commit —
       // so a plain click marks "paste starts here" even before any note is placed.
       onFocusMeasure(gesture.measureIndex);
@@ -2251,7 +2282,7 @@ function StaffEditorInner({
           measureIndex: gesture.measureIndex,
           clef: gesture.clef,
           line: gesture.line,
-          x: gesture.x,
+          xFrac: gestureStaff ? xFractionAt(gestureStaff, gesture.x) : 0,
           duration: gesture.duration,
         });
       }
