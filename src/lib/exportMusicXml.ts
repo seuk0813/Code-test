@@ -1,5 +1,5 @@
 import type { Measure, NoteEvent, Pitch, Score } from '../types/score';
-import { effectiveAccidental, measureTimeSignature } from './scoreUtils';
+import { effectiveAccidental, measureTimeSignature, soundingPitches } from './scoreUtils';
 
 // 48 ticks/quarter note — divisible by both 8 (for 32nd notes) and 3 (for
 // triplets), so every duration/dotted/tuplet combination below lands on a
@@ -63,7 +63,11 @@ function noteXml(note: NoteEvent, staff: 1 | 2 | null, isFirstOfChord: boolean, 
   const chordXml = !isFirstOfChord ? '<chord/>' : '';
   // 3-in-the-place-of-2 (standard triplet ratio — see scoreUtils' TUPLET_RATIO).
   const timeModXml = note.tuplet ? '<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>' : '';
-  const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(note.pitches[0], keySignature);
+  // Sounding pitch, not written: an 옥타브 표시 (see NoteEvent.ottava) moves the
+  // note by an octave. Written pitch plus <octave-shift> would be the fuller
+  // MusicXML spelling, but writing what it sounds like is unambiguous and
+  // opens correctly everywhere.
+  const body = note.isRest || note.pitches.length === 0 ? '<rest/>' : pitchXml(soundingPitches(note)[0], keySignature);
   return `<note>${chordXml}${body}<duration>${duration}</duration><voice>1</voice><type>${type}</type>${dotXml}${timeModXml}${staff === null ? '' : `<staff>${staff}</staff>`}</note>`;
 }
 

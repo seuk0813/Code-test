@@ -85,7 +85,28 @@ export interface NoteEvent {
    * standard single-flag acciaccatura shape) when unset.
    */
   graceNote?: { letter: Pitch['letter']; octave: number; accidental?: Accidental; position?: 'before' | 'after'; duration?: DurationValue };
+  /**
+   * 옥타브 표시 (ottava): this note is WRITTEN where it is but SOUNDS an octave
+   * higher ('8va') or lower ('8vb') — the standard dashed bracket that keeps a
+   * run of very high or very low notes on the staff instead of stranding it on
+   * a ladder of ledger lines.
+   *
+   * Carried per note rather than as a separate span object with start/end
+   * positions, exactly like `connectToNext`: consecutive notes sharing the
+   * same value are drawn under one bracket, so inserting, deleting or
+   * reordering measures can never leave a span pointing at notes that moved.
+   * The trade-off is that two adjacent-but-separate spans of the same kind
+   * read as one bracket, which is rare and harmless.
+   *
+   * It is a notation-only device — the pitch stored here is what is PRINTED.
+   * Playback and MIDI/MusicXML export shift it by the octave (see
+   * ottavaOctaveShift), so the file sounds like the page reads.
+   */
+  ottava?: OttavaKind;
 }
+
+/** Which way an 옥타브 표시 shifts its notes — up an octave (8va) or down (8vb). */
+export type OttavaKind = '8va' | '8vb';
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */
 export type ChordQuality =

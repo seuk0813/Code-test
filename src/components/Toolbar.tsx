@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Accidental, DurationValue, Pitch, ScaleDegreeLabel, Score } from '../types/score';
+import type { Accidental, DurationValue, OttavaKind, Pitch, ScaleDegreeLabel, Score } from '../types/score';
 import { DEFAULT_SCALE_DEGREE_LABELS, DURATION_LABELS, DURATIONS, pickupTrailingMismatch, SCALE_DEGREE_LABELS } from '../lib/scoreUtils';
 import type { RecentScoreEntry } from '../lib/fileIO';
 
@@ -192,6 +192,12 @@ interface ToolbarProps {
   tupletMarqueeEligible: boolean;
   /** Whether all 3 marquee-selected notes already carry the triplet flag — drives the button's active state while tupletMarqueeEligible. */
   marqueeAllTuplet: boolean;
+  /** Sets (or, with null, clears) 옥타브 표시 on whatever notes are selected — see NoteEvent.ottava. */
+  onSetOttava: (kind: OttavaKind | null) => void;
+  /** Whether anything is selected for it to act on — a marquee OR a single note, unlike hasSelection which only counts the latter. */
+  canSetOttava: boolean;
+  /** The 옥타브 표시 every selected note already shares, or null when they differ or have none — drives the button's active state. */
+  selectedOttava: OttavaKind | null;
   /** Last measure clicked/focused (see App's focusedMeasureIndex) — the
    * "이 마디만 박자 변경" control targets this measure. Null = no measure
    * focused yet, so the control stays disabled. */
@@ -239,6 +245,9 @@ export function Toolbar({
   onTupletButtonClick,
   tupletMarqueeEligible,
   marqueeAllTuplet,
+  onSetOttava,
+  canSetOttava,
+  selectedOttava,
   focusedMeasureIndex,
   onSetMeasureTimeSignature,
   onAutoAlignAll,
@@ -576,6 +585,9 @@ export function Toolbar({
           </button>
         )}
         {showNoteOptions && (
+          <OttavaButton current={selectedOttava} disabled={!canSetOttava} onSetOttava={onSetOttava} />
+        )}
+        {showNoteOptions && (
           <ConnectButton
             info={connectInfo}
             disabled={!hasSelection}
@@ -615,6 +627,67 @@ function pitchLabel(p: Pitch): string {
  * — always asks which pitch in the chord to anchor). Clicking while already
  * connected clears the connection immediately instead of reopening the menu.
  */
+/** 옥타브 표시 (8va/8vb) control: with notes selected, wraps them in an octave
+ * bracket — or clears the one they already share. Mirrors ConnectButton's
+ * shape (press to open, pick a kind, press again to clear). */
+function OttavaButton({
+  current,
+  disabled,
+  onSetOttava,
+}: {
+  current: OttavaKind | null;
+  disabled: boolean;
+  onSetOttava: (kind: OttavaKind | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  // The selection changed out from under an open menu — close it.
+  useEffect(() => {
+    setOpen(false);
+  }, [current, disabled]);
+
+  return (
+    <div className="connect-button" ref={rootRef}>
+      <button
+        className={`tool-compact ${current ? 'active' : ''}`}
+        onClick={() => {
+          if (current) {
+            onSetOttava(null);
+            setOpen(false);
+          } else {
+            setOpen((v) => !v);
+          }
+        }}
+        disabled={disabled}
+        aria-label="옥타브 표시"
+        title={
+          current
+            ? `${current} 표시 해제`
+            : '선택한 음표를 옥타브 표시(8va/8vb)로 묶습니다. 악보에는 지금 자리에 그대로 적히고, 소리와 내보내기만 한 옥타브 옮겨집니다'
+        }
+      >
+        <span className="tool-glyph">8va</span>
+      </button>
+      {open && (
+        <div className="connect-popover">
+          <button onClick={() => { onSetOttava('8va'); setOpen(false); }}>8va (한 옥타브 위로)</button>
+          <button onClick={() => { onSetOttava('8vb'); setOpen(false); }}>8vb (한 옥타브 아래로)</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConnectButton({
   info,
   disabled,

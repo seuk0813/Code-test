@@ -8,6 +8,7 @@ import type {
   Measure,
   NoteEvent,
   NoteLocation,
+  OttavaKind,
   PartId,
   Pitch,
   RestMark,
@@ -785,6 +786,42 @@ export function pitchToLine(clef: PartId, letter: Pitch['letter'], octave: numbe
 }
 
 /** Index of a chord's highest-sounding pitch (treble-clef line order) — the one a chord contributes when the melody part is seeded from the piano's right hand (see deriveMelodyNotes). */
+/**
+ * How many octaves a note's 옥타브 표시 (see NoteEvent.ottava) moves it when
+ * SOUNDED. The written pitch stays put; playback and export add this.
+ */
+export function ottavaOctaveShift(note: Pick<NoteEvent, 'ottava'>): number {
+  if (note.ottava === '8va') return 1;
+  if (note.ottava === '8vb') return -1;
+  return 0;
+}
+
+/** A note's pitches as they actually sound, with any 옥타브 표시 applied — what playback and export read. */
+export function soundingPitches(note: NoteEvent): Pitch[] {
+  const shift = ottavaOctaveShift(note);
+  return shift === 0 ? note.pitches : note.pitches.map((p) => ({ ...p, octave: p.octave + shift }));
+}
+
+/**
+ * Sets (or, passing null, clears) the 옥타브 표시 on every given note.
+ *
+ * Rests are marked too, even though they have no pitch to shift: the bracket
+ * is drawn over a RUN of consecutive marked notes (see the renderer's
+ * collectOttavaMarks), so leaving a rest inside the selection unmarked would
+ * break one span into two brackets. Printed music runs the bracket straight
+ * over the rest, and this is what makes that happen.
+ */
+export function setOttavaOnNotes(score: Score, locations: NoteLocation[], kind: OttavaKind | null): Score {
+  return locations.reduce(
+    (s, loc) =>
+      updateNoteInScore(s, loc, (note) => {
+        const { ottava: _dropped, ...rest } = note;
+        return kind === null ? rest : { ...rest, ottava: kind };
+      }),
+    score,
+  );
+}
+
 export function topPitchIndex(pitches: Pitch[]): number {
   let bestIndex = 0;
   let bestLine = -Infinity;

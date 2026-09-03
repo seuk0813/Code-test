@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { StaffEditor, type StaffEditorHandle } from './components/StaffEditor';
 import { Toolbar, MoreMenu, LoadMenu, type EditTool } from './components/Toolbar';
-import type { Accidental, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, PartId, Pitch, Score } from './types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, Measure, NoteEvent, NoteLocation, OttavaKind, PartId, Pitch, Score } from './types/score';
 import {
   addChordToScoreAt,
   addLineBreak,
@@ -67,6 +67,7 @@ import {
   splitTrailingMeasure,
   toggleGraceNote,
   seedMelodyFromTreble,
+  setOttavaOnNotes,
   toggleGraceNotePosition,
   togglePitchInNote,
   updateNoteInScore,
@@ -607,6 +608,29 @@ function App() {
    * its written duration — see NoteEvent.tuplet). With nothing selected, it's
    * pen-only: toggles whether the NEXT newly-placed note is a triplet,
    * mirroring how `dotted` behaves. */
+  /** Every note the 옥타브 표시 button acts on: the marquee selection when there
+   * is one, otherwise the single selected note. */
+  const ottavaTargets = useMemo<NoteLocation[]>(
+    () => (marquee.length > 0 ? marquee : selected ? [selected] : []),
+    [marquee, selected],
+  );
+
+  /** The 옥타브 표시 all the targets share, or null when they differ, have none,
+   * or there are no targets — what the button shows as its active state. */
+  const selectedOttava = useMemo<OttavaKind | null>(() => {
+    const kinds = ottavaTargets.map((loc) => score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex]?.ottava);
+    if (kinds.length === 0 || kinds.some((k) => !k || k !== kinds[0])) return null;
+    return kinds[0] ?? null;
+  }, [ottavaTargets, score]);
+
+  const handleSetOttava = useCallback(
+    (kind: OttavaKind | null) => {
+      if (ottavaTargets.length === 0) return;
+      setScore((prev) => setOttavaOnNotes(prev, ottavaTargets, kind));
+    },
+    [ottavaTargets, setScore],
+  );
+
   const handleTupletButtonClick = useCallback(() => {
     if (marquee.length === 3) {
       const nextTuplet = !marqueeAllTuplet;
@@ -1918,6 +1942,9 @@ function App() {
           onTupletButtonClick={handleTupletButtonClick}
           tupletMarqueeEligible={marquee.length === 3}
           marqueeAllTuplet={marqueeAllTuplet}
+          onSetOttava={handleSetOttava}
+          canSetOttava={ottavaTargets.length > 0}
+          selectedOttava={selectedOttava}
           hasSelection={!!selected}
           onDeleteSelected={handleDeleteSelected}
           onDeselectNote={handleDeselectNote}

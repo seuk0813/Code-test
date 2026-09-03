@@ -1,6 +1,6 @@
 import MidiWriter from 'midi-writer-js';
 import type { Measure, NoteEvent, Score } from '../types/score';
-import { activeParts, pitchToToneNote } from './scoreUtils';
+import { activeParts, pitchToToneNote, soundingPitches } from './scoreUtils';
 
 const BASE_DURATION: Record<NoteEvent['duration'], string> = {
   w: '1',
@@ -35,7 +35,10 @@ function buildTrack(score: Score, pickNotes: (measure: Measure) => NoteEvent[]) 
       }
       track.addEvent(
         new MidiWriter.NoteEvent({
-          pitch: note.pitches.map((p) => pitchToToneNote(p, score.keySignature)),
+          // Sounding, not written: an 옥타브 표시 shifts the note by an octave
+          // (see soundingPitches), and a MIDI file has no way to say "written
+          // here, plays there".
+          pitch: soundingPitches(note).map((p) => pitchToToneNote(p, score.keySignature)),
           duration,
           wait: pendingWait,
         }),

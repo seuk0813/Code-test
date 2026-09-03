@@ -1,6 +1,6 @@
 import * as Tone from 'tone';
 import type { NoteEvent, PartId, Score } from '../types/score';
-import { activeParts, measureStartBeat, noteBeats, pitchToToneNote, pitchToVexKey } from './scoreUtils';
+import { activeParts, measureStartBeat, noteBeats, ottavaOctaveShift, pitchToToneNote, pitchToVexKey } from './scoreUtils';
 
 export interface PlaybackHandle {
   stop: () => void;
@@ -120,7 +120,10 @@ function buildStaffEvents(flat: FlatNote[], synth: Tone.PolySynth, keySignature:
       }
       const durationSeconds = totalBeats * secondsPerBeat * 0.92;
       const group = byDuration.get(durationSeconds);
-      const toneNote = pitchToToneNote(pitch, keySignature);
+      // 옥타브 표시 (see NoteEvent.ottava) is written on the page but sounded
+      // an octave away, so the ear matches what the bracket says to do.
+      const shift = ottavaOctaveShift(note);
+      const toneNote = pitchToToneNote(shift === 0 ? pitch : { ...pitch, octave: pitch.octave + shift }, keySignature);
       if (group) group.push(toneNote);
       else byDuration.set(durationSeconds, [toneNote]);
     });

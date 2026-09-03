@@ -15,7 +15,7 @@ import {
   Voice,
 } from 'vexflow';
 import type { RenderContext } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, PartId, Score, TimeSignature } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, OttavaKind, PartId, Score, TimeSignature } from '../types/score';
 import {
   ALL_PARTS,
   chordLabel,
@@ -1365,6 +1365,7 @@ export function renderScore(
     bass: [],
     melody: [],
   };
+  const ottavaChains: Record<PartId, OttavaChainEntry[]> = { treble: [], bass: [], melody: [] };
 
   rows.forEach((row, rowIndex) => {
     const rowY = rowIndex * rowHeight + titleBand;
@@ -1724,6 +1725,35 @@ export function renderScore(
               ? [refY0 - 3 * spacing]
               : note.pitches.map((p) => refY0 - pitchToLine(clef, p.letter, p.octave) * spacing);
             connectChains[clef].push({ event: note, staveNote: sn, rowIndex, ys });
+            // 옥타브 표시 brackets are grouped and drawn at the very end, once
+            // every note has a final position — same reason the tie curves are.
+            // Pushed in the same play order, so consecutive entries really are
+            // consecutive notes of that part.
+            // The bracket has to clear the whole drawn note, not just its
+            // noteheads — a tall up-stem or a flag reaches well past them, and
+            // measuring noteheads alone printed the "8va" label straight
+            // through the first note's stem. The bounding box covers stems,
+            // flags, beams and ledger lines; noteheads are the fallback for
+            // shapes it can't measure.
+            let noteTop = Math.min(...ys);
+            let noteBottom = Math.max(...ys);
+            try {
+              const bb = sn.getBoundingBox();
+              noteTop = Math.min(noteTop, bb.getY());
+              noteBottom = Math.max(noteBottom, bb.getY() + bb.getH());
+            } catch {
+              // Not measurable on this note shape — the notehead extents stand.
+            }
+            ottavaChains[clef].push({
+              kind: note.ottava,
+              rowIndex,
+              x0: centerXs[i] - spacing * 0.7,
+              x1: centerXs[i] + spacing * 0.7,
+              minY: noteTop,
+              maxY: noteBottom,
+              topLineY: refY0 - 4 * spacing,
+              bottomLineY: refY0,
+            });
           });
 
           staveNotes.forEach((sn, noteIndex) => {
@@ -2217,6 +2247,7 @@ export function renderScore(
     drawChordLabels(svg, score, chordHitboxes);
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
+    drawOttavaMarks(svg, ALL_PARTS.flatMap((part) => collectOttavaMarks(ottavaChains[part])));
     drawMeasureNumbers(svg, measureNumberMarks);
     drawAccidentalMarks(svg, accidentalMarks);
     drawGraceSlurs(svg, graceSlurMarks);
@@ -2312,6 +2343,100 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
   });
 }
 
+
+/** One note's contribution to an 옥타브 표시 bracket (see NoteEvent.ottava),
+ * collected in play order so consecutive entries can be grouped into spans. */
+interface OttavaChainEntry {
+  /** undefined = this note carries no 옥타브 표시, so it ends any run. */
+  kind: OttavaKind | undefined;
+  rowIndex: number;
+  /** Horizontal extent the bracket should cover for this note. */
+  x0: number;
+  x1: number;
+  /** Top/bottom of the whole drawn note — stem and flag included — so the bracket clears it. */
+  minY: number;
+  maxY: number;
+  topLineY: number;
+  bottomLineY: number;
+}
+
+interface OttavaMark {
+  kind: OttavaKind;
+  x0: number;
+  x1: number;
+  /** Baseline of the "8va"/"8vb" text, and the height the dashed line runs at. */
+  y: number;
+}
+
+/** Vertical clearance between the notes a bracket covers and the bracket itself. */
+const OTTAVA_CLEARANCE = 16;
+const OTTAVA_FONT_SIZE = 13;
+
+/**
+ * Groups a part's notes into 옥타브 표시 spans: consecutive notes carrying the
+ * same kind become one bracket. A span is also cut at a row break, since a
+ * bracket can't be drawn across the gap between two systems — each row gets
+ * its own piece, which is what printed music does too.
+ */
+function collectOttavaMarks(chain: OttavaChainEntry[]): OttavaMark[] {
+  const marks: OttavaMark[] = [];
+  let run: OttavaChainEntry[] = [];
+  const flush = () => {
+    if (run.length === 0) return;
+    const kind = run[0].kind as OttavaKind;
+    const above = kind === '8va';
+    // Clear both the staff and whatever notes actually stick out of it.
+    const y = above
+      ? Math.min(...run.map((e) => Math.min(e.minY, e.topLineY))) - OTTAVA_CLEARANCE
+      : Math.max(...run.map((e) => Math.max(e.maxY, e.bottomLineY))) + OTTAVA_CLEARANCE + OTTAVA_FONT_SIZE * 0.4;
+    marks.push({ kind, x0: Math.min(...run.map((e) => e.x0)), x1: Math.max(...run.map((e) => e.x1)), y });
+    run = [];
+  };
+  chain.forEach((entry) => {
+    const continues = run.length > 0 && run[0].kind === entry.kind && run[run.length - 1].rowIndex === entry.rowIndex;
+    if (!entry.kind) {
+      flush();
+      return;
+    }
+    if (!continues) flush();
+    run.push(entry);
+  });
+  flush();
+  return marks;
+}
+
+/**
+ * The dashed 8va/8vb bracket: the label, a dashed line running from it to the
+ * end of the span, and a short hook turning toward the staff to close it —
+ * pointing down for 8va (which sits above) and up for 8vb (below).
+ */
+function drawOttavaMarks(svg: SVGSVGElement, marks: OttavaMark[]): void {
+  marks.forEach((mark) => {
+    const label = document.createElementNS(SVG_NS, 'text');
+    label.setAttribute('x', String(mark.x0));
+    label.setAttribute('y', String(mark.y));
+    label.setAttribute('font-size', String(OTTAVA_FONT_SIZE));
+    label.setAttribute('font-family', CREDIT_FONT);
+    label.setAttribute('font-style', 'italic');
+    label.setAttribute('stroke', 'none');
+    label.setAttribute('fill', '#333');
+    label.textContent = mark.kind;
+    svg.appendChild(label);
+
+    // The dashed run starts clear of the label and stops at the span's end.
+    const lineY = mark.y - OTTAVA_FONT_SIZE * 0.33;
+    const lineStart = mark.x0 + OTTAVA_FONT_SIZE * 2.1;
+    if (mark.x1 <= lineStart) return;
+    const hookDir = mark.kind === '8va' ? 1 : -1;
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', `M ${lineStart} ${lineY} H ${mark.x1} V ${lineY + hookDir * 6}`);
+    path.setAttribute('stroke', '#333');
+    path.setAttribute('stroke-width', '1.1');
+    path.setAttribute('stroke-dasharray', '4 3');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
+  });
+}
 
 interface MeasureNumberMark {
   x: number;
