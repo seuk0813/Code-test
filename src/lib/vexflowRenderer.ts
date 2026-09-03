@@ -704,6 +704,13 @@ const HY_JUNGGOTHIC_FONT = "'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', s
 const CHORD_FONT = HY_JUNGGOTHIC_FONT;
 const LYRIC_FONT = HY_JUNGGOTHIC_FONT;
 const PLACEHOLDER_COLOR = '#b8b8c2';
+/** Measure numbers: small and pale, so they read as a reference you can find
+ * when you look for it rather than as part of the music. */
+const MEASURE_NUMBER_FONT_SIZE = 9;
+const MEASURE_NUMBER_COLOR = '#a0a6b4';
+/** How far above the chord band the number sits — clear of the tallest chord
+ * symbol, so the two never overlap. */
+const MEASURE_NUMBER_RISE = 26;
 
 export interface NoteHitbox {
   measureIndex: number;
@@ -1347,6 +1354,7 @@ export function renderScore(
   const lyricHitboxes: LyricHitbox[] = [];
   const lyricBandHitboxes: LyricBandHitbox[] = [];
   const accidentalMarks: AccidentalMark[] = [];
+  const measureNumberMarks: MeasureNumberMark[] = [];
   const graceSlurMarks: GraceSlurMark[] = [];
   const fingeringMarks: FingeringMark[] = [];
   const degreeMarks: DegreeMark[] = [];
@@ -1372,6 +1380,12 @@ export function renderScore(
       const isPieceStart = measureIndex === 0;
       const isLastMeasure = measureIndex === score.measures.length - 1;
       const measureWidth = rowMeasureWidths[rowIndex][localIndex];
+      // A 못갖춘마디 is an upbeat into bar 1, not a bar of its own, so it goes
+      // unnumbered and the count starts at 1 on the measure after it.
+      const measureNumber = score.pickupBeats !== undefined ? measureIndex : measureIndex + 1;
+      if (measureNumber > 0) {
+        measureNumberMarks.push({ x: x + 3, y: chordY - MEASURE_NUMBER_RISE, text: String(measureNumber) });
+      }
       // This measure's own time signature (Measure.timeSignatureOverride, if
       // set — see measureTimeSignature) — the glyph is redrawn whenever it
       // differs from the PREVIOUS measure's, both when a mid-piece override
@@ -2203,6 +2217,7 @@ export function renderScore(
     drawChordLabels(svg, score, chordHitboxes);
     drawLyrics(svg, score, lyricHitboxes);
     drawLineBreakMarkers(svg, lineBreakHitboxes);
+    drawMeasureNumbers(svg, measureNumberMarks);
     drawAccidentalMarks(svg, accidentalMarks);
     drawGraceSlurs(svg, graceSlurMarks);
     drawFingeringMarks(svg, fingeringMarks);
@@ -2297,6 +2312,35 @@ function drawLyrics(svg: SVGSVGElement, score: Score, lyricHitboxes: LyricHitbox
   });
 }
 
+
+interface MeasureNumberMark {
+  x: number;
+  y: number;
+  text: string;
+}
+
+/**
+ * The bar number over each measure's left edge. Drawn small and pale (see
+ * MEASURE_NUMBER_COLOR) — it is a place-finding aid, not something to read
+ * while playing.
+ *
+ * A 못갖춘마디 (pickup) is left unnumbered and counting starts at 1 from the
+ * first full measure, which is what printed music does: the pickup is an
+ * upbeat into bar 1, not a bar of its own.
+ */
+function drawMeasureNumbers(svg: SVGSVGElement, marks: MeasureNumberMark[]): void {
+  marks.forEach((mark) => {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(mark.x));
+    text.setAttribute('y', String(mark.y));
+    text.setAttribute('font-size', String(MEASURE_NUMBER_FONT_SIZE));
+    text.setAttribute('font-family', CREDIT_FONT);
+    text.setAttribute('stroke', 'none');
+    text.setAttribute('fill', MEASURE_NUMBER_COLOR);
+    text.textContent = mark.text;
+    svg.appendChild(text);
+  });
+}
 
 function drawChordLabels(svg: SVGSVGElement, score: Score, chordHitboxes: ChordHitbox[]): void {
   chordHitboxes.forEach((hb) => {
