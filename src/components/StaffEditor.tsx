@@ -2380,6 +2380,31 @@ function StaffEditorInner({
     if (location && !fired) onDeleteNote(location);
   };
 
+  /**
+   * Takes keyboard focus off whatever toolbar control still holds it, so the
+   * next keypress belongs to the score.
+   *
+   * Pressing on the staff normally moves focus by itself, but every press
+   * handler here calls preventDefault() (to stop text selection and the
+   * browser's own drag), and that suppresses the focus change along with it.
+   * So after picking a key signature the <select> stayed focused, and the
+   * spacebar meant "open this dropdown" to the browser instead of "place the
+   * note" — the score never saw the key at all, and the dropdown had to be
+   * dismissed by hand before typing could continue. Same trap for a toolbar
+   * <button>, where the spacebar re-presses it.
+   *
+   * Anything inside the score container is left alone: the chord/lyric inline
+   * editors are real inputs living in there, and they own the keyboard for as
+   * long as they are open.
+   */
+  const releaseToolbarFocus = () => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body) return;
+    if (containerRef.current?.contains(active)) return;
+    if (!['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(active.tagName)) return;
+    active.blur();
+  };
+
   const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button === 2) {
       const result = renderResultRef.current;
@@ -2415,6 +2440,7 @@ function StaffEditorInner({
     const point = eventPoint(event);
     if (!result || !point) return;
     event.preventDefault();
+    releaseToolbarFocus();
     clearGhost(overlayRef.current);
     if (inlineEditor) commitInlineEditor();
 
@@ -2959,6 +2985,7 @@ function StaffEditorInner({
     const touch = event.touches[0];
     const point = touch && eventPoint(touch);
     if (!result || !point) return;
+    releaseToolbarFocus();
     if (inlineEditor) commitInlineEditor();
 
     if (nearBoundaryHandle(point, pickupBoundarySpec())) {
