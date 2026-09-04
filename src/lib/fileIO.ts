@@ -442,7 +442,11 @@ function drawPngFitToA4Page(doc: import('jspdf').jsPDF, dataUrl: string, width: 
 export async function saveScorePdf(score: Score, filename?: string): Promise<void> {
   const pages = chunkScoreForPdf(trimTrailingBlankMeasures(score));
   const { jsPDF } = await import('jspdf');
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  // compress: true is the difference between a ~30MB file and a ~0.4MB one.
+  // Each page is a full-page raster of the score (see renderScoreToPng), and
+  // without this jsPDF writes that image into the PDF UNCOMPRESSED. The
+  // compression is Flate — lossless — so the page looks exactly the same.
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4', compress: true });
 
   for (let i = 0; i < pages.length; i++) {
     if (i > 0) doc.addPage();
