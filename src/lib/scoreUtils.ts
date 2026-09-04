@@ -1079,6 +1079,24 @@ function nextChordOffset(existingCount: number): number {
 }
 
 /**
+ * A chord symbol's horizontal position within its measure, 0 (the very start)
+ * to 1 (the very end).
+ *
+ * The full span, unlike the inset used for lyrics and rest marks: a chord
+ * belongs directly over the note it applies to, and the commonest chord of all
+ * sits on the DOWNBEAT — offset 0. Clamping to a 0.05 margin meant the first
+ * chord of a measure could never line up with its first note. It landed a
+ * fraction of a beat to the right and refused to be dragged any further left,
+ * because the drag, the snap-to-note candidate and the stored value were all
+ * clamped the same way. Rendering anchors an exactly-on-a-note-onset chord to
+ * that note's own X (see the renderer's xForBeat), so reaching 0 is what makes
+ * the label sit precisely over the downbeat.
+ */
+export function clampChordOffset(offset: number): number {
+  return Math.min(1, Math.max(0, offset));
+}
+
+/**
  * Adds a chord symbol from raw free-text. The exact text is stored and shown
  * verbatim; if it happens to parse as a known chord we also keep the structured
  * root/quality (handy for any future harmony features), otherwise sensible
@@ -1112,7 +1130,7 @@ export function addChordToScoreAt(score: Score, measureIndex: number, text: stri
     accidental: parsed?.accidental ?? '',
     quality: parsed?.quality ?? 'maj',
     text: trimmed,
-    offset: Math.min(0.95, Math.max(0.05, offset)),
+    offset: clampChordOffset(offset),
   };
   const measures = score.measures.map((m, i) => (i === measureIndex ? { ...m, chords: [...m.chords, chord] } : m));
   return { ...score, measures };
@@ -1162,7 +1180,7 @@ export function moveChordInScore(
   offset: number,
   toMeasureIndex: number = measureIndex,
 ): Score {
-  const clamped = Math.min(0.95, Math.max(0.05, offset));
+  const clamped = clampChordOffset(offset);
   if (toMeasureIndex === measureIndex) {
     const measures = score.measures.map((m, i) =>
       i === measureIndex

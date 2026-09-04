@@ -29,6 +29,7 @@ import {
 import {
   activeParts,
   alternateDegreeSpelling,
+  clampChordOffset,
   chordLabel,
   cycleDurationLonger,
   cycleDurationShorter,
@@ -1685,7 +1686,7 @@ function StaffEditorInner({
       let beat = 0;
       measure[clef].notes.forEach((note, noteIndex) => {
         const hb = result.noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === clef && n.noteIndex === noteIndex);
-        if (hb) candidates.push({ offset: Math.min(0.97, Math.max(0.03, beat / duration)), x: hb.centerX });
+        if (hb) candidates.push({ offset: clampChordOffset(beat / duration), x: hb.centerX });
         beat += noteBeats(note);
       });
     });
@@ -1732,7 +1733,10 @@ function StaffEditorInner({
       }
     }
 
-    let offset = Math.min(0.97, Math.max(0.03, (point.x - drag.measureX) / drag.measureWidth));
+    const rawOffset = (point.x - drag.measureX) / drag.measureWidth;
+    // A chord may sit right on the downbeat (see clampChordOffset); a lyric
+    // keeps a small margin so its text never straddles a barline.
+    let offset = drag.kind === 'chordSymbol' ? clampChordOffset(rawOffset) : Math.min(0.97, Math.max(0.03, rawOffset));
     let ghostX = drag.measureX + offset * drag.measureWidth;
     drag.snappedX = null;
 
@@ -1865,7 +1869,7 @@ function StaffEditorInner({
 
   /** Opens an empty edit box to add a new chord at the clicked position in the chord band. */
   const openChordAddEditor = (band: { measureIndex: number; x0: number; x1: number; y0: number; y1: number; measureX: number; measureWidth: number }, x: number) => {
-    const offset = Math.min(0.95, Math.max(0.05, (x - band.measureX) / band.measureWidth));
+    const offset = clampChordOffset((x - band.measureX) / band.measureWidth);
     setInlineEditor({
       kind: 'chordAdd',
       measureIndex: band.measureIndex,
