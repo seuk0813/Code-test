@@ -1,0 +1,739 @@
+.app {
+  text-align: left;
+  padding: 16px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Deliberately outside the ivory toolbar box, pinned to the screen's
+   top-left corner regardless of scroll — the user wanted this toggle
+   separated from the other toolbar controls. */
+.melody-staff-toggle {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 30;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.melody-staff-toggle:hover {
+  border-color: var(--accent);
+  filter: brightness(1.05);
+}
+
+.melody-staff-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Groups the header and toolbar into one sticky unit so they stack in
+   document order without needing to know each other's rendered height.
+   A solid background (pulled out over the app's padding with negative
+   margins) makes the whole band opaque, so the score never shows through
+   the gap between the header and toolbar — or the strips beside the
+   right-aligned header — while it's pinned during scroll. */
+.sticky-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 21;
+  background: var(--bg);
+  margin: -16px -24px 0;
+  padding: 16px 24px 12px;
+  box-shadow: 0 6px 12px -6px rgba(0, 0, 0, 0.18);
+}
+
+.app-header {
+  display: inline-flex;
+  align-self: flex-end;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(122, 92, 255, 0.14), rgba(122, 92, 255, 0.03));
+  border: 1px solid var(--accent-border, rgba(122, 92, 255, 0.35));
+  box-shadow: 0 2px 12px rgba(122, 92, 255, 0.1);
+}
+
+.quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-header button,
+.app-header .quick-action-button {
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 14px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  transition: filter 0.15s ease, border-color 0.15s ease;
+}
+
+.app-header button:hover:not(:disabled),
+.app-header .quick-action-button:hover {
+  border-color: var(--accent);
+  filter: brightness(1.05);
+}
+
+.quick-action-button {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  font-weight: 600;
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.toolbar-row input[type='number'] {
+  width: 64px;
+}
+
+.tempo-field {
+  margin-left: auto;
+}
+
+.play-button {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.stop-button {
+  color: var(--text, #444);
+}
+
+.more-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.connect-button {
+  position: relative;
+  display: inline-block;
+}
+
+.connect-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  min-width: 150px;
+}
+
+.connect-popover-label {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  padding: 0 4px 2px;
+}
+
+.connect-popover button {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.measure-flash-check {
+  animation: measure-flash-fade 3s ease-out forwards;
+}
+
+/* 도수 입력 모드 (see App's degreeInputMode / vexflowRenderer's dim-group
+   wrap): everything except the enlarged scale-degree marks fades back so the
+   degrees read as the thing being edited. */
+.degree-mode-dim {
+  opacity: 0.18;
+  transition: opacity 0.25s ease;
+}
+
+@keyframes measure-flash-fade {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.more-menu-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  min-width: 170px;
+}
+
+.more-menu-popover button {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.more-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.more-menu-label {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  padding: 2px 4px;
+}
+
+.toolbar button {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.toolbar button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.toolbar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.group-label {
+  font-size: 13px;
+  color: var(--text);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.toolbar-row-compact {
+  gap: 5px;
+}
+
+.tool-group-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.toolbar .tool-icon-btn {
+  padding: 3px 8px;
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-h);
+}
+
+.toolbar .tool-icon-btn.active {
+  color: #fff;
+}
+
+.tool-icon-btn svg {
+  display: block;
+}
+
+.scale-degree-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 4px 6px;
+}
+
+.scale-degree-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
+.pickup-mismatch-warning {
+  font-size: 12px;
+  color: #c92a2a;
+  white-space: nowrap;
+}
+
+.tool-glyph {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.toolbar .tool-compact {
+  padding: 4px 9px;
+  font-size: 13px;
+}
+
+.tool-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 3px 8px;
+  cursor: pointer;
+  color: var(--text-h);
+}
+
+.tool-checkbox input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent, #7a5cff);
+}
+
+.file-input-label {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.file-input-label input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.status-line {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.staff-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.staff-container svg {
+  display: block;
+}
+
+.staff-container {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-x;
+}
+
+.staff-stack {
+  position: relative;
+  display: inline-block;
+  /* Mobile pinch/double-tap zoom (see StaffEditor's applyZoomAt) sets this
+     element's width/height in JS to the logical score size × zoom, so
+     .staff-scroll's scrollbar actually reaches the zoomed-in content —
+     a CSS transform alone doesn't grow the scrollable area. */
+}
+
+.staff-zoom-layer {
+  /* The thing actually visually scaled by applyZoomAt, nested inside the
+     appropriately-resized .staff-stack spacer above. Anchored top-left so
+     the scroll offset applyZoomAt also adjusts lines up with the content. */
+  transform-origin: 0 0;
+}
+
+.staff-ghost-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* Floating text input overlaid on the score for in-place title/composer/chord/lyric editing. */
+.staff-input-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.inline-score-input {
+  position: absolute;
+  pointer-events: auto;
+  border: 1.5px dashed var(--accent, #7a5cff);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 2px 6px;
+  outline: none;
+  color: #1a1a1a;
+}
+
+.inline-score-input-center {
+  text-align: center;
+}
+
+.inline-score-input-right {
+  text-align: right;
+}
+
+.inline-score-input-title {
+  font-family: 'Nanum Myeongjo', Batang, serif;
+  font-size: 46px;
+  font-weight: 800;
+}
+
+.inline-score-input-composer {
+  font-family: 'Nanum Gothic', 'Malgun Gothic', sans-serif;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.inline-score-input-chordAdd,
+.inline-score-input-chordEdit {
+  font-family: 'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', sans-serif;
+  font-weight: 700;
+  font-style: italic;
+  font-size: 15px;
+  color: #2f3a8f;
+}
+
+.inline-score-input-lyricAdd,
+.inline-score-input-lyricEdit {
+  font-family: 'HY중고딕', 'HYGothic-Medium', 'Malgun Gothic', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.chord-start-note-btn {
+  position: absolute;
+  pointer-events: auto;
+  border: 1px solid var(--accent, #7a5cff);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--accent, #7a5cff);
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 1px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chord-start-note-btn:hover {
+  background: var(--accent, #7a5cff);
+  color: #fff;
+}
+
+.chord-start-note-hint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2f3a8f;
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+
+/* Floating add/remove-measure buttons — always act on the last measure. */
+/* Floating cluster, bottom-right, always visible (follows scroll): the "±"
+   toggle reveals +/- for inserting/deleting at the currently FOCUSED (mid-
+   score) measure; the clipboard button is its own always-visible action.
+   Circular buttons, in document order bottom-to-top (± toggle at the very
+   bottom, its revealed +/- appear above it, clipboard button above those). */
+.measure-fabs {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 50;
+}
+
+.measure-fab {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent, #7a5cff);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.measure-fab-toggle {
+  background: #2f9e44;
+}
+
+.measure-fab-toggle.active {
+  background: #21742f;
+}
+
+.measure-fab-mid-remove {
+  background: #8a8a8a;
+}
+
+.measure-fab-mid-add {
+  background: #2f9e44;
+}
+
+.measure-fab-clipboard {
+  background: #5a6acf;
+  font-size: 22px;
+}
+
+.measure-fab:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.measure-fab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Inline row right after the score's own content (NOT fixed — it scrolls
+   away with the score, unlike the floating FAB cluster above): the "마디 ±"
+   toggle reveals +/- for adding/removing at the very END of the score.
+   Rounded-square pills, deliberately different from the floating circles. */
+.measure-end-toggle-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.measure-end-toggle {
+  min-width: 44px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.measure-end-toggle.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.measure-end-toggle-remove {
+  color: #8a8a8a;
+  border-color: #8a8a8a;
+}
+
+.measure-end-toggle-add {
+  color: #2f9e44;
+  border-color: #2f9e44;
+}
+
+.measure-end-toggle:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.measure-end-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Save dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--bg, #fff);
+  color: var(--text-h, #1a1a1a);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(420px, 92vw);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.modal-title {
+  margin: 0 0 14px;
+  font-size: 19px;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.modal-field > span {
+  font-weight: 600;
+}
+
+.modal-field input[type='text'],
+.modal-field input:not([type]) {
+  padding: 9px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 7px;
+  font: inherit;
+}
+
+.modal-formats {
+  display: flex;
+  gap: 10px;
+}
+
+.format-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border: 1.5px solid var(--border, #ccc);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.format-option.active {
+  border-color: var(--accent, #7a5cff);
+  background: var(--accent-bg, rgba(122, 92, 255, 0.08));
+}
+
+.format-option input {
+  position: absolute;
+  opacity: 0;
+}
+
+.format-option em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text, #666);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.modal-actions button {
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #ccc);
+  background: var(--bg, #fff);
+  color: var(--text-h, #1a1a1a);
+  cursor: pointer;
+}
+
+.modal-primary {
+  background: var(--accent, #7a5cff);
+  border-color: var(--accent, #7a5cff);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* When printing to PDF, show only the staff. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .staff-scroll,
+  .staff-scroll * {
+    visibility: visible;
+  }
+  .staff-scroll {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: auto;
+    border: none;
+    overflow: visible;
+    padding: 0;
+  }
+  .measure-fabs,
+  .staff-ghost-overlay {
+    display: none !important;
+  }
+}
