@@ -62,12 +62,23 @@ export function ledgerLinePositions(line: number): number[] {
   return [];
 }
 
-export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
+/** Draws several ghosts at once, replacing whatever was there — a multi-note
+ * drag previews every selected note at its new position (see StaffEditor's
+ * group drag). */
+export function renderGhosts(svg: SVGSVGElement | null, specs: GhostSpec[]): void {
   if (!svg) return;
   const group = ensureGroup(svg);
   group.replaceChildren();
-  if (!spec) return;
+  specs.forEach((spec) => {
+    if (spec) drawGhost(group, spec);
+  });
+}
 
+export function renderGhost(svg: SVGSVGElement | null, spec: GhostSpec): void {
+  renderGhosts(svg, [spec]);
+}
+
+function drawGhost(group: SVGGElement, spec: NonNullable<GhostSpec>): void {
   if (spec.kind === 'chord') {
     const text = el('text', {
       x: spec.x,

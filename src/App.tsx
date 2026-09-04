@@ -505,6 +505,35 @@ function App() {
     [cKeyBasedAccidentals, score.keySignature],
   );
 
+  /**
+   * Moves a whole marquee selection at once: every note shifts by the same
+   * `deltaLine`, so the block keeps its shape, and each lands at the
+   * horizontal fraction the caller worked out for it (see StaffEditor's
+   * groupMoves). Applied as one score update, so it is a single undo step.
+   */
+  const handleMoveNotes = useCallback(
+    (moves: { location: NoteLocation; x: number }[], deltaLine: number) => {
+      if (moves.length === 0) return;
+      setScore((prev) =>
+        moves.reduce(
+          (s, { location, x }) =>
+            updateNoteInScore(s, location, (note) => {
+              if (note.isRest) return { ...note, x };
+              const pitches = note.pitches.map((pitch) => {
+                const line = pitchToLine(location.clef, pitch.letter, pitch.octave) + deltaLine;
+                const { letter, octave } = lineToPitch(location.clef, line);
+                const { accidental, manual } = accidentalAfterMove(pitch.letter, pitch.accidental, pitch.manualAccidental, letter as Pitch['letter']);
+                return { ...pitch, letter: letter as Pitch['letter'], octave, accidental, manualAccidental: manual };
+              });
+              return { ...note, pitches, x };
+            }),
+          prev,
+        ),
+      );
+    },
+    [setScore, accidentalAfterMove],
+  );
+
   const handleMoveNote = useCallback((location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => {
     const note = score.measures[location.measureIndex][location.clef].notes[location.noteIndex];
     if (!note) return;
@@ -2030,6 +2059,7 @@ function App() {
         onAddNote={handleAddNote}
         onDeleteNote={deleteNoteAndSelectAdjacent}
         onMoveNote={handleMoveNote}
+        onMoveNotes={handleMoveNotes}
         onMergeNoteIntoChord={handleMergeNoteIntoChord}
         onTogglePitch={handleTogglePitch}
         onToggleGraceNote={handleToggleGraceNote}

@@ -733,6 +733,10 @@ export interface NoteHitbox {
    * middle of its head.
    */
   stemX: number;
+  /** Width of the notehead glyph — lets a caller convert between the glyph's
+   * centre (what centerX/xs report) and its left edge (what a stored free-X
+   * means). */
+  headWidth: number;
   /** Y of each notehead (a chord has several), for pitch-aware click hit-testing. */
   ys: number[];
   /**
@@ -1074,8 +1078,8 @@ function buildStaveNotes(
   measureIndex: number,
   notes: NoteEvent[],
   selected: NoteLocation | null,
-  hiddenNoteIndex: number | null,
-  hiddenPitchIndex: number | null,
+  /** Notes to hide while they are being dragged, by index -> which single pitch to hide (null = the whole note). */
+  hidden: Map<number, number | null>,
   playingNoteIndex: number | null,
   selectedPitchIndex: number | null,
   selectedGrace: NoteLocation | null,
@@ -1130,10 +1134,11 @@ function buildStaveNotes(
         staveNote.setLedgerLineStyle({ fillStyle: '#d6432b', strokeStyle: '#d6432b' });
       }
     }
-    if (hiddenNoteIndex === noteIndex) {
+    if (hidden.has(noteIndex)) {
       // Dragging one narrowed chord tone hides only that notehead (it splits
       // off on drop — see App.tsx's handleMoveNote); the rest of the chord
       // must stay visibly in place. A whole-note drag hides the whole note.
+      const hiddenPitchIndex = hidden.get(noteIndex) ?? null;
       if (hiddenPitchIndex !== null && note.pitches.length > 1) {
         staveNote.setKeyStyle(hiddenPitchIndex, { fillStyle: 'transparent', strokeStyle: 'transparent' });
       } else {
@@ -1146,6 +1151,10 @@ function buildStaveNotes(
   return { staveNotes, graceNotes };
 }
 
+/** A note currently being dragged, hidden from the score while its ghost
+ * follows the pointer. A multi-note drag (see StaffEditor's group drag) passes
+ * several at once — every selected note is hidden together, so the ghosts are
+ * the only copy on screen and the move reads as one gesture. */
 export interface DraggingNote {
   measureIndex: number;
   clef: PartId;
@@ -1288,7 +1297,7 @@ export function renderScore(
   container: HTMLDivElement,
   score: Score,
   selected: NoteLocation | null,
-  draggingNote: DraggingNote | null,
+  draggingNotes: DraggingNote[] | null,
   playingLocations?: Partial<Record<PartId, NoteLocation | null>> | null,
   selectedPitchIndex?: number | null,
   selectedGrace?: NoteLocation | null,
@@ -1523,22 +1532,23 @@ export function renderScore(
           : notes[0]
             ? graceSlotWidth(notes[0])
             : 0;
-        const hiddenNoteIndex =
-          draggingNote && draggingNote.measureIndex === measureIndex && draggingNote.clef === clef
-            ? draggingNote.noteIndex
-            : null;
+        // Every dragged note in THIS staff, by index — a group drag hides
+        // several at once, so one index would not do.
+        const hidden = new Map<number, number | null>(
+          (draggingNotes ?? [])
+            .filter((d) => d.measureIndex === measureIndex && d.clef === clef)
+            .map((d) => [d.noteIndex, d.pitchIndex ?? null] as const),
+        );
         const playingLoc = playingLocations?.[clef];
         const playingNoteIndex =
           playingLoc && playingLoc.measureIndex === measureIndex && playingLoc.clef === clef ? playingLoc.noteIndex : null;
-        const hiddenPitchIndex = hiddenNoteIndex !== null ? draggingNote?.pitchIndex ?? null : null;
         const selectedPitchIndexForClef = playingLocations ? null : selectedPitchIndex ?? null;
         const { staveNotes, graceNotes } = buildStaveNotes(
           clef,
           measureIndex,
           notes,
           effectiveSelected,
-          hiddenNoteIndex,
-          hiddenPitchIndex,
+          hidden,
           playingNoteIndex,
           selectedPitchIndexForClef,
           playingLocations ? null : selectedGrace ?? null,
@@ -1591,7 +1601,7 @@ export function renderScore(
         const voice = staveNotes.length > 0 ? new Voice({ numBeats: capacity, beatValue: 4 }).setStrict(false) : null;
         if (voice) voice.addTickables(staveNotes);
 
-        return { clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve };
+        return { clef, stave, notes, y0, y1, staveNotes, graceNotes, hidden, playingNoteIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve };
       });
 
       // Format treble and bass voices TOGETHER (not independently, as before)
@@ -1610,7 +1620,13 @@ export function renderScore(
         new Formatter().joinVoices(jointVoices).format(jointVoices, measureWidth - (isRowStart ? 108 : 28));
       }
 
-      clefEntries.forEach(({ clef, stave, notes, y0, y1, staveNotes, graceNotes, hiddenNoteIndex, playingNoteIndex, hiddenPitchIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve }) => {
+      clefEntries.forEach(({ clef, stave, notes, y0, y1, staveNotes, graceNotes, hidden, playingNoteIndex, selectedPitchIndexForClef, refY0, spacing, noteStartX, noteAreaWidth, full, voice, beatMap, gapNoteCount, graceLeadReserve }) => {
+        // A note hidden mid-drag takes its accidentals and fingerings with it.
+        const isHiddenPitch = (noteIndex: number, pitchIndex: number) => {
+          if (!hidden.has(noteIndex)) return false;
+          const p = hidden.get(noteIndex) ?? null;
+          return p === null || p === pitchIndex;
+        };
         if (voice) {
           // Beams must be built before the notes are drawn: creating a Beam
           // marks its notes so they skip drawing their own individual flag.
@@ -1826,6 +1842,7 @@ export function renderScore(
               clef,
               noteIndex,
               centerX: centerXs[noteIndex] + headGlyphWidth / 2,
+              headWidth: headGlyphWidth,
               stemX,
               ys,
               xs,
@@ -1941,8 +1958,7 @@ export function renderScore(
                 .map((pitch, pitchIndex) => ({ pitch, pitchIndex }))
                 .filter(
                   ({ pitch, pitchIndex }) =>
-                    !!pitch.accidental &&
-                    !(hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)),
+                    !!pitch.accidental && !isHiddenPitch(noteIndex, pitchIndex),
                 )
                 .sort((a, b) => ys[a.pitchIndex] - ys[b.pitchIndex])
                 .forEach(({ pitch, pitchIndex }) => {
@@ -1964,7 +1980,7 @@ export function renderScore(
                 });
 
               note.pitches.forEach((pitch, pitchIndex) => {
-                if (hiddenNoteIndex === noteIndex && (hiddenPitchIndex === null || hiddenPitchIndex === pitchIndex)) return;
+                if (isHiddenPitch(noteIndex, pitchIndex)) return;
                 if (pitch.finger === undefined) return;
                 // Fingering sits to the right of the notehead — accidentals
                 // no longer live there too, so no extra offset is needed.

@@ -53,6 +53,7 @@ import {
   ledgerLinePositions,
   renderChordSnapGuide,
   renderGhost,
+  renderGhosts,
   renderMarqueeBox,
   renderMarqueeHighlights,
   renderMeasureCompleteFlashes,
@@ -138,6 +139,8 @@ interface StaffEditorProps {
   /** Drag the mark's own glyph to reposition it elsewhere on the score. */
   onMoveRestMark: (measureIndex: number, restMarkId: string, offset: number, line: number) => void;
   onMoveNote: (location: NoteLocation, deltaLine: number, x?: number, pitchIndex?: number | null) => void;
+  /** Moves a whole marquee selection together: every note shifts by the same `deltaLine`, and each lands at its own new horizontal fraction. */
+  onMoveNotes: (moves: { location: NoteLocation; x: number }[], deltaLine: number) => void;
   /** Dragging a whole note onto another existing note in the same staff merges them into one chord. */
   onMergeNoteIntoChord: (location: NoteLocation, targetNoteIndex: number, deltaLine: number) => void;
   onTogglePitch: (location: NoteLocation, letter: string, octave: number) => void;
@@ -262,6 +265,13 @@ type MouseGesture =
   | {
       kind: 'note';
       location: NoteLocation;
+      /**
+       * Every note this drag moves. Just the pressed note normally; the whole
+       * marquee selection when the press landed inside one, so a multi-note
+       * selection moves as a block instead of the one note under the cursor
+       * breaking away from the rest.
+       */
+      group: NoteLocation[];
       startX: number;
       startY: number;
       /** The note's own pitch line at gesture start, for computing a drag's pitch delta (see F14: dragging a chord tone must shift every pitch by the same amount, not replace them). */
@@ -343,6 +353,13 @@ type TouchGesture =
   | {
       kind: 'note';
       location: NoteLocation;
+      /**
+       * Every note this drag moves. Just the pressed note normally; the whole
+       * marquee selection when the press landed inside one, so a multi-note
+       * selection moves as a block instead of the one note under the cursor
+       * breaking away from the rest.
+       */
+      group: NoteLocation[];
       startX: number;
       startY: number;
       startLine: number;
@@ -380,6 +397,7 @@ function StaffEditorInner({
   degreeInputMode,
   onSetManualScaleDegree,
   onMoveNote,
+  onMoveNotes,
   onMergeNoteIntoChord,
   onTogglePitch,
   onToggleGraceNote,
@@ -465,7 +483,7 @@ function StaffEditorInner({
       scrollEl.scrollTop = offsetY * ratio - (clientY - rect.top);
     }
   };
-  const [draggingNote, setDraggingNote] = useState<DraggingNote | null>(null);
+  const [draggingNotes, setDraggingNotes] = useState<DraggingNote[] | null>(null);
   const [inlineEditor, setInlineEditor] = useState<InlineEditor | null>(null);
   const inlineCancelledRef = useRef(false);
   /** While set, the next click on a melody note sets that chord's harmonic
@@ -574,7 +592,7 @@ function StaffEditorInner({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const result = renderScore(containerRef.current, score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex);
+    const result = renderScore(containerRef.current, score, selected, draggingNotes, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex);
     renderResultRef.current = result;
     if (overlayRef.current) {
       overlayRef.current.setAttribute('width', String(result.width));
@@ -585,7 +603,7 @@ function StaffEditorInner({
     // current content size at whatever zoom level is already active — e.g.
     // adding a measure while zoomed in should widen the scrollable area too.
     syncZoomSpacerSize();
-  }, [score, selected, draggingNote, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex]);
+  }, [score, selected, draggingNotes, playingLocations, selectedPitchIndex, selectedGrace, selectedRestMark, degreeInputMode, focusedMeasureIndex]);
 
   // Consumes pendingChainRef (see its declaration) the moment the render
   // above has refreshed renderResultRef.current for the just-committed note
@@ -652,7 +670,7 @@ function StaffEditorInner({
       })
       .filter((s): s is { id: number; x: number; y: number } => s !== null);
     renderMeasureCompleteFlashes(overlayRef.current, specs);
-  }, [measureFlashes, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [measureFlashes, score, selected, draggingNotes, playingLocations, selectedPitchIndex]);
 
   // Blue highlight blobs over each marquee-selected notehead. Redrawn whenever
   // the selection or the score layout changes (the overlay group persists by
@@ -678,7 +696,7 @@ function StaffEditorInner({
       });
     }
     renderMarqueeHighlights(overlayRef.current, spots);
-  }, [marquee, marqueeChords, marqueeLyrics, score, selected, draggingNote, playingLocations, selectedPitchIndex]);
+  }, [marquee, marqueeChords, marqueeLyrics, score, selected, draggingNotes, playingLocations, selectedPitchIndex]);
 
   // Keep the locked-preview ghost drawn (and tell App the lock state so it
   // yields arrow/space to the preview) whenever it or the active tool changes.
@@ -971,7 +989,7 @@ function StaffEditorInner({
   useEffect(() => {
     renderSeekBar(overlayRef.current, playbackClock ? null : seekBarSpec());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seekBeat, score, selected, draggingNote, playingLocations, selectedPitchIndex, playbackClock]);
+  }, [seekBeat, score, selected, draggingNotes, playingLocations, selectedPitchIndex, playbackClock]);
 
   // --- 못갖춘마디/trailing measure resize handles -------------------------------
 
@@ -1467,6 +1485,59 @@ function StaffEditorInner({
       opacity: isChord ? 0.6 : 0.45,
       color: isChord ? CHORD_COLOR : NEW_NOTE_COLOR,
     });
+  };
+
+
+  /** Every note of a group drag, previewed at its shifted position (see the
+   * 'note' gesture's `group`). Each note moves by the same number of staff
+   * lines and the same number of pixels, so the selection holds its shape. */
+
+  /**
+   * Where each note of a group drag should land horizontally: its own current
+   * position shifted by the same number of pixels the pointer travelled.
+   *
+   * A note that has never been dragged has no stored x, so its current
+   * position is read back off the rendered notehead — its LEFT edge, since
+   * that is what a stored x means (see the renderer's free-X placement), while
+   * a hitbox reports the notehead's centre.
+   */
+  const groupMoves = (result: RenderResult, group: NoteLocation[], dxPixels: number): { location: NoteLocation; x: number }[] =>
+    group
+      .map((location) => {
+        const staff = staffGeometryFor(result, location.measureIndex, location.clef);
+        const hb = result.noteHitboxes.find(
+          (n) => n.measureIndex === location.measureIndex && n.clef === location.clef && n.noteIndex === location.noteIndex,
+        );
+        const note = score.measures[location.measureIndex]?.[location.clef].notes[location.noteIndex];
+        if (!staff || !hb || !note) return null;
+        const currentX = note.x ?? xFractionAt(staff, hb.centerX - hb.headWidth / 2);
+        return { location, x: Math.min(1, Math.max(0, currentX + dxPixels / staff.noteAreaWidth)) };
+      })
+      .filter((m): m is { location: NoteLocation; x: number } => m !== null);
+
+  const renderGroupDragGhosts = (result: RenderResult, group: NoteLocation[], deltaLine: number, dxPixels: number) => {
+    const specs = group.map((loc) => {
+      const staff = staffGeometryFor(result, loc.measureIndex, loc.clef);
+      const hb = result.noteHitboxes.find(
+        (n) => n.measureIndex === loc.measureIndex && n.clef === loc.clef && n.noteIndex === loc.noteIndex,
+      );
+      const note = score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex];
+      if (!staff || !hb || !note) return null;
+      const line = note.isRest ? 3 : pitchToLine(loc.clef, note.pitches[0].letter, note.pitches[0].octave) + deltaLine;
+      return {
+        kind: 'note' as const,
+        x: hb.centerX + dxPixels,
+        y: staff.refY0 - line * staff.spacing,
+        duration: note.duration,
+        isRest: note.isRest,
+        stemUp: stemPointsUp(line),
+        accidental: (note.pitches[0]?.accidental ?? '') as Accidental,
+        ledgerLineYs: note.isRest ? [] : ledgerLinePositions(line).map((l) => staff.refY0 - l * staff.spacing),
+        opacity: 0.65,
+        color: DRAG_COLOR,
+      };
+    });
+    renderGhosts(overlayRef.current, specs);
   };
 
   const renderDragGhost = (
@@ -2090,6 +2161,22 @@ function StaffEditorInner({
     refreshPickupHandles();
   };
 
+  /** The notes a 'note' gesture hides while it drags them — the pressed note
+   * alone keeps its narrowed-pitch behaviour, a group hides each note whole. */
+  const draggedLocationsOf = (gesture: { location: NoteLocation; group: NoteLocation[]; narrowedPitchIndex?: number }): DraggingNote[] =>
+    gesture.group.length > 1
+      ? gesture.group.map((l) => ({ ...l, pitchIndex: null }))
+      : [{ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null }];
+
+  /**
+   * The selection a press on `location` should drag: the whole marquee when
+   * the pressed note is part of it, otherwise just that note. Pressing a note
+   * OUTSIDE the marquee drags only that note, which is how you break one out
+   * of a selection without clearing it first.
+   */
+  const dragGroupFor = (location: NoteLocation): NoteLocation[] =>
+    marquee.length > 1 && marquee.some((l) => noteKey(l) === noteKey(location)) ? marquee : [location];
+
   const handleDocumentMouseMove = (event: MouseEvent) => {
     const gesture = mouseGestureRef.current;
     const result = renderResultRef.current;
@@ -2136,13 +2223,21 @@ function StaffEditorInner({
         if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
         clearMouseHold();
         gesture.mode = 'drag';
-        setDraggingNote({ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null });
+        setDraggingNotes(draggedLocationsOf(gesture));
       }
       const staff = staffGeometryFor(result, gesture.location.measureIndex, gesture.location.clef);
       if (!staff) return;
       const note = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
       const { snappedLine } = stickyPitchAt(gesture.location.clef, staff, point.y, gesture.lastLine, gesture.grabLineOffset);
       gesture.lastLine = snappedLine;
+      const deltaLine = snappedLine - gesture.startLine;
+      if (gesture.group.length > 1) {
+        // One ghost per selected note, each shifted by the SAME line and pixel
+        // delta as the note under the cursor — so the preview shows the block
+        // keeping its shape, which is the whole point of dragging a selection.
+        renderGroupDragGhosts(result, gesture.group, deltaLine, point.x - gesture.startX);
+        return;
+      }
       // A manual drag is honored even once the measure is full (see #241),
       // so the ghost always just follows the cursor's X.
       renderDragGhost(staff, point.x, snappedLine, note.duration, (note.pitches[gesture.narrowedPitchIndex ?? 0]?.accidental ?? '') as Accidental);
@@ -2306,19 +2401,26 @@ function StaffEditorInner({
         // would otherwise still play sequentially, not together.
         const isNarrowed = gesture.narrowedPitchIndex !== undefined && gesture.narrowedPitchIndex !== null;
         const sourceNote = score.measures[gesture.location.measureIndex][gesture.location.clef].notes[gesture.location.noteIndex];
-        const mergeTarget =
-          !isNarrowed && sourceNote && !sourceNote.isRest
-            ? chordMergeTargetAt(gesture.location.measureIndex, gesture.location.clef, point.x, gesture.location.noteIndex)
-            : null;
-        if (mergeTarget !== null) {
-          onMergeNoteIntoChord(gesture.location, mergeTarget, deltaLine);
+        if (gesture.group.length > 1) {
+          // A group moves as a block: same line shift, same pixel shift, no
+          // chord-merging or pitch-splitting (both are single-note gestures
+          // and would be ambiguous applied to a whole selection).
+          onMoveNotes(groupMoves(result, gesture.group, point.x - gesture.startX), deltaLine);
         } else {
-          // A manual drag is honored even once the measure is full (#241).
-          onMoveNote(gesture.location, deltaLine, xFractionAt(staff, point.x), gesture.narrowedPitchIndex ?? null);
+          const mergeTarget =
+            !isNarrowed && sourceNote && !sourceNote.isRest
+              ? chordMergeTargetAt(gesture.location.measureIndex, gesture.location.clef, point.x, gesture.location.noteIndex)
+              : null;
+          if (mergeTarget !== null) {
+            onMergeNoteIntoChord(gesture.location, mergeTarget, deltaLine);
+          } else {
+            // A manual drag is honored even once the measure is full (#241).
+            onMoveNote(gesture.location, deltaLine, xFractionAt(staff, point.x), gesture.narrowedPitchIndex ?? null);
+          }
         }
       }
       suppressClickRef.current = true;
-      setDraggingNote(null);
+      setDraggingNotes(null);
       clearGhost(overlayRef.current);
     } else if (gesture.mode === 'durationCycle') {
       // Already applied directly to the note on every hold tick (see
@@ -2736,6 +2838,7 @@ function StaffEditorInner({
       const gesture: Extract<MouseGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
+        group: dragGroupFor(location),
         startX: point.x,
         startY: point.y,
         startLine: gestureStartLine,
@@ -3136,6 +3239,7 @@ function StaffEditorInner({
       const gesture: Extract<TouchGesture, { kind: 'note' }> = {
         kind: 'note',
         location,
+        group: dragGroupFor(location),
         startX: point.x,
         startY: point.y,
         startLine: gestureStartLine,
@@ -3245,7 +3349,7 @@ function StaffEditorInner({
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
       clearTouchHold();
       gesture.mode = 'drag';
-      setDraggingNote({ ...gesture.location, pitchIndex: gesture.narrowedPitchIndex ?? null });
+      setDraggingNotes(draggedLocationsOf(gesture));
     }
 
     event.preventDefault();
@@ -3341,7 +3445,7 @@ function StaffEditorInner({
             }
           }
         }
-        setDraggingNote(null);
+        setDraggingNotes(null);
         clearGhost(overlayRef.current);
       } else if (gesture.mode === 'durationCycle') {
         onChangeDuration(gesture.location, gesture.cycleDuration);
