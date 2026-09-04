@@ -90,6 +90,19 @@ import {
 import { playScore, type PlaybackHandle } from './lib/playback';
 import { SaveDialog, type SaveFormat } from './components/SaveDialog';
 
+/** One note on the copy/paste clipboard (see handleCopyNotes/handlePasteNotes). */
+interface NoteClipboardEntry {
+  clef: PartId;
+  note: NoteEvent;
+  /** Which measure of the copy this note belongs to, relative to the first one copied. */
+  measureOffset: number;
+  /** Whether this note's tie/slur reaches a note that was copied too — the only case where carrying it over means anything at the destination. */
+  keepConnection: boolean;
+}
+
+/** Identity of a note location, for set membership. */
+const noteKey = (n: NoteLocation) => `${n.measureIndex}:${n.clef}:${n.noteIndex}`;
+
 const DEFAULT_EDIT_TOOL: EditTool = { duration: 'q', dotted: false, isRest: false, accidental: '', graceNoteMode: false, tuplet: false };
 
 /** Ordered shortest -> longest, interleaving dotted values, for arrow-key duration stepping. */
@@ -176,7 +189,7 @@ function App() {
   const [marqueeChords, setMarqueeChords] = useState<{ measureIndex: number; chordId: string }[]>([]);
   // Lyric syllables multi-selected via the same shift+drag rubber-band, for batch delete.
   const [marqueeLyrics, setMarqueeLyrics] = useState<{ measureIndex: number; lyricId: string }[]>([]);
-  const [noteClipboard, setNoteClipboard] = useState<{ clef: PartId; note: NoteEvent; measureOffset: number }[]>([]);
+  const [noteClipboard, setNoteClipboard] = useState<NoteClipboardEntry[]>([]);
   // Chord clipboard for batch copy (Ctrl+C) / paste (Ctrl+V) of marquee-selected
   // chords — mirrors noteClipboard: measureOffset remembers which measure
   // (relative to the first selected one) each chord came from, so a
@@ -1015,12 +1028,30 @@ function App() {
     const ordered = [...marquee].sort(
       (a, b) => a.measureIndex - b.measureIndex || (a.clef === b.clef ? a.noteIndex - b.noteIndex : a.clef === 'treble' ? -1 : 1),
     );
+    const selectedKeys = new Set(marquee.map(noteKey));
+    // The note a tie/slur reaches forward to — the next note in the SAME part,
+    // crossing into later measures (and past empty ones) exactly the way the
+    // renderer's connect chains do.
+    const successorOf = (loc: NoteLocation): NoteLocation | null => {
+      const own = score.measures[loc.measureIndex]?.[loc.clef].notes ?? [];
+      if (loc.noteIndex + 1 < own.length) return { ...loc, noteIndex: loc.noteIndex + 1 };
+      for (let mi = loc.measureIndex + 1; mi < score.measures.length; mi++) {
+        if ((score.measures[mi]?.[loc.clef].notes.length ?? 0) > 0) return { measureIndex: mi, clef: loc.clef, noteIndex: 0 };
+      }
+      return null;
+    };
     const copied = ordered
       .map((loc) => {
         const note = score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex];
-        return note ? { clef: loc.clef, note, measureOffset: loc.measureIndex - minMeasure } : null;
+        if (!note) return null;
+        // A connection is worth carrying only when the note it reaches is in
+        // the copy too. The last note of a selection would otherwise paste a
+        // tie into whatever happens to follow it at the destination.
+        const successor = successorOf(loc);
+        const keepConnection = !!note.connectToNext && !!successor && selectedKeys.has(noteKey(successor));
+        return { clef: loc.clef, note, measureOffset: loc.measureIndex - minMeasure, keepConnection };
       })
-      .filter((x): x is { clef: PartId; note: NoteEvent; measureOffset: number } => x !== null);
+      .filter((x): x is NoteClipboardEntry => x !== null);
     setNoteClipboard(copied);
   }, [marquee, score]);
 
@@ -1029,8 +1060,17 @@ function App() {
    * so a multi-measure copy spreads back across that many measures instead
    * of overflowing one. New measures are appended to the score if the copy
    * reaches past its end. Notes are always ADDED alongside whatever's
-   * already in each target measure, never replacing it. Connections and
-   * free-x are dropped so the pasted notes lay out cleanly. */
+   * already in each target measure, never replacing it.
+   *
+   * A pasted note keeps everything that makes it the note it is — its
+   * 셋잇단음표 flag, its 꾸밈음, its 옥타브 표시, and a tie/slur whose other end
+   * came along in the copy. Only the hand-dragged X is dropped, so the copy
+   * lays itself out cleanly in its new measure.
+   *
+   * Rebuilding the clone field by field (rather than spreading the original)
+   * is what silently lost all of that: a copied triplet came back as three
+   * plain eighths, which is not just a missing bracket — it is half a beat
+   * more than was copied, so the target measure overflowed. */
   const handlePasteNotes = useCallback(() => {
     if (noteClipboard.length === 0) return;
     const target = focusedMeasureIndex ?? score.measures.length - 1;
@@ -1038,14 +1078,15 @@ function App() {
       const maxOffset = Math.max(...noteClipboard.map((c) => c.measureOffset));
       const measures = [...prev.measures];
       while (measures.length <= target + maxOffset) measures.push(createEmptyMeasure());
-      noteClipboard.forEach(({ clef, note, measureOffset }) => {
+      noteClipboard.forEach(({ clef, note, measureOffset, keepConnection }) => {
         const mi = target + measureOffset;
+        const { x: _droppedX, connectToNext, connectKind, connectPitchIndex, ...carried } = note;
         const clone: NoteEvent = {
+          ...carried,
           id: nextId('note'),
           pitches: note.pitches.map((p) => ({ ...p })),
-          duration: note.duration,
-          dotted: note.dotted,
-          isRest: note.isRest,
+          graceNote: note.graceNote ? { ...note.graceNote } : undefined,
+          ...(keepConnection ? { connectToNext, connectKind, connectPitchIndex } : {}),
         };
         const m = measures[mi];
         measures[mi] = { ...m, [clef]: { notes: [...m[clef].notes, clone] } };
