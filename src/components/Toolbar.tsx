@@ -188,10 +188,12 @@ interface ToolbarProps {
   onGraceNoteButtonClick: () => void;
   /** 셋잇단음표 button: with exactly 3 notes shift-drag-marquee-selected, toggles all 3 together into/out of a triplet group; with a single note selected, toggles its `tuplet` flag directly; with nothing selected, toggles the pen (editTool.tuplet) for the next new note. */
   onTupletButtonClick: () => void;
-  /** True when exactly 3 notes are marquee-selected — the button targets that group instead of a single selection or the pen. */
+  /** True when the marquee holds a note count this button can group (3 or 4) — it then targets that group instead of a single selection or the pen. */
   tupletMarqueeEligible: boolean;
-  /** Whether all 3 marquee-selected notes already carry the triplet flag — drives the button's active state while tupletMarqueeEligible. */
+  /** Whether all marquee-selected notes already form exactly that group — drives the button's active state while tupletMarqueeEligible. */
   marqueeAllTuplet: boolean;
+  /** The ratio the marquee would become, e.g. "3:2" or "4:3", for the button's tooltip. Null when the marquee isn't a groupable count. */
+  marqueeTupletLabel: string | null;
   /** Sets (or, with null, clears) 옥타브 표시 on whatever notes are selected — see NoteEvent.ottava. */
   onSetOttava: (kind: OttavaKind | null) => void;
   /** Whether anything is selected for it to act on — a marquee OR a single note, unlike hasSelection which only counts the latter. */
@@ -245,6 +247,7 @@ export function Toolbar({
   onTupletButtonClick,
   tupletMarqueeEligible,
   marqueeAllTuplet,
+  marqueeTupletLabel,
   onSetOttava,
   canSetOttava,
   selectedOttava,
@@ -577,8 +580,8 @@ export function Toolbar({
             aria-label="셋잇단음표"
             title={
               tupletMarqueeEligible
-                ? '음표 3개를 선택한 상태이므로 누르면 이 3개를 하나의 셋잇단음표 그룹으로 묶습니다 (다시 누르면 해제)'
-                : '음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다. 음표 3개를 shift-드래그로 선택하면 한 번에 그룹으로 묶을 수 있습니다'
+                ? `선택한 음표들을 ${marqueeTupletLabel} 잇단음표 그룹으로 묶습니다 (다시 누르면 해제)`
+                : '음표를 선택한 상태에서 누르면 그 음표가 바로 셋잇단음표(원래 길이의 2/3)로 바뀝니다. 선택 없이 누르면, 이후 새로 배치하는 음표마다 셋잇단음표로 만듭니다. 음표 3개를 shift-드래그로 선택하면 셋잇단음표, 4개면 4:3 잇단음표로 한 번에 묶을 수 있습니다'
             }
           >
             <span className="tool-glyph">♪³</span>

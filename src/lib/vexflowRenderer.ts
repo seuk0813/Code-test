@@ -15,7 +15,7 @@ import {
   Voice,
 } from 'vexflow';
 import type { RenderContext } from 'vexflow';
-import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, OttavaKind, PartId, Score, TimeSignature } from '../types/score';
+import type { Accidental, ChordSymbol, Clef, DurationValue, LyricSyllable, Measure, NoteEvent, NoteLocation, OttavaKind, PartId, Score, TimeSignature, TupletSpec } from '../types/score';
 import {
   ALL_PARTS,
   chordLabel,
@@ -28,6 +28,7 @@ import {
   noteBeats,
   pitchToLine,
   pitchToVexKey,
+  sameTuplet,
   stemPointsUp,
   vexDurationString,
 } from './scoreUtils';
@@ -1221,7 +1222,7 @@ function computeBeamNoteGroups(
   const EPS = 1e-6;
   const hasChordChangeAt = (beat: number) => chordChangeBeats.some((b) => Math.abs(b - beat) < EPS);
   const merged: StaveNote[][] = [];
-  // Triplet eighths (NoteEvent.tuplet) take 2/3 the time of a plain eighth,
+  // Tupleted eighths (NoteEvent.tuplet) take less time than a plain eighth,
   // so a triplet's beam must never fuse with an adjacent plain-eighth beat's
   // beam — they're rhythmically different runs even though both read as "8"
   // duration; merging them drew one long beam spanning both with only the
@@ -1249,33 +1250,38 @@ function computeBeamNoteGroups(
 }
 
 /**
- * Groups runs of exactly 3 consecutive 셋잇단음표 (triplet, NoteEvent.tuplet)
- * notes of the SAME duration into brackets for `new Tuplet(group)` — the
- * standard "3" bracket over a run of 3 same-value notes. A run that isn't a
- * multiple of 3 (e.g. only 1-2 tupleted notes in a row, or a differently-
- * tupleted note breaking the chain) simply doesn't get a bracket for its
- * leftover notes; they still sound/export correctly via noteBeats, they just
- * read without the visual "3" — an edge case, not a correctness issue.
+ * Groups runs of consecutive 잇단음표 notes (NoteEvent.tuplet) that share the
+ * SAME ratio and the SAME duration into brackets — a run of 3 triplet eighths
+ * gets the familiar "3", a run of 4 quadruplet eighths gets a "4".
+ *
+ * A run is cut into chunks of the ratio's own `actual` count, so 6 triplet
+ * eighths read as two brackets of 3 rather than one of 6. Leftovers (a run
+ * that isn't a whole multiple, or a differently-tupleted note breaking the
+ * chain) simply go unbracketed; they still sound and export correctly via
+ * noteBeats, they just read without the number — an edge case, not a
+ * correctness issue.
  */
-function computeTupletGroups(notes: NoteEvent[], staveNotes: StaveNote[]): StaveNote[][] {
-  const groups: StaveNote[][] = [];
+function computeTupletGroups(notes: NoteEvent[], staveNotes: StaveNote[]): { notes: StaveNote[]; spec: TupletSpec }[] {
+  const groups: { notes: StaveNote[]; spec: TupletSpec }[] = [];
   let run: StaveNote[] = [];
+  let runSpec: TupletSpec | null = null;
   let runDuration: DurationValue | null = null;
   const flushRun = () => {
-    for (let i = 0; i + 2 < run.length; i += 3) groups.push(run.slice(i, i + 3));
+    if (runSpec) {
+      const size = runSpec.actual;
+      for (let i = 0; i + size - 1 < run.length; i += size) groups.push({ notes: run.slice(i, i + size), spec: runSpec });
+    }
     run = [];
+    runSpec = null;
     runDuration = null;
   };
   notes.forEach((note, i) => {
-    if (note.tuplet && (runDuration === null || note.duration === runDuration)) {
+    const continues = !!note.tuplet && (runSpec === null || (sameTuplet(note.tuplet, runSpec) && note.duration === runDuration));
+    if (!continues) flushRun();
+    if (note.tuplet) {
       run.push(staveNotes[i]);
+      runSpec = note.tuplet;
       runDuration = note.duration;
-    } else {
-      flushRun();
-      if (note.tuplet) {
-        run = [staveNotes[i]];
-        runDuration = note.duration;
-      }
     }
   });
   flushRun();
@@ -1665,9 +1671,15 @@ export function renderScore(
           // beam) whenever the group's stems point down (typically because
           // the notes sit high on the staff). Follow the beam/stems instead,
           // like real engraving: bracket below when stems are down.
-          const tuplets = computeTupletGroups(notes, staveNotes).map((g) => {
-            const stemsDown = g[0]?.getStemDirection() === Stem.DOWN;
-            return new Tuplet(g, stemsDown ? { location: Tuplet.LOCATION_BOTTOM } : undefined);
+          const tuplets = computeTupletGroups(notes, staveNotes).map(({ notes: group, spec }) => {
+            const stemsDown = group[0]?.getStemDirection() === Stem.DOWN;
+            // numNotes/notesOccupied are what put the right number in the
+            // bracket — "3" over a triplet, "4" over a 4:3 quadruplet.
+            return new Tuplet(group, {
+              numNotes: spec.actual,
+              notesOccupied: spec.normal,
+              ...(stemsDown ? { location: Tuplet.LOCATION_BOTTOM } : {}),
+            });
           });
 
           // getAbsoluteX() is only meaningful once each note knows its stave

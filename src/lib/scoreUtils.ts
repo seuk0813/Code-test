@@ -16,6 +16,7 @@ import type {
   Score,
   StaffMeasure,
   TimeSignature,
+  TupletSpec,
 } from '../types/score';
 
 let idCounter = 0;
@@ -60,15 +61,38 @@ export function activeParts(score: Score): PartId[] {
   return score.showMelodyStaff ? ALL_PARTS : ['treble', 'bass'];
 }
 
-/** Standard 3-in-the-time-of-2 triplet ratio — a tupleted note takes 2/3 of
- * its written duration (see NoteEvent.tuplet). Applied after the dotted
- * multiplier, matching how a dotted-and-tupleted note would actually sound. */
-const TUPLET_RATIO = 2 / 3;
+/** 셋잇단음표 — 3 notes in the time of 2, the tuplet almost everyone means. */
+export const TRIPLET: TupletSpec = { actual: 3, normal: 2 };
+/** 4 notes in the time of 3 — the other tuplet the toolbar can make. */
+export const QUADRUPLET: TupletSpec = { actual: 4, normal: 3 };
+
+/** The standard ratio for a group of `count` notes, or null when there isn't
+ * one this app makes. 3 and 4 each go in the time of one fewer; larger groups
+ * have no single convention (a sextuplet is usually 6:4, not 6:5), so they are
+ * left alone rather than guessed at. */
+export function tupletForCount(count: number): TupletSpec | null {
+  if (count === 3) return TRIPLET;
+  if (count === 4) return QUADRUPLET;
+  return null;
+}
+
+/** How much of its written length a note in this tuplet actually takes. */
+export function tupletRatio(tuplet: TupletSpec | undefined): number {
+  return tuplet ? tuplet.normal / tuplet.actual : 1;
+}
+
+/** Whether two notes belong to the same kind of tuplet group. */
+export function sameTuplet(a: TupletSpec | undefined, b: TupletSpec | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.actual === b.actual && a.normal === b.normal;
+}
 
 export function noteBeats(note: Pick<NoteEvent, 'duration' | 'dotted' | 'tuplet'>): number {
   const base = DURATION_BEATS[note.duration];
   const dotted = note.dotted ? base * 1.5 : base;
-  return note.tuplet ? dotted * TUPLET_RATIO : dotted;
+  // The tuplet ratio applies after the dot, matching how a dotted-and-tupleted
+  // note actually sounds.
+  return dotted * tupletRatio(note.tuplet);
 }
 
 /** Shortest to longest. Long-press (toolbar or staff) steps toward the end of this list. */
@@ -721,7 +745,7 @@ export function createNote(
   dotted: boolean,
   isRest: boolean,
   x?: number,
-  tuplet?: boolean,
+  tuplet?: TupletSpec,
 ): NoteEvent {
   return {
     id: nextId('n'),
@@ -730,7 +754,7 @@ export function createNote(
     dotted,
     isRest,
     x,
-    ...(tuplet ? { tuplet: true } : {}),
+    ...(tuplet ? { tuplet } : {}),
   };
 }
 

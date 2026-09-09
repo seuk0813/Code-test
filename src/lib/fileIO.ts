@@ -1,6 +1,6 @@
-import type { ChordSymbol, Measure, Score } from '../types/score';
+import type { ChordSymbol, Measure, Score, StaffMeasure } from '../types/score';
 import { withReloadHeld } from './reloadGuard';
-import { computeScoreRows, deriveMelodyNotes, parseChordText } from './scoreUtils';
+import { computeScoreRows, deriveMelodyNotes, parseChordText, TRIPLET } from './scoreUtils';
 import { MEASURES_PER_ROW, renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
@@ -31,6 +31,18 @@ function reparseChord(chord: ChordSymbol): ChordSymbol {
   return { ...chord, root: parsed.root, accidental: parsed.accidental, quality: parsed.quality };
 }
 
+/**
+ * 잇단음표 used to be a plain boolean meaning "triplet" before it grew a ratio
+ * (see NoteEvent.tuplet). A score saved back then has `tuplet: true`, which
+ * would otherwise read as a truthy object with no actual/normal and make every
+ * such note infinitely long. Convert it to the triplet it always meant.
+ */
+function normalizeStaff(sm: StaffMeasure): StaffMeasure {
+  return {
+    notes: sm.notes.map((n) => (typeof (n.tuplet as unknown) === 'boolean' ? { ...n, tuplet: n.tuplet ? TRIPLET : undefined } : n)),
+  };
+}
+
 /** Backfills fields added in later versions so older saved scores load cleanly. */
 export function normalizeScore(score: Score): Score {
   return {
@@ -49,7 +61,9 @@ export function normalizeScore(score: Score): Score {
         // independently editable from then on. A file saved with the melody
         // staff switched off gets an empty part, matching a fresh measure;
         // switching the staff on later seeds it (see seedMelodyFromTreble).
-        melody: m.melody ?? { notes: score.showMelodyStaff ? deriveMelodyNotes(m.treble?.notes ?? []) : [] },
+        melody: normalizeStaff(m.melody ?? { notes: score.showMelodyStaff ? deriveMelodyNotes(m.treble?.notes ?? []) : [] }),
+        treble: normalizeStaff(m.treble ?? { notes: [] }),
+        bass: normalizeStaff(m.bass ?? { notes: [] }),
       }),
     ),
   };

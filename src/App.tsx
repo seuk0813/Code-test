@@ -66,8 +66,11 @@ import {
   splitPitchFromNote,
   splitTrailingMeasure,
   toggleGraceNote,
+  sameTuplet,
   seedMelodyFromTreble,
   setOttavaOnNotes,
+  TRIPLET,
+  tupletForCount,
   toggleGraceNotePosition,
   togglePitchInNote,
   updateNoteInScore,
@@ -422,7 +425,7 @@ function App() {
         octave: spelled.octave,
         manualAccidental: !!explicitAccidental,
       };
-      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x, editTool.tuplet);
+      const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x, editTool.tuplet ? TRIPLET : undefined);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
       if (result.overflow) {
         // A full staff normally just refuses the add — but with the 쉼표
@@ -637,19 +640,20 @@ function App() {
     setEditTool((t) => ({ ...t, graceNoteMode: !t.graceNoteMode }));
   }, [selected, score, setScore, handleSelectGrace]);
 
-  /** Exactly 3 notes shift-drag-marquee-selected is the natural gesture for
-   * marking an existing run as a triplet (see computeTupletGroups, which
-   * only brackets runs of exactly 3 consecutive same-duration tupleted
-   * notes) — mirrors marqueeAllTuplet below for the button's active state. */
-  const marqueeAllTuplet =
-    marquee.length === 3 && marquee.every((loc) => score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex]?.tuplet);
+  /**
+   * The 잇단음표 the marquee selection would become: 3 notes make a 셋잇단음표
+   * (3 in the time of 2), 4 make a 4:3 quadruplet. Null for any other count —
+   * larger groups have no single convention, so the button leaves them alone
+   * (see tupletForCount).
+   */
+  const marqueeTuplet = useMemo(() => tupletForCount(marquee.length), [marquee.length]);
 
-  /** 셋잇단음표 (triplet) toolbar button: with exactly 3 notes marquee-selected
-   * (shift-drag), toggles all 3 together into/out of a triplet group. With a
-   * single note selected instead, toggles its `tuplet` flag directly (2/3 of
-   * its written duration — see NoteEvent.tuplet). With nothing selected, it's
-   * pen-only: toggles whether the NEXT newly-placed note is a triplet,
-   * mirroring how `dotted` behaves. */
+  /** Whether the marquee is already exactly that group — drives the button's
+   * active state, and makes pressing it again undo the grouping. */
+  const marqueeAllTuplet =
+    marqueeTuplet !== null &&
+    marquee.every((loc) => sameTuplet(score.measures[loc.measureIndex]?.[loc.clef].notes[loc.noteIndex]?.tuplet, marqueeTuplet));
+
   /** Every note the 옥타브 표시 button acts on: the marquee selection when there
    * is one, otherwise the single selected note. */
   const ottavaTargets = useMemo<NoteLocation[]>(
@@ -673,18 +677,23 @@ function App() {
     [ottavaTargets, setScore],
   );
 
+  /** 잇단음표 toolbar button: with 3 or 4 notes marquee-selected (shift-drag),
+   * groups them into a 셋잇단음표 or a 4:3 quadruplet (pressing again ungroups).
+   * With a single note selected instead, toggles its own 셋잇단음표 flag. With
+   * nothing selected, it's pen-only: toggles whether the NEXT newly-placed note
+   * is a triplet, mirroring how `dotted` behaves. */
   const handleTupletButtonClick = useCallback(() => {
-    if (marquee.length === 3) {
-      const nextTuplet = !marqueeAllTuplet;
-      setScore((prev) => marquee.reduce((s, loc) => updateNoteInScore(s, loc, (note) => ({ ...note, tuplet: nextTuplet })), prev));
+    if (marqueeTuplet !== null) {
+      const next = marqueeAllTuplet ? undefined : marqueeTuplet;
+      setScore((prev) => marquee.reduce((s, loc) => updateNoteInScore(s, loc, (note) => ({ ...note, tuplet: next })), prev));
       return;
     }
     if (selected) {
-      setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, tuplet: !note.tuplet })));
+      setScore((prev) => updateNoteInScore(prev, selected, (note) => ({ ...note, tuplet: note.tuplet ? undefined : TRIPLET })));
       return;
     }
     setEditTool((t) => ({ ...t, tuplet: !t.tuplet }));
-  }, [marquee, marqueeAllTuplet, selected, setScore]);
+  }, [marquee, marqueeTuplet, marqueeAllTuplet, selected, setScore]);
 
   /** Toolbar's "이 마디만 박자" control: sets/clears a per-measure time
    * signature override (see Measure.timeSignatureOverride) — e.g. one 3/8
@@ -2010,7 +2019,8 @@ function App() {
           onEditToolChange={handleEditToolChange}
           onGraceNoteButtonClick={handleGraceNoteButtonClick}
           onTupletButtonClick={handleTupletButtonClick}
-          tupletMarqueeEligible={marquee.length === 3}
+          tupletMarqueeEligible={marqueeTuplet !== null}
+          marqueeTupletLabel={marqueeTuplet ? `${marqueeTuplet.actual}:${marqueeTuplet.normal}` : null}
           marqueeAllTuplet={marqueeAllTuplet}
           onSetOttava={handleSetOttava}
           canSetOttava={ottavaTargets.length > 0}

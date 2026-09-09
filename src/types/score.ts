@@ -40,16 +40,21 @@ export interface NoteEvent {
   dotted: boolean;
   isRest: boolean;
   /**
-   * 셋잇단음표 (triplet): when true, this note's actual sounding/beat-capacity
-   * duration is 2/3 of what `duration`/`dotted` alone would say — the
-   * standard "3 in the time of 2" ratio (see scoreUtils' noteBeats/
-   * TUPLET_RATIO). Purely a per-note flag: the renderer groups consecutive
-   * tupleted notes of matching duration into runs of 3 for the bracket (see
+   * 잇단음표 (tuplet): this note is part of a group of `actual` notes played in
+   * the time of `normal` of the same value, so its real sounding/beat-capacity
+   * duration is `normal / actual` of what `duration`/`dotted` alone would say
+   * (see scoreUtils' noteBeats/tupletRatio).
+   *
+   * Purely a per-note value: the renderer groups consecutive notes sharing the
+   * same ratio and duration into runs of `actual` for the bracket (see
    * vexflowRenderer's tuplet grouping), but nothing here enforces group size —
-   * an incomplete run (not a multiple of 3) still sounds/exports correctly,
-   * it just won't get a bracket.
+   * an incomplete run still sounds and exports correctly, it just won't get a
+   * bracket.
+   *
+   * Scores saved when this was a plain boolean (triplet only) load as TRIPLET;
+   * see normalizeScore.
    */
-  tuplet?: boolean;
+  tuplet?: TupletSpec;
   /**
    * Free horizontal position within the measure's note area, 0 (start)..1 (end).
    * Set when a note is placed/dragged freely. Ignored (auto-formatted) once the
@@ -107,6 +112,16 @@ export interface NoteEvent {
 
 /** Which way an 옥타브 표시 shifts its notes — up an octave (8va) or down (8vb). */
 export type OttavaKind = '8va' | '8vb';
+
+/**
+ * An 잇단음표 group's ratio: `actual` notes written where `normal` of the same
+ * value would normally go. A 셋잇단음표 (triplet) is 3 in the time of 2; the
+ * 4:3 quadruplet is 4 in the time of 3.
+ */
+export interface TupletSpec {
+  actual: number;
+  normal: number;
+}
 
 /** Chord symbol quality (the part after the root, e.g. "m" in "Am"). */
 export type ChordQuality =

@@ -53,7 +53,7 @@ function pitchXml(pitch: Pitch, keySignature: string): string {
 function noteTicks(note: NoteEvent): number {
   const base = BASE_DURATION_TICKS[note.duration];
   const dotted = note.dotted ? base * 1.5 : base;
-  return note.tuplet ? (dotted * 2) / 3 : dotted;
+  return note.tuplet ? (dotted * note.tuplet.normal) / note.tuplet.actual : dotted;
 }
 
 function noteXml(note: NoteEvent, staff: 1 | 2 | null, isFirstOfChord: boolean, keySignature: string): string {
@@ -61,8 +61,10 @@ function noteXml(note: NoteEvent, staff: 1 | 2 | null, isFirstOfChord: boolean, 
   const type = NOTE_TYPE[note.duration];
   const dotXml = note.dotted ? '<dot/>' : '';
   const chordXml = !isFirstOfChord ? '<chord/>' : '';
-  // 3-in-the-place-of-2 (standard triplet ratio — see scoreUtils' TUPLET_RATIO).
-  const timeModXml = note.tuplet ? '<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>' : '';
+  // e.g. 3-in-the-place-of-2 for a triplet, 4-in-the-place-of-3 for a quadruplet.
+  const timeModXml = note.tuplet
+    ? `<time-modification><actual-notes>${note.tuplet.actual}</actual-notes><normal-notes>${note.tuplet.normal}</normal-notes></time-modification>`
+    : '';
   // Sounding pitch, not written: an 옥타브 표시 (see NoteEvent.ottava) moves the
   // note by an octave. Written pitch plus <octave-shift> would be the fuller
   // MusicXML spelling, but writing what it sounds like is unambiguous and

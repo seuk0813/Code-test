@@ -1,6 +1,6 @@
 import MidiWriter from 'midi-writer-js';
 import type { Measure, NoteEvent, Score } from '../types/score';
-import { activeParts, pitchToToneNote, soundingPitches } from './scoreUtils';
+import { activeParts, noteBeats, pitchToToneNote, soundingPitches } from './scoreUtils';
 
 const BASE_DURATION: Record<NoteEvent['duration'], string> = {
   w: '1',
@@ -11,13 +11,23 @@ const BASE_DURATION: Record<NoteEvent['duration'], string> = {
   '32': '32',
 };
 
-/** midi-writer-js natively parses a 't' suffix (e.g. "8t") as a duration
- * ratio'd 3-in-the-place-of-2 — exactly the 2/3 triplet ratio NoteEvent.tuplet
- * needs (see scoreUtils' noteBeats/TUPLET_RATIO), so no manual tick math here. */
+/** midi-writer-js's own ticks per quarter note (its default PPQN). */
+const MIDI_TICKS_PER_BEAT = 128;
+
+/**
+ * A note's length in midi-writer-js duration syntax.
+ *
+ * Anything tupleted is written as an explicit tick count ("T96"), not with the
+ * library's 't' suffix: that suffix always fits its notes into the time of
+ * TWO, which is right for a triplet and wrong for everything else — "8t4"
+ * means 4 eighths in the time of 2, not the 4-in-the-time-of-3 a quadruplet
+ * is. noteBeats already knows the real length, so ticks are exact for any
+ * ratio.
+ */
 function midiDuration(note: NoteEvent): string {
+  if (note.tuplet) return `T${Math.round(noteBeats(note) * MIDI_TICKS_PER_BEAT)}`;
   const base = BASE_DURATION[note.duration];
-  const dotted = note.dotted ? `d${base}` : base;
-  return note.tuplet ? `${dotted}t` : dotted;
+  return note.dotted ? `d${base}` : base;
 }
 
 function buildTrack(score: Score, pickNotes: (measure: Measure) => NoteEvent[]) {
