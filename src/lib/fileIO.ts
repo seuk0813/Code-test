@@ -1,7 +1,7 @@
 import type { ChordSymbol, Measure, Score } from '../types/score';
 import { withReloadHeld } from './reloadGuard';
-import { deriveMelodyNotes, parseChordText } from './scoreUtils';
-import { renderScore } from './vexflowRenderer';
+import { computeScoreRows, deriveMelodyNotes, parseChordText } from './scoreUtils';
+import { MEASURES_PER_ROW, renderScore } from './vexflowRenderer';
 
 const AUTOSAVE_KEY = 'piano-sheet-editor:autosave';
 const RECENT_SCORES_KEY = 'piano-sheet-editor:recent-scores';
@@ -288,9 +288,12 @@ async function embedTextFonts(svg: SVGSVGElement, score: Score): Promise<SVGSVGE
   return clone;
 }
 
-/** Measures per PDF page — a new page starts every 16 measures (4 rows of the standard 4-per-row layout). The 멜로디+가사 (lead-sheet) layout adds an extra melody/lyric staff per row, so each row takes noticeably more vertical space — 12 measures (3 rows) keeps a page from being squeezed as tightly as the plain piano layout's 16. */
-const MEASURES_PER_PDF_PAGE = 16;
-const MEASURES_PER_PDF_PAGE_MELODY = 12;
+/** ROWS per PDF page. Counted in rows, not measures, because a row is what
+ * must never be split across a page — see chunkScoreForPdf. The 멜로디+가사
+ * (lead-sheet) layout adds a melody staff and a lyric band to every row, so
+ * each row is much taller and fewer fit on a page. */
+const ROWS_PER_PDF_PAGE = 4;
+const ROWS_PER_PDF_PAGE_MELODY = 3;
 
 /** True when a measure has nothing in it (no notes/rests, no chord symbols, no lyrics). */
 function isBlankMeasure(measure: Measure): boolean {
@@ -323,20 +326,52 @@ function trimTrailingBlankMeasures(score: Score): Score {
 }
 
 /**
- * Splits a score into page-sized chunks of measures for PDF export. Manual
- * line breaks are kept only where they fall inside their chunk and reindexed
- * relative to it; each chunk otherwise keeps the score's title/composer/
- * tempo/key/time signature so every page renders as a normal, complete score
- * for just that slice of measures.
+ * Splits a score into page-sized chunks for PDF export, cutting only ON ROW
+ * BOUNDARIES — the rows the score is already laid out in (see
+ * computeScoreRows), never partway through one.
+ *
+ * It used to slice a flat 16 measures per page, which is only the same thing
+ * when every row happens to hold exactly 4. It doesn't: a 못갖춘마디 rides
+ * along as a 5th slot on the first row, a manual line break ends a row early,
+ * and a trailing partial measure is pulled back into the row before it. Any of
+ * those puts the count out of step with the rows, and a page then ended
+ * mid-row — the rest of that row starting the next page on its own, which is
+ * what a stray single measure alone on a page was.
+ *
+ * Each chunk carries explicit line breaks at its own row boundaries, so the
+ * page re-renders in exactly the rows it was cut into. pickupBeats and
+ * trailingBeats only travel with the page that actually holds that end of the
+ * piece — otherwise every page would treat its own first measure as a pickup.
  */
 function chunkScoreForPdf(score: Score): Score[] {
-  const perPage = score.showMelodyStaff ? MEASURES_PER_PDF_PAGE_MELODY : MEASURES_PER_PDF_PAGE;
+  const rowsPerPage = score.showMelodyStaff ? ROWS_PER_PDF_PAGE_MELODY : ROWS_PER_PDF_PAGE;
+  const rows = computeScoreRows(
+    score.measures.length,
+    score.lineBreaks,
+    score.pickupBeats !== undefined,
+    score.trailingBeats !== undefined,
+    MEASURES_PER_ROW,
+  );
+  const lastMeasure = score.measures.length - 1;
   const chunks: Score[] = [];
-  for (let start = 0; start < score.measures.length; start += perPage) {
-    const end = Math.min(start + perPage, score.measures.length);
-    const measures = score.measures.slice(start, end);
-    const lineBreaks = score.lineBreaks.filter((b) => b >= start && b < end - 1).map((b) => b - start);
-    chunks.push({ ...score, measures, lineBreaks });
+  for (let r = 0; r < rows.length; r += rowsPerPage) {
+    const pageRows = rows.slice(r, r + rowsPerPage);
+    const start = pageRows[0][0];
+    const end = pageRows[pageRows.length - 1][pageRows[pageRows.length - 1].length - 1] + 1;
+    // A break after the last measure of every row but the page's final one.
+    const lineBreaks: number[] = [];
+    let at = start;
+    pageRows.slice(0, -1).forEach((row) => {
+      at += row.length;
+      lineBreaks.push(at - 1 - start);
+    });
+    chunks.push({
+      ...score,
+      measures: score.measures.slice(start, end),
+      lineBreaks,
+      pickupBeats: start === 0 ? score.pickupBeats : undefined,
+      trailingBeats: end === lastMeasure + 1 ? score.trailingBeats : undefined,
+    });
   }
   return chunks.length > 0 ? chunks : [score];
 }
