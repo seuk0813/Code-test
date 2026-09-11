@@ -176,6 +176,22 @@ export function incompleteClefsIn(score: Score, measureIndex: number): PartId[] 
   );
 }
 
+/**
+ * Which of a measure's staves hold MORE beats than the time signature allows.
+ * Notes are never refused for running a bar over (see addNoteToScore), so this
+ * is what makes an overfull bar visible instead of silently wrong — it earns
+ * an amber "+" badge alongside the under-filled measures' red "!" (see
+ * StaffEditor's measureWarnings). Unlike being short, being over is never a
+ * legitimate work-in-progress state, so a pickup/trailing measure — which is
+ * deliberately short and so never gets the red badge — is reported here too.
+ */
+export function overfullClefsIn(score: Score, measureIndex: number): PartId[] {
+  const measure = score.measures[measureIndex];
+  if (!measure) return [];
+  const timeSignature = measureTimeSignature(score, measureIndex);
+  return activeParts(score).filter((part) => isStaffMeasureOverflow(measure[part], timeSignature));
+}
+
 /** Rest durations usable for padding, longest first — every dotted/plain value
  * whose beat length is a clean power-of-two fraction, so greedily taking the
  * largest that still fits always lands exactly on the remainder (see
@@ -1508,9 +1524,23 @@ export function removeMeasure(score: Score, measureIndex: number): Score {
 export interface AddNoteResult {
   score: Score;
   noteIndex: number;
+  /**
+   * True when the note doesn't fit the measure's time signature. It is added
+   * anyway — writing music often means running a bar over and tidying it up
+   * afterwards, and refusing the keystroke outright made that impossible.
+   * The flag is for callers that want to react (warn, or place something else
+   * instead), not a signal that nothing happened.
+   */
   overflow: boolean;
 }
 
+/**
+ * Inserts a note into one staff of one measure. A measure over its time
+ * signature's capacity is allowed (see AddNoteResult.overflow) and shows a
+ * warning badge; VexFlow lays the extra notes out fine (the voice is
+ * non-strict), though playback still starts each measure on its nominal
+ * beat, so an overfull bar runs into the next one until it's tidied up.
+ */
 export function addNoteToScore(
   score: Score,
   measureIndex: number,
@@ -1521,10 +1551,7 @@ export function addNoteToScore(
   const measure = score.measures[measureIndex];
   const staffMeasure = measure[clef];
   const capacity = measureCapacityBeats(measureTimeSignature(score, measureIndex));
-  const currentBeats = staffMeasureBeats(staffMeasure);
-  if (currentBeats + noteBeats(note) > capacity + 1e-6) {
-    return { score, noteIndex: -1, overflow: true };
-  }
+  const overflow = staffMeasureBeats(staffMeasure) + noteBeats(note) > capacity + 1e-6;
   const noteIndex =
     insertIndex === undefined ? staffMeasure.notes.length : Math.max(0, Math.min(insertIndex, staffMeasure.notes.length));
   const nextScore = updateMeasure(score, measureIndex, clef, (sm) => {
@@ -1532,7 +1559,7 @@ export function addNoteToScore(
     notes.splice(noteIndex, 0, note);
     return { notes };
   });
-  return { score: nextScore, noteIndex, overflow: false };
+  return { score: nextScore, noteIndex, overflow };
 }
 
 /** Adds or removes a pitch from an existing (non-rest) note, building a chord. Keeps at least one pitch. */

@@ -427,21 +427,17 @@ function App() {
       };
       const note = createNote([pitch], durationOverride ?? editTool.duration, editTool.dotted, editTool.isRest, x, editTool.tuplet ? TRIPLET : undefined);
       const result = addNoteToScore(score, measureIndex, clef, note, insertIndex);
-      if (result.overflow) {
-        // A full staff normally just refuses the add — but with the 쉼표
-        // tool armed, drop a lightweight visual rest mark instead (see
-        // RestMark/#187): it sketches a rest on top of the existing notes
-        // rather than genuinely adding a new beat, so it stays droppable
-        // even where a real note/rest can't fit any more. Piano staves only
-        // (RestMark.clef); a full melody staff just refuses, like any other
-        // overfull staff.
-        if (editTool.isRest && clef !== 'melody') {
-          const line = pitchToLine(clef, letter as Pitch['letter'], octave);
-          setScore((prev) => addRestMarkAt(prev, measureIndex, clef, x ?? 0.5, line));
-          setRestArmed(false);
-          return;
-        }
-        window.alert('마디가 가득 찼습니다. "마디 추가" 버튼으로 새 마디를 만들어주세요.');
+      // With the 쉼표 tool armed, a staff that's already full takes a
+      // lightweight visual rest mark instead of the real rest (see
+      // RestMark/#187): it sketches a rest on top of the existing notes
+      // rather than genuinely adding a beat. Piano staves only
+      // (RestMark.clef). Everything else — every actual note — goes in even
+      // when it runs the measure past its time signature; the measure just
+      // gets a warning badge (see measureWarnings) until it's tidied up.
+      if (result.overflow && editTool.isRest && clef !== 'melody') {
+        const line = pitchToLine(clef, letter as Pitch['letter'], octave);
+        setScore((prev) => addRestMarkAt(prev, measureIndex, clef, x ?? 0.5, line));
+        setRestArmed(false);
         return;
       }
       setScore(result.score);

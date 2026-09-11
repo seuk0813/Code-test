@@ -2,6 +2,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { ForwardedRef } from 'react';
 import type { Accidental, ChordSymbol, Clef, DurationValue, NoteLocation, PartId, Score } from '../types/score';
 import {
+  chordBeatForX,
+  chordXForBeat,
   findChordAt,
   findChordBandAt,
   findComposerAt,
@@ -42,6 +44,7 @@ import {
   measureStartBeat,
   measureTimeSignature,
   noteBeats,
+  overfullClefsIn,
   pitchToLine,
   scaleDegreeKey,
   stemPointsUp,
@@ -1335,23 +1338,30 @@ function StaffEditorInner({
     refreshMeasureTools();
   };
 
-  // --- Under-filled measure warnings ------------------------------------------
+  // --- Wrong-beat-count measure warnings ---------------------------------------
 
-  /** Every measure that's been started but left short of its time signature,
-   * with the screen position of its red "!" badge — pinned just inside the
-   * measure's own right edge, above the treble staff. */
-  const measureWarnings = (): { measureIndex: number; x: number; y: number }[] => {
+  /** Every measure whose beats don't add up to its time signature — short of
+   * it, or (since a note is never refused for running a bar over, see
+   * addNoteToScore) past it — with the screen position of its badge, pinned
+   * just inside the measure's own right edge above the treble staff.
+   * `overfull` picks which badge it gets, since only a short measure can be
+   * fixed by padding it with rests. */
+  const measureWarnings = (): { measureIndex: number; x: number; y: number; overfull: boolean }[] => {
     const result = renderResultRef.current;
     if (!result) return [];
-    const spots: { measureIndex: number; x: number; y: number }[] = [];
+    const spots: { measureIndex: number; x: number; y: number; overfull: boolean }[] = [];
     score.measures.forEach((_measure, measureIndex) => {
-      // A pickup/trailing measure is deliberately short — never a mistake.
-      if (measureIndex === 0 && score.pickupBeats !== undefined) return;
-      if (measureIndex === score.measures.length - 1 && score.trailingBeats !== undefined) return;
-      if (incompleteClefsIn(score, measureIndex).length === 0) return;
+      const overfull = overfullClefsIn(score, measureIndex).length > 0;
+      // A pickup/trailing measure is deliberately SHORT — never a mistake.
+      // Running one over still is, so that check comes first.
+      if (!overfull) {
+        if (measureIndex === 0 && score.pickupBeats !== undefined) return;
+        if (measureIndex === score.measures.length - 1 && score.trailingBeats !== undefined) return;
+        if (incompleteClefsIn(score, measureIndex).length === 0) return;
+      }
       const treble = result.staffHitboxes.find((s) => s.measureIndex === measureIndex && s.clef === 'treble');
       if (!treble) return;
-      spots.push({ measureIndex, x: treble.x1 - 13, y: treble.refY0 - treble.spacing * 5 - 20 });
+      spots.push({ measureIndex, x: treble.x1 - 13, y: treble.refY0 - treble.spacing * 5 - 20, overfull });
     });
     return spots;
   };
@@ -1362,10 +1372,18 @@ function StaffEditorInner({
   const findMeasureWarningAt = (point: { x: number; y: number }): number | null =>
     measureWarnings().find((s) => Math.hypot(point.x - s.x, point.y - s.y) <= 11)?.measureIndex ?? null;
 
+  /** The badge under the pointer, but only if pressing it does something —
+   * the amber overfull badge is informational, since rests can't fix a bar
+   * that already has too many beats. */
+  const findFillableMeasureWarningAt = (point: { x: number; y: number }): number | null => {
+    const hit = measureWarnings().find((s) => Math.hypot(point.x - s.x, point.y - s.y) <= 11);
+    return hit && !hit.overfull ? hit.measureIndex : null;
+  };
+
   const refreshMeasureWarnings = () => {
     renderMeasureWarnings(
       overlayRef.current,
-      measureWarnings().map((s) => ({ x: s.x, y: s.y, hot: s.measureIndex === hotWarningRef.current })),
+      measureWarnings().map((s) => ({ x: s.x, y: s.y, hot: s.measureIndex === hotWarningRef.current, overfull: s.overfull })),
     );
   };
 
@@ -1804,11 +1822,22 @@ function StaffEditorInner({
       }
     }
 
-    const rawOffset = (point.x - drag.measureX) / drag.measureWidth;
+    // A chord reads its offset back off the measure's own beat<->pixel map
+    // (see chordBeatForX), the same map the renderer draws it with, so it
+    // comes to rest under the cursor rather than a few px off wherever
+    // VexFlow's duration-based spacing runs ahead of a straight line. A lyric
+    // carries no beat meaning, so plain linear is exactly right for it.
+    const chordBand =
+      drag.kind === 'chordSymbol' ? result?.chordBandHitboxes.find((b) => b.measureIndex === drag.measureIndex) : undefined;
+    const beatMap = chordBand && chordBand.durationBeats > 0 ? chordBand : null;
+    const linearOffset = (point.x - drag.measureX) / drag.measureWidth;
+    const mappedBeat = beatMap ? chordBeatForX(beatMap.anchors, point.x) : null;
+    const rawOffset = beatMap && mappedBeat !== null ? mappedBeat / beatMap.durationBeats : linearOffset;
     // A chord may sit right on the downbeat (see clampChordOffset); a lyric
     // keeps a small margin so its text never straddles a barline.
     let offset = drag.kind === 'chordSymbol' ? clampChordOffset(rawOffset) : Math.min(0.97, Math.max(0.03, rawOffset));
-    let ghostX = drag.measureX + offset * drag.measureWidth;
+    const linearGhostX = drag.measureX + offset * drag.measureWidth;
+    let ghostX = beatMap ? chordXForBeat(beatMap.anchors, offset * beatMap.durationBeats) ?? linearGhostX : linearGhostX;
     drag.snappedX = null;
 
     // Only chord symbols carry harmonic meaning (scale-degree labeling reads
@@ -2607,9 +2636,10 @@ function StaffEditorInner({
       return;
     }
 
-    // Red "!" on an under-filled measure — pads it out with rests. Checked
+    // Red "!" on an under-filled measure — pads it out with rests (the amber
+    // overfull badge is informational, so it falls through). Checked
     // ahead of the chord band it overlaps, which would otherwise swallow it.
-    const warnMeasureIndex = findMeasureWarningAt(point);
+    const warnMeasureIndex = findFillableMeasureWarningAt(point);
     if (warnMeasureIndex !== null) {
       onFillMeasureRests(warnMeasureIndex);
       suppressClickRef.current = true;
@@ -3115,7 +3145,7 @@ function StaffEditorInner({
 
     // Red "!" on an under-filled measure — always on screen (no hover needed),
     // so it taps the same as it clicks.
-    const warnMeasureIndex = findMeasureWarningAt(point);
+    const warnMeasureIndex = findFillableMeasureWarningAt(point);
     if (warnMeasureIndex !== null) {
       event.preventDefault();
       onFillMeasureRests(warnMeasureIndex);

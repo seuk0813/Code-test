@@ -429,12 +429,18 @@ export interface MeasureWarningSpec {
   x: number;
   y: number;
   hot: boolean;
+  /** The measure holds MORE beats than its time signature rather than fewer —
+   * drawn as an amber "+" instead of the red "!", since padding with rests
+   * (what pressing the red one does) can't fix having too many beats. */
+  overfull: boolean;
 }
 
-/** Red "!" badges over the end of every measure left short of its time
- * signature — pressing one pads that measure out with rests (see
- * fillStaffMeasureWithRests). On the overlay, not in the score SVG, so an
- * in-progress score still prints/exports clean. */
+/** Badges over the end of every measure whose beats don't match its time
+ * signature: a red "!" where it's short — pressing one pads that measure out
+ * with rests (see fillStaffMeasureWithRests) — and an amber "+" where it has
+ * been run over (see addNoteToScore), which is informational only. On the
+ * overlay, not in the score SVG, so an in-progress score still prints/exports
+ * clean. */
 export function renderMeasureWarnings(svg: SVGSVGElement | null, specs: MeasureWarningSpec[]): void {
   if (!svg) return;
   let group = svg.querySelector<SVGGElement>(`#${MEASURE_WARNING_GROUP_ID}`);
@@ -446,21 +452,24 @@ export function renderMeasureWarnings(svg: SVGSVGElement | null, specs: MeasureW
   }
   group.replaceChildren();
   specs.forEach((spec) => {
-    const red = '#e03131';
     group!.appendChild(
       el('circle', {
         cx: spec.x,
         cy: spec.y,
         r: spec.hot ? 11 : 9.5,
-        fill: red,
+        fill: spec.overfull ? '#f08c00' : '#e03131',
         stroke: '#ffffff',
         'stroke-width': 1.5,
         opacity: spec.hot ? 1 : 0.85,
       }),
     );
-    group!.appendChild(
-      el('line', { x1: spec.x, y1: spec.y - 4.5, x2: spec.x, y2: spec.y + 1.5, stroke: '#ffffff', 'stroke-width': 2, 'stroke-linecap': 'round' }),
-    );
+    const stroke = { stroke: '#ffffff', 'stroke-width': 2, 'stroke-linecap': 'round' };
+    if (spec.overfull) {
+      group!.appendChild(el('line', { x1: spec.x, y1: spec.y - 4.5, x2: spec.x, y2: spec.y + 4.5, ...stroke }));
+      group!.appendChild(el('line', { x1: spec.x - 4.5, y1: spec.y, x2: spec.x + 4.5, y2: spec.y, ...stroke }));
+      return;
+    }
+    group!.appendChild(el('line', { x1: spec.x, y1: spec.y - 4.5, x2: spec.x, y2: spec.y + 1.5, ...stroke }));
     group!.appendChild(el('circle', { cx: spec.x, cy: spec.y + 4.5, r: 1.3, fill: '#ffffff' }));
   });
 }

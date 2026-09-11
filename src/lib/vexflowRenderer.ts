@@ -845,6 +845,72 @@ export interface ChordBandHitbox {
   y1: number;
   measureX: number;
   measureWidth: number;
+  /** This measure's beat<->pixel map for the chord band (see ChordAnchor). */
+  anchors: ChordAnchor[];
+  /** Beats this measure spans — what a chord's 0..1 offset is a fraction of. */
+  durationBeats: number;
+}
+
+/**
+ * One known point on a measure's beat<->pixel map for the chord band: a note
+ * onset at the x its notehead actually rendered at, plus a sentinel pinned to
+ * each end of the measure.
+ */
+export interface ChordAnchor {
+  beat: number;
+  x: number;
+}
+
+function surrounding<T>(anchors: T[], key: (a: T) => number, target: number): { before: T | null; after: T | null } {
+  let before: T | null = null;
+  let after: T | null = null;
+  for (const a of anchors) {
+    if (key(a) < target && (!before || key(a) > key(before))) before = a;
+    if (key(a) > target && (!after || key(a) < key(after))) after = a;
+  }
+  return { before, after };
+}
+
+/**
+ * Where a chord sitting at `beat` belongs on screen.
+ *
+ * VexFlow spaces notes by duration rather than evenly, so a single
+ * measure-wide straight line drifts several px off the notes a chord labels
+ * (this is what once made a chord like "Bb/F" read as pulled left of its
+ * notes). Interpolating across only the one local gap the chord falls in
+ * tracks that spacing closely, and landing exactly on an onset returns that
+ * notehead's own x, so a chord dropped on a note stays pixel-exact.
+ *
+ * The measure-edge anchors are what let a chord sit where no note is — past
+ * the last note, or in a bar with no notes at all. Without them the nearest
+ * onset was the best answer available and every chord beyond it collapsed
+ * onto that one notehead, unable to move at all.
+ */
+export function chordXForBeat(anchors: ChordAnchor[], beat: number): number | null {
+  const EPS = 1e-3;
+  const exact = anchors.find((a) => Math.abs(a.beat - beat) < EPS);
+  if (exact) return exact.x;
+  const { before, after } = surrounding(anchors, (a) => a.beat, beat);
+  if (before && after) {
+    const t = (beat - before.beat) / (after.beat - before.beat);
+    return before.x + t * (after.x - before.x);
+  }
+  return (before ?? after)?.x ?? null;
+}
+
+/**
+ * The inverse of chordXForBeat: the beat a chord dropped at pixel `x` means.
+ * Dragging converts through this so a chord lands exactly where it was let go
+ * — both directions read the same map, so the drag ghost and the committed
+ * label can't disagree about where that is.
+ */
+export function chordBeatForX(anchors: ChordAnchor[], x: number): number | null {
+  const { before, after } = surrounding(anchors, (a) => a.x, x);
+  if (before && after) {
+    const t = (x - before.x) / (after.x - before.x);
+    return before.beat + t * (after.beat - before.beat);
+  }
+  return (before ?? after)?.beat ?? null;
 }
 
 export interface LineBreakHitbox {
@@ -2062,23 +2128,9 @@ export function renderScore(
       // coordinate space, so a chord dragged to line up with a note actually
       // lines up with that note's beat too.
       const chordNoteAreaWidth = Math.max(40, x + measureWidth - NOTE_AREA_RIGHT_PAD - chordLeftBoundX);
-      // A chord dropped exactly on a note (see StaffEditor's chord-drag snap)
-      // stores an offset computed from that note's BEAT, which VexFlow's own
-      // formatter doesn't necessarily lay out at a perfectly linear fraction
-      // of the note area (accidentals, varying durations etc. can shift
-      // things unevenly) — so recomputing its pixel X from the linear
-      // formula alone can drift a few/several px off the actual notehead the
-      // drag's live ghost/guide line showed (this is exactly what made a
-      // chord like "Bb/F" read as pulled too far left of the notes it
-      // labels). When the chord's beat exactly matches a real note's onset
-      // (in either clef), use that note's own rendered x directly so the
-      // committed position matches what was shown while dragging. Otherwise,
-      // rather than falling straight back to the whole-measure linear
-      // formula, interpolate between the nearest surrounding note onsets
-      // proportional to the beat gap between them — this tracks VexFlow's own
-      // (non-linear, duration-aware) spacing far more closely than a single
-      // measure-wide straight line, since it only ever extrapolates across the
-      // one local gap the chord actually falls within.
+      // The measure's beat<->pixel map for the chord band (see ChordAnchor and
+      // chordXForBeat for why it's built out of the notes' own rendered x's
+      // rather than one measure-wide straight line).
       //
       // Which staves' onsets are pooled follows which staff the chord band
       // actually sits above: in lead-sheet layout that is the melody staff
@@ -2087,41 +2139,31 @@ export function renderScore(
       // that aren't under them. Otherwise it's both piano clefs.
       const measureDuration = measureDurationBeats(score, measureIndex);
       const chordAnchorParts: PartId[] = leadSheet ? ['melody'] : ['treble', 'bass'];
-      const xForBeat = (targetBeat: number): number | null => {
-        const EPS = 1e-3;
-        const onsets: { beat: number; x: number }[] = [];
-        for (const c of chordAnchorParts) {
-          let beat = 0;
-          const clefNotes = measure[c].notes;
-          for (let i = 0; i < clefNotes.length; i++) {
-            const hb = noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === c && n.noteIndex === i);
-            if (hb) {
-              if (Math.abs(beat - targetBeat) < EPS) return hb.centerX;
-              onsets.push({ beat, x: hb.centerX });
-            }
-            beat += noteBeats(clefNotes[i]);
-          }
+      const chordAnchors: ChordAnchor[] = [];
+      for (const part of chordAnchorParts) {
+        let beat = 0;
+        const clefNotes = measure[part].notes;
+        for (let i = 0; i < clefNotes.length; i++) {
+          const hb = noteHitboxes.find((n) => n.measureIndex === measureIndex && n.clef === part && n.noteIndex === i);
+          if (hb) chordAnchors.push({ beat, x: hb.centerX });
+          beat += noteBeats(clefNotes[i]);
         }
-        if (onsets.length === 0) return null;
-        onsets.sort((a, b) => a.beat - b.beat);
-        // Plain for-loop (not .forEach) so the running before/after picks
-        // stay in this function's own scope rather than a nested closure —
-        // TS can't carry narrowing on a `let` mutated from inside a callback,
-        // which turned the later `before && after` check into a `never` type.
-        let before: { beat: number; x: number } | null = null;
-        let after: { beat: number; x: number } | null = null;
-        for (const o of onsets) {
-          if (o.beat < targetBeat && (!before || o.beat > before.beat)) before = o;
-          if (o.beat > targetBeat && (!after || o.beat < after.beat)) after = o;
-        }
-        if (before && after) {
-          const t = (targetBeat - before.beat) / (after.beat - before.beat);
-          return before.x + t * (after.x - before.x);
-        }
-        return (before ?? after)?.x ?? null;
-      };
+      }
+      // Pin both ends of the measure. Without these the notes are the only
+      // anchors there are, so a chord past the last one (or anywhere in a bar
+      // with no notes yet) has nothing to interpolate against and collapses
+      // onto the nearest notehead — it stops responding to its own offset and
+      // can't be dragged anywhere. An end already carrying an onset keeps the
+      // real note; an overfull measure whose notes run past the end gets no
+      // sentinel there at all, so the map can never double back on itself.
+      const EDGE_EPS = 1e-3;
+      if (!chordAnchors.some((a) => a.beat <= EDGE_EPS)) chordAnchors.push({ beat: 0, x: chordLeftBoundX });
+      if (!chordAnchors.some((a) => a.beat >= measureDuration - EDGE_EPS)) {
+        chordAnchors.push({ beat: measureDuration, x: chordLeftBoundX + chordNoteAreaWidth });
+      }
+      chordAnchors.sort((a, b) => a.beat - b.beat);
       measure.chords.forEach((chord: ChordSymbol) => {
-        const cx = xForBeat(chord.offset * measureDuration) ?? chordLeftBoundX + chord.offset * chordNoteAreaWidth;
+        const cx = chordXForBeat(chordAnchors, chord.offset * measureDuration) ?? chordLeftBoundX + chord.offset * chordNoteAreaWidth;
         chordHitboxes.push({ measureIndex, chordId: chord.id, x: cx, y: chordY, halfWidth: 20 });
       });
       chordBandHitboxes.push({
@@ -2138,6 +2180,8 @@ export function renderScore(
         y1: chordY + 3,
         measureX: chordLeftBoundX,
         measureWidth: chordNoteAreaWidth,
+        anchors: chordAnchors,
+        durationBeats: measureDuration,
       });
 
       // Lyric syllables: below the standalone melody staff in lead-sheet
